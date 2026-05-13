@@ -1,4 +1,4 @@
-"""Entry point for the MPXV Luminex QC tool."""
+"""Entry point for the Uvira Luminex QC tool."""
 
 import socket
 import threading
@@ -25,7 +25,7 @@ def main():
 
     threading.Thread(target=open_browser, daemon=True).start()
 
-    print(f"MPXV Luminex QC Tool running at http://127.0.0.1:{port}")
+    print(f"Uvira Luminex QC Tool running at http://127.0.0.1:{port}")
     print("Press Ctrl+C to quit.\n")
 
     app.run(

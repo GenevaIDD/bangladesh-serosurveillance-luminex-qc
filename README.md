@@ -1,13 +1,19 @@
-# MPXV Luminex QC Tool
+# Uvira Luminex QC Tool
 
 <p align="center">
-  <img src="gdd_antibody_square_tighter.png" alt="MPXV Luminex QC" width="128">
+  <img src="gdd_antibody_square_tighter.png" alt="Uvira Luminex QC" width="128">
 </p>
 
 <p align="center">
-  <strong>Automated quality control for 12-plex MPXV Luminex immunoassays</strong><br>
+  <strong>Automated quality control for 200-plex Luminex immunoassays on Intelliflex</strong><br>
   <em>Geneva Disease Dynamics Group &middot; University of Geneva</em>
 </p>
+
+> **Migration in progress.** This codebase is being adapted from the
+> original 12-plex MPXV MagPix tool to the 200-plex Uvira / Intelliflex
+> pilot. The README sections below largely describe the legacy MPXV
+> behaviour and will be rewritten as Sections 3–7 of
+> [UVIRA_TODO.md](UVIRA_TODO.md) land.
 
 <p align="center">
   <a href="SPECIFICATION.md">Full Specification</a>

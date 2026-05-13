@@ -1,4 +1,10 @@
-"""Parse xPONENT CSV files from MagPix Luminex instrument."""
+"""Parse xPONENT CSV files from MagPix and Intelliflex Luminex instruments.
+
+Both instrument families share the same xPONENT-style multi-block CSV
+layout (`"DataType:","Median"` / `"Count"` / etc.) so a single parser
+handles both. The `Program` header field is captured so downstream code
+can branch on instrument type when needed.
+"""
 
 import csv
 import re
@@ -8,12 +14,14 @@ import pandas as pd
 
 
 def parse_xponent_csv(path: str | Path) -> dict:
-    """Parse an xPONENT CSV file into metadata and data DataFrames.
+    """Parse an xPONENT CSV file into metadata + merged long-format data.
 
     Returns dict with keys:
-        metadata: dict of plate-level metadata
-        mfi: DataFrame (long format) with columns [well, sample_name, analyte, mfi]
-        counts: DataFrame (long format) with columns [well, sample_name, analyte, count]
+        metadata: dict of plate-level metadata (plate_id, batch, run_date,
+                  operator, protocol, instrument_sn, instrument_program,
+                  panel_name, ...)
+        data: long-format DataFrame with columns
+              [well, sample_name, analyte, mfi, count]
     """
     path = Path(path)
     lines = path.read_text(encoding="utf-8-sig").splitlines()
@@ -23,6 +31,11 @@ def parse_xponent_csv(path: str | Path) -> dict:
     metadata["file"] = path.name
 
     block_starts = _find_datatype_blocks(rows)
+    if "Median" not in block_starts or "Count" not in block_starts:
+        raise ValueError(
+            f"Missing Median or Count data block in {path.name}; "
+            f"found blocks: {sorted(block_starts)}"
+        )
 
     mfi_wide = _parse_data_block(rows, block_starts["Median"])
     counts_wide = _parse_data_block(rows, block_starts["Count"])
@@ -38,35 +51,57 @@ def parse_xponent_csv(path: str | Path) -> dict:
 
 
 def _parse_metadata(rows: list[list[str]]) -> dict:
-    """Extract plate metadata from header rows."""
-    meta = {}
+    """Extract plate metadata from header rows (everything before first DataType:)."""
+    meta: dict = {}
     field_map = {
         "Batch": "batch",
         "Date": "run_date",
         "Operator": "operator",
         "ProtocolName": "protocol",
-        "SN": "instrument_sn",
         "ProtocolDescription": "protocol_description",
+        "SN": "instrument_sn",
         "BatchStartTime": "batch_start_time",
+        "BatchStopTime": "batch_stop_time",
+        "PanelName": "panel_name",
+        "BatchDescription": "batch_description",
     }
     for row in rows:
         if not row or not row[0].strip('"'):
             continue
         key = row[0].strip('"')
+        if key == "DataType:":
+            break  # metadata ends where the data blocks begin
+        if key == "Program" and len(row) > 1:
+            # "Program","xPONENT","","Intelliflex"  → instrument_program = "Intelliflex"
+            # MagPix files have "Program","xPONENT" only.
+            meta["instrument_program"] = (
+                row[3].strip('"') if len(row) > 3 and row[3].strip('"') else row[1].strip('"')
+            )
+            continue
+        if key == "Date" and len(row) > 2 and row[2].strip('"'):
+            d = row[1].strip('"')
+            t = row[2].strip('"')
+            meta["run_date"] = f"{d} {t}"
+            continue
         if key in field_map and len(row) > 1:
             meta[field_map[key]] = row[1].strip('"')
-        if key == "Date" and len(row) > 2:
-            meta["run_date"] = f"{row[1].strip('\"')} {row[2].strip('\"')}"
         if key == "Samples" and len(row) > 1:
-            meta["n_samples"] = int(row[1].strip('"'))
-            break
+            try:
+                meta["n_samples"] = int(row[1].strip('"'))
+            except ValueError:
+                pass
     meta["plate_id"] = _extract_plate_id(meta.get("batch", ""))
     return meta
 
 
 def _extract_plate_id(batch: str) -> str:
-    """Extract a short plate ID from the batch string."""
-    # e.g. "A260323-MP1822-KV02-Plate01-12PlxMPXVHIg" -> "A260323-MP1822-KV02-Plate01"
+    """Derive a short plate ID from the batch string.
+
+    MagPix convention:  'A260323-MP1822-KV02-Plate01-12PlxMPXVHIg' → 'A260323-MP1822-KV02-Plate01'
+    Intelliflex convention:  'PLATE_05112026_RUN000' → 'PLATE_05112026_RUN000' (used verbatim)
+    """
+    if not batch:
+        return ""
     m = re.match(r"(.+-Plate\d+)", batch)
     if m:
         return m.group(1)
@@ -74,7 +109,6 @@ def _extract_plate_id(batch: str) -> str:
 
 
 def _find_datatype_blocks(rows: list[list[str]]) -> dict[str, int]:
-    """Find the starting row index for each DataType block."""
     blocks = {}
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[0].strip('"') == "DataType:":
@@ -84,10 +118,7 @@ def _find_datatype_blocks(rows: list[list[str]]) -> dict[str, int]:
 
 
 def _parse_data_block(rows: list[list[str]], block_start: int) -> pd.DataFrame:
-    """Parse a well-level data block (Median, Net MFI, or Count) into a wide DataFrame."""
-    # Header row is the line after "DataType:,..."
     header_row = rows[block_start + 1]
-    # Columns: Location, Sample, <analyte1>, <analyte2>, ..., Total Events
     col_names = [c.strip('"') for c in header_row]
 
     data_rows = []
@@ -98,17 +129,13 @@ def _parse_data_block(rows: list[list[str]], block_start: int) -> pd.DataFrame:
         data_rows.append([c.strip('"') for c in row])
 
     df = pd.DataFrame(data_rows, columns=col_names)
-
-    # Parse well from Location: "1(1,A1)" -> "A1"
     df["well"] = df["Location"].apply(_parse_well_from_location)
     df = df.rename(columns={"Sample": "sample_name"})
 
-    # Convert numeric columns
     analyte_cols = [c for c in col_names if c not in ("Location", "Sample")]
     for col in analyte_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Normalize column name
     if "Total Events" in df.columns:
         df = df.rename(columns={"Total Events": "total_events"})
 
@@ -117,7 +144,7 @@ def _parse_data_block(rows: list[list[str]], block_start: int) -> pd.DataFrame:
 
 
 def _parse_well_from_location(loc: str) -> str:
-    """Extract well ID from location string: '1(1,A1)' -> 'A1'."""
+    """'1(1,A1)' → 'A1'."""
     m = re.search(r"\d+\(\d+,([A-H]\d+)\)", loc)
     if m:
         return m.group(1)
@@ -125,13 +152,15 @@ def _parse_well_from_location(loc: str) -> str:
 
 
 def _strip_bead_prefix(name: str) -> str:
-    """Strip numeric prefix from bead names: '01 MVA Ag' -> 'MVA Ag'."""
+    """Strip numeric bead-region prefix when present: '01 MVA Ag' → 'MVA Ag'.
+
+    Intelliflex names like 'RES_Ade3' have no numeric prefix and pass through.
+    """
     m = re.match(r"^\d+\s+(.+)$", name)
     return m.group(1) if m else name
 
 
 def _wide_to_long(df: pd.DataFrame, analyte_cols: list[str], value_name: str) -> pd.DataFrame:
-    """Pivot wide data block to long format."""
     id_cols = ["well", "sample_name"]
     long = df[id_cols + analyte_cols].melt(
         id_vars=id_cols, var_name="analyte", value_name=value_name

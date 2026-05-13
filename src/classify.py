@@ -1,34 +1,38 @@
-"""Classify wells as PC standard, NC, or specimen from sample names."""
+"""Classify wells as PC standard, NC, or specimen from sample names.
+
+Uvira / Intelliflex sample-name conventions:
+    PC standards : 'Standard1' .. 'Standard10'  (one well each, no replicate)
+    NC           : 'Background'                   (A11 / A12)
+    Specimen     : everything else                (typically 'FD########' barcodes)
+
+Dilution for PC wells is looked up by the trailing integer of the
+'Standard{N}' name into config['standard']['dilutions'].
+"""
 
 import re
 
 import pandas as pd
 
-from .config import PC_PATTERNS, NC_PATTERNS
+from .config import PC_PATTERNS, NC_PATTERNS, STANDARD_DILUTIONS
 
 
 def classify_wells(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
-    """Add well_type and dilution columns based on sample_name.
-
-    well_type: 'pc', 'nc', or 'specimen'
-    dilution: numeric dilution denominator for PC wells, NaN otherwise
-    """
+    """Add well_type and dilution columns based on sample_name."""
     pc_pats = PC_PATTERNS
     nc_pats = NC_PATTERNS
+    dilution_series = STANDARD_DILUTIONS
     if config is not None:
         wc = config.get("well_classification", {})
         pc_pats = wc.get("pc_patterns", pc_pats)
         nc_pats = wc.get("nc_patterns", nc_pats)
+        std_dils = config.get("standard", {}).get("dilutions")
+        if isinstance(std_dils, list) and std_dils:
+            dilution_series = [float(d) for d in std_dils]
 
     df = df.copy()
     df["well_type"] = df["sample_name"].apply(lambda n: _classify_sample(n, pc_pats, nc_pats))
-    # PC dilutions are scraped from sample names; specimen dilution comes from config
-    df["dilution"] = df["sample_name"].apply(_extract_dilution)
-    # Identify which standard curve pool each PC well belongs to
-    df["pc_pool"] = df.apply(
-        lambda r: _extract_pc_pool(r["sample_name"]) if r["well_type"] == "pc" else None,
-        axis=1,
-    )
+    df["dilution"] = df["sample_name"].apply(lambda n: _dilution_for_pc(n, dilution_series))
+
     if config is not None:
         spec_dil = config.get("specimens", {}).get("default_dilution")
         if spec_dil is not None:
@@ -37,7 +41,7 @@ def classify_wells(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame
 
 
 def _classify_sample(name: str, pc_patterns: list[str], nc_patterns: list[str]) -> str:
-    name = name.strip()
+    name = (name or "").strip()
     for pat in pc_patterns:
         if re.match(pat, name, re.IGNORECASE):
             return "pc"
@@ -47,29 +51,15 @@ def _classify_sample(name: str, pc_patterns: list[str], nc_patterns: list[str]) 
     return "specimen"
 
 
-def _extract_dilution(name: str) -> float:
-    """Extract dilution denominator from PC sample names like 'PC 1:50' or 'ITM PC 50'.
+def _dilution_for_pc(name: str, dilution_series: list[float]) -> float:
+    """Standard1 → dilution_series[0]; Standard10 → dilution_series[9].
 
-    Also handles 'ITM PC2 1:50' and 'ITM PC2 50'.
+    Returns NaN for non-Standard names.
     """
-    # Match "1:50" anywhere in the name (colon-based dilution)
-    m = re.search(r"1:(\d+)", name)
-    if m:
-        return float(m.group(1))
-    # Match trailing number after "PC" or "PC2" — e.g., "ITM PC2 50" or "PC 100"
-    m = re.search(r"PC\d?\s+(\d+)", name, re.IGNORECASE)
-    if m:
-        return float(m.group(1))
+    m = re.match(r"^Standard(\d+)$", (name or "").strip(), re.IGNORECASE)
+    if not m:
+        return float("nan")
+    idx = int(m.group(1)) - 1
+    if 0 <= idx < len(dilution_series):
+        return float(dilution_series[idx])
     return float("nan")
-
-
-def _extract_pc_pool(name: str) -> str | None:
-    """Extract PC pool name from sample name.
-
-    'ITM PC2 1:50' → 'ITM PC2'
-    'ITM PC 1:50'  → 'ITM PC'
-    'PC 1:50'      → 'PC'
-    Returns None for non-PC wells.
-    """
-    m = re.match(r"((?:ITM\s*)?PC\d?)\s", name, re.IGNORECASE)
-    return m.group(1).strip() if m else None

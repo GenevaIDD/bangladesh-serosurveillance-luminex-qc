@@ -12,7 +12,7 @@ from .qc_replicates import qc_pc_replicates
 from .qc_nc import qc_nc_levels
 from .qc_kit_controls import qc_kit_controls
 from .qc_history import load_history, append_history, save_history
-from .parse_layout import read_plate_layout
+from .parse_layout import read_plate_layout, build_layout
 from .plate_summary import plate_summary
 from .report import generate_report
 from .settings import load_config
@@ -22,6 +22,7 @@ def run_pipeline(
     csv_path: str | Path,
     output_dir: str | Path | None = None,
     layout_path: str | Path | None = None,
+    inputfile_path: str | Path | None = None,
     history_dir: str | Path | None = None,
     config: dict | None = None,
     plate_order: list | None = None,
@@ -56,8 +57,22 @@ def run_pipeline(
     # 2. Classify wells (using config patterns)
     data = classify_wells(data, config=config)
 
-    # 3. Optional layout enrichment
-    if layout_path:
+    # 3. Optional layout enrichment.
+    # New (Uvira) path: inputfile CSV (well → plate_well_type, barcode) +
+    # optional Box xlsx (barcode → patient_id), merged via build_layout.
+    # Legacy path: a Sample-list xlsx via read_plate_layout(layout_path).
+    if inputfile_path:
+        layout = build_layout(inputfile_path, box_xlsx_path=layout_path)
+        if layout is not None and not layout.empty:
+            # sample_id = patient_id when known, else on-plate barcode
+            layout = layout.copy()
+            layout["sample_id"] = layout["patient_id"].where(
+                layout["patient_id"].astype(str).str.len() > 0,
+                layout["barcode"],
+            )
+            keep_cols = [c for c in ("well", "sample_id", "barcode", "patient_id", "box_id") if c in layout.columns]
+            data = data.merge(layout[keep_cols], on="well", how="left")
+    elif layout_path:
         layout = read_plate_layout(layout_path)
         if layout is not None and any(c in layout.columns for c in ("sample_id", "visit_date", "dilution")):
             data = data.merge(layout, on="well", how="left", suffixes=("", "_layout"))

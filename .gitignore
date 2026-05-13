@@ -10,3 +10,5 @@ outputs/
 data/
 .DS_Store
 .claude/
+.Rproj.user
+.Rproj

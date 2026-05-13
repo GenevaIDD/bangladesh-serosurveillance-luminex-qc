@@ -1,5 +1,11 @@
-# MPXV Luminex QC Tool — Specification
-# Version 0.8.0 (2026-03-30)
+# Uvira Luminex QC Tool — Specification
+# Version 0.9.0-uvira (in progress, 2026-05-13)
+
+> **Migration in progress.** Sections below still describe the legacy
+> MPXV 12-plex MagPix behaviour. They will be rewritten as Sections 3–7
+> of [UVIRA_TODO.md](UVIRA_TODO.md) land. Foundational changes (panel
+> definition, Intelliflex parser, two-file plate-layout reader) have
+> been made; the report rendering pipeline is the next milestone.
 
 ## Overview
 

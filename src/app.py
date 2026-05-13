@@ -1,4 +1,4 @@
-"""Flask web app for MPXV Luminex QC tool."""
+"""Flask web app for Uvira Luminex QC tool."""
 
 import io
 import json
@@ -24,7 +24,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from .config import APP_VERSION
+from .config import APP_VERSION, RESULTS_DIR_NAME
 from .pipeline import run_pipeline
 from .settings import load_config, save_config, reset_config, get_config_path
 
@@ -45,7 +45,7 @@ def _get_base_path() -> Path:
 
 def _get_results_dir() -> Path:
     """Persistent results directory in user's home."""
-    d = Path.home() / "mpox-luminex-qc-results"
+    d = Path.home() / RESULTS_DIR_NAME
     for sub in ("reports", "specimens", "history", "uploads"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
@@ -80,15 +80,23 @@ def create_app() -> Flask:
     @app.route("/upload", methods=["POST"])
     def upload():
         csv_files = request.files.getlist("csv_files")
-        layout_file = request.files.get("layout_file")
+        inputfile_file = request.files.get("inputfile_file")
+        layout_file = request.files.get("layout_file")  # Box xlsx (optional)
 
         # Validate
         csv_files = [f for f in csv_files if f and f.filename]
         if not csv_files:
-            flash("Please select at least one CSV file.", "error")
+            flash("Please select at least one plate result CSV file.", "error")
             return redirect(url_for("index"))
 
-        # Save optional layout file
+        # Save optional inputfile CSV (Intelliflex well→barcode map)
+        inputfile_path = None
+        if inputfile_file and inputfile_file.filename:
+            inputfile_name = secure_filename(inputfile_file.filename)
+            inputfile_path = results / "uploads" / inputfile_name
+            inputfile_file.save(inputfile_path)
+
+        # Save optional Box xlsx (barcode→patient_id map)
         layout_path = None
         if layout_file and layout_file.filename:
             layout_name = secure_filename(layout_file.filename)
@@ -96,6 +104,7 @@ def create_app() -> Flask:
             layout_file.save(layout_path)
 
         last_report = None
+        inputfile_name = inputfile_path.name if inputfile_path else None
         layout_name = layout_path.name if layout_path else None
         for csv_file in csv_files:
             csv_name = secure_filename(csv_file.filename)
@@ -108,6 +117,7 @@ def create_app() -> Flask:
                     csv_path=csv_path,
                     output_dir=results / "reports",
                     layout_path=layout_path,
+                    inputfile_path=inputfile_path,
                     history_dir=results / "history",
                     config=config,
                 )
@@ -119,8 +129,8 @@ def create_app() -> Flask:
                 if spec_csv.exists():
                     spec_csv.rename(results / "specimens" / spec_csv.name)
 
-                # Register plate (keep CSV/layout for regeneration)
-                _register_plate(results, plate_id, csv_name, layout_name)
+                # Register plate (keep CSV/inputfile/layout for regeneration)
+                _register_plate(results, plate_id, csv_name, layout_name, inputfile_name)
 
                 flash(f"Report generated: {report_path.name}", "success")
 
@@ -226,7 +236,7 @@ def create_app() -> Flask:
             buf,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name="mpxv_luminex_all_data.xlsx",
+            download_name="uvira_luminex_all_data.xlsx",
         )
 
     @app.route("/delete/<plate_id>", methods=["POST"])
@@ -259,7 +269,11 @@ def create_app() -> Flask:
         registry = _load_registry(results)
         entry = next((r for r in registry if r["plate_id"] == plate_id), None)
         if entry:
-            for fname in (entry.get("csv_filename"), entry.get("layout_filename")):
+            for fname in (
+                entry.get("csv_filename"),
+                entry.get("layout_filename"),
+                entry.get("inputfile_filename"),
+            ):
                 if fname:
                     f = results / "uploads" / fname
                     if f.exists():
@@ -316,11 +330,16 @@ def create_app() -> Flask:
             if entry.get("layout_filename"):
                 lp = results / "uploads" / entry["layout_filename"]
                 layout_path = lp if lp.exists() else None
+            inputfile_path = None
+            if entry.get("inputfile_filename"):
+                ip = results / "uploads" / entry["inputfile_filename"]
+                inputfile_path = ip if ip.exists() else None
             try:
                 report_path = run_pipeline(
                     csv_path=csv_path,
                     output_dir=results / "reports",
                     layout_path=layout_path,
+                    inputfile_path=inputfile_path,
                     history_dir=results / "history",
                     config=config,
                     plate_order=plate_order,
@@ -349,7 +368,7 @@ def create_app() -> Flask:
         # Simple markdown-to-HTML: render as preformatted with basic styling
         html = (
             '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-            '<title>MPXV Luminex QC — Specification</title>'
+            '<title>Uvira Luminex QC — Specification</title>'
             '<style>'
             'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
             ' max-width: 900px; margin: 0 auto; padding: 20px; color: #333; }'
@@ -502,7 +521,7 @@ def create_app() -> Flask:
         buf = io.BytesIO()
         buf.write(yaml.dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"))
         buf.seek(0)
-        return send_file(buf, mimetype="text/yaml", as_attachment=True, download_name="mpxv_luminex_config.yaml")
+        return send_file(buf, mimetype="text/yaml", as_attachment=True, download_name="uvira_luminex_config.yaml")
 
     @app.route("/settings/import", methods=["POST"])
     def import_config():
@@ -582,18 +601,26 @@ def _save_registry(results_dir: Path, registry: list[dict]) -> None:
     path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
 
 
-def _register_plate(results_dir: Path, plate_id: str, csv_filename: str, layout_filename: str | None) -> None:
+def _register_plate(
+    results_dir: Path,
+    plate_id: str,
+    csv_filename: str,
+    layout_filename: str | None,
+    inputfile_filename: str | None = None,
+) -> None:
     """Add or update a plate entry in plate_registry.json."""
     registry = _load_registry(results_dir)
     existing = next((r for r in registry if r["plate_id"] == plate_id), None)
     if existing:
         existing["csv_filename"] = csv_filename
         existing["layout_filename"] = layout_filename
+        existing["inputfile_filename"] = inputfile_filename
     else:
         registry.append({
             "plate_id": plate_id,
             "csv_filename": csv_filename,
             "layout_filename": layout_filename,
+            "inputfile_filename": inputfile_filename,
             "sort_order": len(registry),
         })
     _save_registry(results_dir, registry)
