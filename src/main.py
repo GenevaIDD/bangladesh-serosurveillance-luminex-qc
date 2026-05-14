@@ -1,5 +1,7 @@
 """Entry point for the Uvira Luminex QC tool."""
 
+from __future__ import annotations
+
 import socket
 import threading
 import time

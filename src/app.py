@@ -1,5 +1,7 @@
 """Flask web app for Uvira Luminex QC tool."""
 
+from __future__ import annotations
+
 import io
 import json
 import os
@@ -407,27 +409,10 @@ def create_app() -> Flask:
         config["assay"]["description"] = request.form.get("assay_description", "").strip()
         config["standard"]["bead_batch"] = request.form.get("bead_batch", "").strip()
 
-        # Panel antigens
-        for i, ag in enumerate(config["panel"]["antigens"]):
-            name = request.form.get(f"ag_name_{i}", "").strip()
-            region = request.form.get(f"ag_region_{i}", "0")
-            if name:
-                ag["name"] = name
-            try:
-                ag["bead_region"] = int(region)
-            except ValueError:
-                pass
-
-        # Panel kit controls
-        for i, kc in enumerate(config["panel"]["kit_controls"]):
-            name = request.form.get(f"kc_name_{i}", "").strip()
-            region = request.form.get(f"kc_region_{i}", "0")
-            if name:
-                kc["name"] = name
-            try:
-                kc["bead_region"] = int(region)
-            except ValueError:
-                pass
+        # Excluded analytes (newline-separated, soft-flag list)
+        excluded_raw = request.form.get("excluded_analytes", "")
+        excluded = [line.strip() for line in excluded_raw.splitlines() if line.strip()]
+        config["panel"]["excluded_analytes"] = excluded
 
         # Well classification patterns
         pc_pats = request.form.get("pc_patterns", "")
@@ -435,16 +420,15 @@ def create_app() -> Flask:
         config["well_classification"]["pc_patterns"] = [p.strip() for p in pc_pats.split(",") if p.strip()]
         config["well_classification"]["nc_patterns"] = [p.strip() for p in nc_pats.split(",") if p.strip()]
 
-        # Standard curve
-        dilution_mode = request.form.get("dilution_mode", "auto")
-        if dilution_mode == "auto":
-            config["standard"]["dilutions"] = "auto"
-        else:
-            manual = request.form.get("manual_dilutions", "")
+        # Standard dilution series
+        std_dils_raw = request.form.get("standard_dilutions", "").strip()
+        if std_dils_raw:
             try:
-                config["standard"]["dilutions"] = [int(d.strip()) for d in manual.split(",") if d.strip()]
+                config["standard"]["dilutions"] = [
+                    float(d.strip()) for d in std_dils_raw.split(",") if d.strip()
+                ]
             except ValueError:
-                flash("Invalid dilution values. Use comma-separated integers.", "error")
+                flash("Invalid dilution values. Use comma-separated numbers.", "error")
                 return redirect(url_for("settings"))
 
         # Specimen dilution
@@ -455,31 +439,16 @@ def create_app() -> Flask:
 
         # QC thresholds
         qc = config["qc_thresholds"]
-        for key in ("bead_count_min", "nc_bead_mfi_max", "scg_mfi_min"):
+        for key in ("bead_count_min", "bead_count_warn"):
             try:
-                qc[key] = int(request.form.get(key, qc[key]))
+                qc[key] = int(request.form.get(key, qc.get(key, 0)))
             except (ValueError, TypeError):
                 pass
-        for key in ("pc_cv_threshold", "recovery_tolerance"):
+        for key in ("recovery_tolerance",):
             try:
                 qc[key] = float(request.form.get(key, qc[key]))
             except (ValueError, TypeError):
                 pass
-        # Range thresholds
-        try:
-            qc["fc_mfi_range"] = [
-                int(request.form.get("fc_mfi_min", qc["fc_mfi_range"][0])),
-                int(request.form.get("fc_mfi_max", qc["fc_mfi_range"][1])),
-            ]
-        except (ValueError, TypeError):
-            pass
-        try:
-            qc["ic_mfi_range"] = [
-                int(request.form.get("ic_mfi_min", qc["ic_mfi_range"][0])),
-                int(request.form.get("ic_mfi_max", qc["ic_mfi_range"][1])),
-            ]
-        except (ValueError, TypeError):
-            pass
         # Outlier detection checkbox
         qc["drop_outlier"] = request.form.get("drop_outlier") == "true"
 

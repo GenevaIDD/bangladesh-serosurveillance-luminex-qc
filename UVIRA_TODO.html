@@ -582,76 +582,107 @@ Section 5 (report.py rewrite).</label></li>
 <div id="config-panel-definition" class="section level3">
 <h3>2. Config &amp; panel definition</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>In <code>config.py</code>, replace
-<code>MPXV_ANTIGENS</code> / <code>MPXV_KIT_CONTROLS</code> with the
-~200 Uvira antigens. Source of truth = header row of the Median block;
-consider auto-deriving the panel from the CSV on first ingest and
-caching to YAML.</label></li>
-<li><label><input type="checkbox"></input>Drop
-<code>MPXV_KIT_CONTROLS</code>-driven QC; add an
-<code>excluded_analytes</code> list (the 3 erroneous ones above)
-editable from the Settings page.</label></li>
-<li><label><input type="checkbox"></input>Update
-<code>well_classification</code>: PC pattern <code>^Standard\d+$</code>,
-NC pattern <code>^Background$</code>; specimen = everything else (or
-<code>^FD\d+</code>).</label></li>
-<li><label><input type="checkbox"></input>Encode the standard dilution series
-(10 points, 4-fold from 62.5 → 16,384,000) as defaults; allow
-override.</label></li>
+<li><label><input type="checkbox" checked></input>Replaced
+<code>MPXV_ANTIGENS</code> / <code>MPXV_KIT_CONTROLS</code> with the 200
+Uvira antigens (<code>ANTIGENS</code> constant in
+<code>config.py</code>). Old names retained as deprecated
+aliases.</label></li>
+<li><label><input type="checkbox" checked></input>Panel auto-derived from
+each CSV’s Median-block header on ingest. <code>parse_xponent_csv</code>
+records <code>metadata[&#39;analytes&#39;]</code>; <code>pipeline.py</code>
+passes that list as the authoritative panel into
+<code>fit_standard_curves(antigens=...)</code>. Config panel is now a
+display-only fallback.</label></li>
+<li><label><input type="checkbox" checked></input><code>excluded_analytes</code> is editable from the
+Settings page (textarea, one analyte per line). Defaults to the three
+erroneous bead regions. Surfaced on the per-(antigen × sample) range
+table via the <code>excluded</code> column.</label></li>
+<li><label><input type="checkbox" checked></input>Updated
+<code>well_classification</code> patterns to <code>^Standard\d+$</code>
+/ <code>^Background</code>.</label></li>
+<li><label><input type="checkbox" checked></input>Standard dilution series
+baked into defaults (10-point 4-fold from 62.5 → 16,384,000); editable
+on the Settings page as a single comma-separated field (the old
+auto/manual mode toggle was removed because Intelliflex never encodes
+dilutions in sample names).</label></li>
 </ul>
 </div>
 <div id="standard-curve-qc-200-antigens" class="section level3">
 <h3>3. Standard-curve QC (200 antigens)</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Run existing 4PL fit per antigen
-(single pool). Surface <code>fit_ok</code>, params, R², dynamic range as
-before.</label></li>
-<li><label><input type="checkbox"></input><strong>New metric</strong>: % of
-specimen samples falling inside the linear (reportable) range, per
-antigen. Use the LLOQ/ULOQ logic already in
-<code>_compute_reportable_range</code>.</label></li>
-<li><label><input type="checkbox"></input><strong>New table</strong>:
-per-(antigen × sample) <strong>strictly binary</strong>
-<code>IN RANGE</code> / <code>OUT OF RANGE</code> label, color-coded
-(green / red). “Out of range” = MFI below LLOQ MFI <strong>or</strong>
-above ULOQ MFI; both conditions collapse to the same red label.
-Filterable by antigen and by sample; export to CSV.</label></li>
-<li><label><input type="checkbox"></input>Curve plots: 200 antigens won’t fit
-in a 2×4 grid. Paginate or render a searchable picker that swaps a
-single plot at a time. Keep a summary heatmap (antigens × QC checks: R²,
-slope, IC50, %-in-range).</label></li>
+<li><label><input type="checkbox" checked></input>Existing 4PL per-antigen
+fit reused. <code>fit_standard_curves</code> now takes an
+<code>antigens</code> kwarg so the pipeline passes the per-plate panel
+from the CSV header. Pool concept collapses to a single
+<code>&quot;PC&quot;</code> key on Uvira (the multi-pool branch is unused but kept
+for backward compat).</label></li>
+<li><label><input type="checkbox" checked></input><strong>New
+metric</strong>
+<code>compute_pct_in_range_per_antigen(in_range, ...)</code> returns one
+row per analyte with
+<code>n_samples / n_in_range /     n_out_of_range / n_no_fit / pct_in_range / excluded</code>.
+Exported as <code>pct_in_range_&lt;plate&gt;.csv</code>.</label></li>
+<li><label><input type="checkbox" checked></input><strong>New
+table</strong> <code>compute_in_range_table(data, fits, excluded)</code>
+returns one row per (specimen well × analyte) with
+<code>mfi /     mfi_lloq / mfi_uloq / status / excluded</code> plus any
+sample-id / barcode / patient-id columns from the layout merge. Status
+is strictly <code>IN_RANGE</code> / <code>OUT_OF_RANGE</code> /
+<code>NO_FIT</code>; below-LLOQ and above-ULOQ both collapse to
+OUT_OF_RANGE per decision #3. Exported as
+<code>in_range_&lt;plate&gt;.csv</code>. Smoke-test on the pilot data:
+16,800 rows (84 specimens × 200 antigens), the three excluded bead
+regions came back at 0–3.6% in-range as expected.</label></li>
+<li><label><input type="checkbox" checked></input>Curve-plot picker shipped
+— single Plotly figure with all 200 antigens as visibility-toggled
+traces and a dropdown menu (Section 5).</label></li>
 </ul>
 </div>
 <div id="bead-count-qc" class="section level3">
 <h3>4. Bead-count QC</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input><strong>New table</strong>: rows =
-antigens, columns = samples, cell = bead count, color-coded RED
-<code>&lt;30</code>, YELLOW <code>30–50</code>, GREEN
-<code>&gt;50</code>. Render with sticky headers; for 200×~90 the DOM
-gets large, so use a virtualized table or Plotly heatmap with
-hover.</label></li>
-<li><label><input type="checkbox"></input>Companion <strong>problem
-list</strong>: enumerate every <code>(sample, antigen)</code> pair that
-is red or yellow, grouped by sample, with bead count shown.</label></li>
-<li><label><input type="checkbox"></input>Wire the threshold pair (30 / 50)
-into Settings.</label></li>
+<li><label><input type="checkbox" checked></input><strong>New
+table</strong> built in <code>qc_beads.py::qc_bead_counts</code>.
+Returns <code>matrix</code> (analytes × wells, raw counts),
+<code>tier_matrix</code> (red / yellow / green strings), and a
+<code>problems</code> long-format DataFrame sorted red-first. Rendered
+in the report as a discrete-tier Plotly heatmap.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Problem
+list</strong> included as an HTML table below the heatmap and exported
+as <code>bead_problems_&lt;plate&gt;.csv</code> from the
+pipeline.</label></li>
+<li><label><input type="checkbox" checked></input>Threshold pair wired
+through Settings (<code>bead_count_min</code> /
+<code>bead_count_warn</code>) and into the Plotly heatmap
+legend.</label></li>
 </ul>
 </div>
 <div id="reporting-ui" class="section level3">
 <h3>5. Reporting &amp; UI</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Audit
-<code>templates/report.html</code> and <code>report.py</code> for
-hard-coded references to the 8-antigen layout / kit-control
-beads.</label></li>
-<li><label><input type="checkbox"></input>Add the two new sections (bead-count
-matrix + range matrix) and the antigen picker.</label></li>
-<li><label><input type="checkbox"></input>Banner: list of excluded analytes;
-banner: which Box barcode map was used (if any).</label></li>
-<li><label><input type="checkbox"></input>Specimen results table needs to
-scale to 200 columns — pivot the default view so antigens are
-rows.</label></li>
+<li><label><input type="checkbox" checked></input><code>templates/report.html</code> and
+<code>src/report.py</code> rewritten from scratch for the 200-antigen
+layout. Removed all kit-control / NC bead / replicate-CV sections.
+Plotly is loaded via CDN once.</label></li>
+<li><label><input type="checkbox" checked></input>Bead-Count matrix +
+IN/OUT-of-Range matrix, both as Plotly heatmaps with discrete colour
+scales and per-cell hover.</label></li>
+<li><label><input type="checkbox" checked></input>Standard-Curve Picker —
+Plotly figure with 200 traces and an <code>updatemenus</code> dropdown
+that swaps the visible analyte. Title updates with <code>fit_ok</code>
+and the four 4PL parameters.</label></li>
+<li><label><input type="checkbox" checked></input>Per-antigen
+Standard-Curve Summary table (a, b, c=IC50, d, LLOQ / ULOQ dilutions,
+%-in-range, QC warnings, <code>fit_ok</code> badge). Excluded-analyte
+rows rendered muted.</label></li>
+<li><label><input type="checkbox" checked></input>Banner sections: excluded
+analytes (warn-yellow); Box xlsx identifier and patient-ID resolution
+count (info-blue).</label></li>
+<li><label><input type="checkbox" checked></input>Specimen-results table
+not embedded — 200 cols × 84 rows would blow up the page. Three CSV
+download buttons replace it (<code>specimens_*.csv</code>,
+<code>in_range_*.csv</code>,
+<code>pct_in_range_*.csv</code>).</label></li>
 </ul>
 </div>
 <div id="validation" class="section level3">
@@ -729,6 +760,139 @@ Below-LLOQ and above-ULOQ both collapse to “OUT OF RANGE”.</td>
 </div>
 <div id="session-history" class="section level2">
 <h2>Session History</h2>
+<div id="session-4-2026-05-14" class="section level3">
+<h3>Session 4 — 2026-05-14</h3>
+<p>Implemented Sections 4 and 5. The pipeline now produces a fully
+functional Uvira 200-plex HTML report end-to-end on the pilot data.
+Legacy MagPix-only modules removed.</p>
+<p><strong>Files added / rewritten:</strong> -
+<code>src/qc_beads.py</code> — fully rewritten. New return shape:
+<code>matrix</code> (analyte × well counts), <code>tier_matrix</code>
+(red/yellow/green), <code>sample_labels</code>, <code>problems</code>
+(long-format, sorted red-first), plus the legacy <code>flagged</code> /
+<code>n_flagged</code> / <code>by_well</code> fields for any code that
+still expects them. Tier classifier reads
+<code>qc_thresholds.bead_count_min</code> (red below) and
+<code>bead_count_warn</code> (yellow below; green above) — both editable
+from Settings. - <code>src/report.py</code> — fully rewritten (≈400
+lines, down from 813). Six-section Uvira layout (Plate Overview,
+Bead-Count Matrix, Standard-Curve Summary, Standard-Curve Picker,
+IN/OUT-of-Range Matrix, Downloads). Three Plotly figures
+(<code>_make_bead_heatmap</code>, <code>_make_curve_picker</code>,
+<code>_make_in_range_heatmap</code>); Plotly is loaded once via CDN at
+the top of the template. The curve picker bundles all 200 antigens as
+visibility-toggled traces with a single <code>updatemenus</code>
+dropdown. - <code>templates/report.html</code> — fully rewritten. New
+CSS, semantic sections, sticky-header tables, muted-row styling for
+excluded analytes, downloadable CSV buttons. -
+<code>src/pipeline.py</code> — dropped <code>qc_pc_replicates</code>,
+<code>qc_nc_levels</code>, <code>qc_kit_controls</code> calls and their
+imports. <code>generate_report</code> now receives the new args
+(<code>in_range</code>, <code>pct_in_range</code>) and the try/except
+wrapper from Session 3 is removed (the pipeline now expects the report
+to succeed). Bead-problem CSV export added
+(<code>bead_problems_&lt;plate&gt;.csv</code>).
+<code>_build_nc_history</code> deleted. <code>history_nc</code> is
+<code>None</code>. - <code>src/qc_kit_controls.py</code>,
+<code>src/qc_nc.py</code>, <code>src/qc_replicates.py</code> —
+<strong>deleted</strong>. - <code>src/config.py</code> — deprecated
+kit-control aliases (<code>MPXV_ANTIGENS</code>,
+<code>MPXV_KIT_CONTROLS</code>, <code>NC_BEAD_MFI_MAX</code>,
+<code>SCG_MFI_MIN</code>, <code>FC_MFI_RANGE</code>,
+<code>IC_MFI_RANGE</code>) removed; nothing imports them anymore. - All
+<code>src/*.py</code> — <code>from __future__ import annotations</code>
+added so the modules parse on Python 3.9+ (project still officially
+requires 3.11; this is purely defensive).</p>
+<p><strong>Smoke tests run (Section 4 piece, Section 5 piece in
+flight):</strong> - <code>qc_bead_counts</code> on the pilot data:
+matrix shape <code>(200, 96)</code>, 430 red cells, 856 yellow cells,
+1,286 problem rows. The three excluded bead regions consistently show 0
+beads across every well (consistent with their being added in
+error).</p>
+<p><strong>Known follow-ups (Section 6 / 7):</strong> - Section 6
+validation cross-check (a handful of patient IDs) still to do — the
+wiring is in place; just need to spot-check a few wells. - Section 7:
+legacy descriptive copy in README.md and SPECIFICATION.md still
+describes the MPXV 12-plex assay; the GitHub URL in the templates/footer
+still points at the old repo; PyInstaller specs not yet renamed. - The
+<code>KIT_CONTROLS = []</code> constant and the kit-control branch in
+<code>qc_standard_curve._fit_one</code>’s pool-discovery code are dead
+and could be simplified further.</p>
+<p><strong>Next session:</strong> Section 6 (validation pass with
+patient-ID spot-check) and Section 7 (rewrite README / SPEC, update repo
+URLs, rename PyInstaller specs).</p>
+</div>
+<div id="session-3-2026-05-14" class="section level3">
+<h3>Session 3 — 2026-05-14</h3>
+<p>Implemented Sections 2 and 3. Pipeline now produces the Section-3
+deliverable CSVs end-to-end on the pilot data; HTML report rendering
+remains the Section-5 task.</p>
+<p><strong>Files edited:</strong> - <code>src/config.py</code> — added
+<code>BEAD_COUNT_WARN = 50</code> to <code>DEFAULTS</code>. Re-added the
+deprecated kit-control thresholds (<code>NC_BEAD_MFI_MAX</code>,
+<code>SCG_MFI_MIN</code>, <code>FC_MFI_RANGE</code>,
+<code>IC_MFI_RANGE</code>) as module-level constants so legacy
+<code>qc_kit_controls.py</code> and <code>report.py</code> keep
+importing during the Section-5 transition. -
+<code>src/parse_xponent.py</code> — <code>metadata[&#39;analytes&#39;]</code>
+now carries the per-plate panel in the order the instrument exported it.
+- <code>src/qc_standard_curve.py</code> —
+<code>fit_standard_curves</code> accepts an <code>antigens=</code>
+kwarg. Two new functions: -
+<code>compute_in_range_table(data, fits, excluded_analytes)</code> →
+long-format <code>(well × analyte)</code> table with MFI, MFI bounds,
+ternary <code>status</code>, <code>excluded</code> flag, and any
+sample-id / barcode / patient-id columns from the layout merge. -
+<code>compute_pct_in_range_per_antigen(in_range, excluded_analytes)</code>
+→ per-antigen summary with
+<code>n_samples / n_in_range /     n_out_of_range / n_no_fit / pct_in_range / excluded</code>.
+- Helper <code>_mfi_bounds_for_fit(fit_result)</code> evaluates the 4PL
+at the LLOQ/ULOQ dilutions to get MFI bounds for the IN/OUT decision. -
+<code>src/pipeline.py</code> — uses <code>metadata[&#39;analytes&#39;]</code> as
+the authoritative panel for <code>fit_standard_curves</code>; calls the
+two new range functions using
+<code>get_excluded_analytes(config)</code>; exports
+<code>in_range_&lt;plate&gt;.csv</code> and
+<code>pct_in_range_&lt;plate&gt;.csv</code>. The
+<code>generate_report</code> call is now wrapped in try/except — when it
+fails (expected during Section-5 transition) a placeholder HTML is
+written so Past Reports still has a row, and the pipeline carries on to
+produce the CSVs. - <code>templates/web/settings.html</code> — replaced.
+Per-antigen / kit-control table editors removed (panel is auto-derived).
+New <code>excluded_analytes</code> textarea (newline-separated),
+<code>bead_count_warn</code> input, simplified standard-dilutions field.
+Legacy <code>nc_bead_mfi_max</code> / <code>scg_mfi_min</code> /
+<code>fc_mfi_*</code> / <code>ic_mfi_*</code> /
+<code>pc_cv_threshold</code> / <code>dilution_mode</code> fields removed
+from the UI. - <code>src/app.py</code> — <code>save_settings</code>
+rewritten to match the new form: parses <code>excluded_analytes</code>,
+<code>bead_count_warn</code>, single <code>standard_dilutions</code>
+field; drops the per-row antigen / kit-control iteration and the
+kit-control range parsers. - <code>UVIRA_TODO.md</code> — Sections 2 and
+3 marked done (curve-plot rendering deferred to Section 5).</p>
+<p><strong>Smoke tests run:</strong> - <code>parse_xponent_csv()</code>
+on pilot CSV: <code>metadata[&#39;analytes&#39;]</code> carries all 200 names in
+order. - <code>compute_in_range_table()</code> with synthetic 4PL fits
+derived from the standard MFI bounds: 16,800 rows = 84 specimens × 200
+antigens; status counts split 14,723 IN_RANGE / 2,077 OUT_OF_RANGE; 252
+rows flagged <code>excluded=True</code> (84 × 3 erroneous beads). -
+<code>compute_pct_in_range_per_antigen()</code>: 200 rows; the three
+excluded bead regions show 0–3.6% in-range (correctly the worst), good
+antigens like <code>RES_Ade3</code> show 97.6%.</p>
+<p><strong>Known follow-ups (NOT done in Session 3):</strong> -
+<code>report.py</code> not rewritten yet — still imports kit-control
+constants and tries to render an 8-antigen layout. Pipeline now swallows
+the resulting error and writes a placeholder. Section 5 owns the
+rewrite. - <code>qc_kit_controls.py</code>, <code>qc_nc.py</code>,
+<code>qc_replicates.py</code> still called from <code>pipeline.py</code>
+— they return empty/safe results on Uvira data but should be deleted in
+Section 5. - Bead-count Red/Yellow/Green matrix and problem list
+(Section 4) not yet built. The thresholds (<code>bead_count_min</code>,
+<code>bead_count_warn</code>) are in config and editable from Settings;
+the matrix-building helper is the Section-4 task.</p>
+<p><strong>Next session:</strong> Section 4 (bead-count matrix + problem
+list) and the start of Section 5 (200-antigen report layout).</p>
+</div>
 <div id="session-2-2026-05-13" class="section level3">
 <h3>Session 2 — 2026-05-13</h3>
 <p>Implemented Sections 0 and 1 (foundation only — report rendering

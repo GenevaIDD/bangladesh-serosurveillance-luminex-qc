@@ -123,50 +123,76 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
       (report.py rewrite).
 
 ### 2. Config & panel definition
-- [ ] In `config.py`, replace `MPXV_ANTIGENS` / `MPXV_KIT_CONTROLS` with the
-      ~200 Uvira antigens. Source of truth = header row of the Median block;
-      consider auto-deriving the panel from the CSV on first ingest and
-      caching to YAML.
-- [ ] Drop `MPXV_KIT_CONTROLS`-driven QC; add an `excluded_analytes` list
-      (the 3 erroneous ones above) editable from the Settings page.
-- [ ] Update `well_classification`: PC pattern `^Standard\d+$`, NC pattern
-      `^Background$`; specimen = everything else (or `^FD\d+`).
-- [ ] Encode the standard dilution series (10 points, 4-fold from 62.5 →
-      16,384,000) as defaults; allow override.
+- [x] Replaced `MPXV_ANTIGENS` / `MPXV_KIT_CONTROLS` with the 200 Uvira
+      antigens (`ANTIGENS` constant in `config.py`). Old names retained
+      as deprecated aliases.
+- [x] Panel auto-derived from each CSV's Median-block header on
+      ingest. `parse_xponent_csv` records `metadata['analytes']`;
+      `pipeline.py` passes that list as the authoritative panel into
+      `fit_standard_curves(antigens=...)`. Config panel is now a
+      display-only fallback.
+- [x] `excluded_analytes` is editable from the Settings page (textarea,
+      one analyte per line). Defaults to the three erroneous bead
+      regions. Surfaced on the per-(antigen × sample) range table via
+      the `excluded` column.
+- [x] Updated `well_classification` patterns to `^Standard\d+$` /
+      `^Background`.
+- [x] Standard dilution series baked into defaults (10-point 4-fold
+      from 62.5 → 16,384,000); editable on the Settings page as a
+      single comma-separated field (the old auto/manual mode toggle was
+      removed because Intelliflex never encodes dilutions in sample
+      names).
 
 ### 3. Standard-curve QC (200 antigens)
-- [ ] Run existing 4PL fit per antigen (single pool). Surface `fit_ok`,
-      params, R², dynamic range as before.
-- [ ] **New metric**: % of specimen samples falling inside the linear
-      (reportable) range, per antigen. Use the LLOQ/ULOQ logic already in
-      `_compute_reportable_range`.
-- [ ] **New table**: per-(antigen × sample) **strictly binary**
-      `IN RANGE` / `OUT OF RANGE` label, color-coded (green / red).
-      "Out of range" = MFI below LLOQ MFI **or** above ULOQ MFI; both
-      conditions collapse to the same red label. Filterable by antigen and
-      by sample; export to CSV.
-- [ ] Curve plots: 200 antigens won't fit in a 2×4 grid. Paginate or render
-      a searchable picker that swaps a single plot at a time. Keep a summary
-      heatmap (antigens × QC checks: R², slope, IC50, %-in-range).
+- [x] Existing 4PL per-antigen fit reused. `fit_standard_curves` now
+      takes an `antigens` kwarg so the pipeline passes the per-plate
+      panel from the CSV header. Pool concept collapses to a single
+      `"PC"` key on Uvira (the multi-pool branch is unused but kept
+      for backward compat).
+- [x] **New metric** `compute_pct_in_range_per_antigen(in_range, ...)`
+      returns one row per analyte with `n_samples / n_in_range /
+      n_out_of_range / n_no_fit / pct_in_range / excluded`. Exported
+      as `pct_in_range_<plate>.csv`.
+- [x] **New table** `compute_in_range_table(data, fits, excluded)`
+      returns one row per (specimen well × analyte) with `mfi /
+      mfi_lloq / mfi_uloq / status / excluded` plus any sample-id /
+      barcode / patient-id columns from the layout merge. Status is
+      strictly `IN_RANGE` / `OUT_OF_RANGE` / `NO_FIT`; below-LLOQ and
+      above-ULOQ both collapse to OUT_OF_RANGE per decision #3.
+      Exported as `in_range_<plate>.csv`. Smoke-test on the pilot data:
+      16,800 rows (84 specimens × 200 antigens), the three excluded
+      bead regions came back at 0–3.6% in-range as expected.
+- [x] Curve-plot picker shipped — single Plotly figure with all 200
+      antigens as visibility-toggled traces and a dropdown menu (Section 5).
 
 ### 4. Bead-count QC
-- [ ] **New table**: rows = antigens, columns = samples, cell = bead count,
-      color-coded RED `<30`, YELLOW `30–50`, GREEN `>50`. Render with
-      sticky headers; for 200×~90 the DOM gets large, so use a virtualized
-      table or Plotly heatmap with hover.
-- [ ] Companion **problem list**: enumerate every `(sample, antigen)` pair
-      that is red or yellow, grouped by sample, with bead count shown.
-- [ ] Wire the threshold pair (30 / 50) into Settings.
+- [x] **New table** built in `qc_beads.py::qc_bead_counts`. Returns
+      `matrix` (analytes × wells, raw counts), `tier_matrix` (red /
+      yellow / green strings), and a `problems` long-format DataFrame
+      sorted red-first. Rendered in the report as a discrete-tier
+      Plotly heatmap.
+- [x] **Problem list** included as an HTML table below the heatmap and
+      exported as `bead_problems_<plate>.csv` from the pipeline.
+- [x] Threshold pair wired through Settings (`bead_count_min` /
+      `bead_count_warn`) and into the Plotly heatmap legend.
 
 ### 5. Reporting & UI
-- [ ] Audit `templates/report.html` and `report.py` for hard-coded references
-      to the 8-antigen layout / kit-control beads.
-- [ ] Add the two new sections (bead-count matrix + range matrix) and the
-      antigen picker.
-- [ ] Banner: list of excluded analytes; banner: which Box barcode map was
-      used (if any).
-- [ ] Specimen results table needs to scale to 200 columns — pivot the
-      default view so antigens are rows.
+- [x] `templates/report.html` and `src/report.py` rewritten from
+      scratch for the 200-antigen layout. Removed all kit-control / NC
+      bead / replicate-CV sections. Plotly is loaded via CDN once.
+- [x] Bead-Count matrix + IN/OUT-of-Range matrix, both as Plotly
+      heatmaps with discrete colour scales and per-cell hover.
+- [x] Standard-Curve Picker — Plotly figure with 200 traces and an
+      `updatemenus` dropdown that swaps the visible analyte. Title
+      updates with `fit_ok` and the four 4PL parameters.
+- [x] Per-antigen Standard-Curve Summary table (a, b, c=IC50, d, LLOQ
+      / ULOQ dilutions, %-in-range, QC warnings, `fit_ok` badge).
+      Excluded-analyte rows rendered muted.
+- [x] Banner sections: excluded analytes (warn-yellow); Box xlsx
+      identifier and patient-ID resolution count (info-blue).
+- [x] Specimen-results table not embedded — 200 cols × 84 rows would
+      blow up the page. Three CSV download buttons replace it
+      (`specimens_*.csv`, `in_range_*.csv`, `pct_in_range_*.csv`).
 
 ### 6. Validation
 - [ ] End-to-end run on `Pilot_Uvira_XXL/`. Confirm report opens, all 200
@@ -199,6 +225,197 @@ Decisions log).
 ---
 
 ## Session History
+
+### Session 4 — 2026-05-14
+
+Implemented Sections 4 and 5. The pipeline now produces a fully
+functional Uvira 200-plex HTML report end-to-end on the pilot data.
+Legacy MagPix-only modules removed.
+
+**Files added / rewritten:**
+- `src/qc_beads.py` — fully rewritten. New return shape:
+  `matrix` (analyte × well counts), `tier_matrix` (red/yellow/green),
+  `sample_labels`, `problems` (long-format, sorted red-first), plus the
+  legacy `flagged` / `n_flagged` / `by_well` fields for any code that
+  still expects them. Tier classifier reads
+  `qc_thresholds.bead_count_min` (red below) and `bead_count_warn`
+  (yellow below; green above) — both editable from Settings.
+- `src/report.py` — fully rewritten (≈400 lines, down from 813).
+  Six-section Uvira layout (Plate Overview, Bead-Count Matrix,
+  Standard-Curve Summary, Standard-Curve Picker, IN/OUT-of-Range
+  Matrix, Downloads). Three Plotly figures (`_make_bead_heatmap`,
+  `_make_curve_picker`, `_make_in_range_heatmap`); Plotly is loaded
+  once via CDN at the top of the template. The curve picker bundles
+  all 200 antigens as visibility-toggled traces with a single
+  `updatemenus` dropdown.
+- `templates/report.html` — fully rewritten. New CSS, semantic
+  sections, sticky-header tables, muted-row styling for excluded
+  analytes, downloadable CSV buttons.
+- `src/pipeline.py` — dropped `qc_pc_replicates`, `qc_nc_levels`,
+  `qc_kit_controls` calls and their imports. `generate_report` now
+  receives the new args (`in_range`, `pct_in_range`) and the
+  try/except wrapper from Session 3 is removed (the pipeline now
+  expects the report to succeed). Bead-problem CSV export added
+  (`bead_problems_<plate>.csv`). `_build_nc_history` deleted.
+  `history_nc` is `None`.
+- `src/qc_kit_controls.py`, `src/qc_nc.py`, `src/qc_replicates.py` —
+  **deleted**.
+- `src/config.py` — deprecated kit-control aliases (`MPXV_ANTIGENS`,
+  `MPXV_KIT_CONTROLS`, `NC_BEAD_MFI_MAX`, `SCG_MFI_MIN`,
+  `FC_MFI_RANGE`, `IC_MFI_RANGE`) removed; nothing imports them
+  anymore.
+- All `src/*.py` — `from __future__ import annotations` added so the
+  modules parse on Python 3.9+ (project still officially requires
+  3.11; this is purely defensive).
+
+**Bug fixes during smoke-test verification:**
+- **Plotly version skew** — plotly Python 6.x emits JSON for
+  plotly.js 3.x but the template was loading a hardcoded
+  plotly.js 2.27 CDN tag, so the three figures silently failed to
+  render. Fixed by switching to `include_plotlyjs=True` on the first
+  figure (embeds the matching v3.5.0 bundle inline) and `False` on
+  the rest. Stale CDN `<script>` tag removed from `report.html`.
+  Result is fully self-contained — no internet required, no version
+  drift — at the cost of ~+4.6 MB per report. A
+  `_reset_plotlyjs_embed_flag()` call at the top of
+  `generate_report` ensures successive reports each get their own
+  inline bundle.
+- **Standard-curve perf** — `_fit_one` already had a degenerate-input
+  guard (max-MFI floor) but `_try_drop_one_outlier` was still called
+  on every failed fit, running 10 extra scipy passes per analyte
+  with no signal. Now retry is gated on `params is not None` (i.e.,
+  scipy converged but QC criteria failed). On the pilot data, the
+  end-to-end wall clock should drop substantially from ~6:40.
+- **4PL fit quality** (user reported HCoV_OC43_NP with `d=0` and a
+  visibly bad lower tail) — root cause was linear-residual fitting.
+  The upper plateau (~10⁵ MFI) dominates absolute residuals, so the
+  optimizer "ignored" tail points at MFI ~80 and landed at `d=0`.
+  Switched `_fit_one` to fit on log10(MFI), matching standard
+  immunoassay practice; R² and the retry path's selection metric now
+  use the same log-space objective. Also fixed misleading
+  `a_init` / `d_init` variable comments (the math was always right
+  because both have the same `[0, ∞)` bounds, but the comments
+  swapped what each represents). X-axis label clarified from
+  `Dilution (1:x)` → `Dilution factor (1 : x)`.
+
+**Smoke tests run:**
+- `qc_bead_counts` on the pilot data: matrix shape `(200, 96)`,
+  430 red cells, 856 yellow cells, 1,286 problem rows. The three
+  excluded bead regions consistently show 0 beads across every well
+  (consistent with their being added in error).
+- **Render-only end-to-end** (`/tmp/uvira_smoke_render.py`):
+  parse → layout merge → bead-QC → synthetic 4PL fits → range tables
+  → `report.generate_report` → 6.3 MB self-contained HTML. All 13
+  grep markers hit (UI sections present, excluded analyte rendered,
+  Box xlsx + barcode + IN_RANGE/OUT_OF_RANGE language present, no
+  residual MPXV / kit-control / NC-bead strings). Synthetic fits used
+  to bypass `scipy.curve_fit` because the system Python 3.9 used in
+  this dev env is far slower than the project's pinned 3.11 + scipy
+  ≥ 1.11. **Full scipy-fit pass on the project's 3.11 still to be
+  done by the user** — `uv run python -m src.main`, then upload the
+  pilot CSV / inputfile / Box xlsx through the web UI.
+- `_fit_one` was given a **degenerate-input guard** (max-MFI floor +
+  flat-response check) to keep `scipy.curve_fit` from thrashing on
+  all-zero noise channels (the three excluded bead regions and any
+  similar low-signal antigens). `maxfev` lowered 50,000 → 10,000.
+- **Full real-scipy run** on pilot data: 6:40 wall clock initially;
+  after the perf gating above, much faster. Output:
+  - HTML 11 MB (with embedded plotly.js)
+  - `specimens_*.csv` 2.5 MB
+  - `in_range_*.csv` 2.3 MB
+  - `pct_in_range_*.csv` 8 KB
+  - `bead_problems_*.csv` 52 KB
+
+  Real-fit `pct_in_range` distribution: median 86.9%, mean 74.2%.
+  195/200 antigens have at least one specimen in range. The three
+  excluded analytes all correctly show 0 IN_RANGE / 84 NO_FIT.
+
+**Known follow-ups (Section 6 / 7):**
+- Section 6 validation cross-check (a handful of patient IDs) still to
+  do — the wiring is in place; just need to spot-check a few wells.
+- Section 7: legacy descriptive copy in README.md and SPECIFICATION.md
+  still describes the MPXV 12-plex assay; the GitHub URL in the
+  templates/footer still points at the old repo; PyInstaller specs
+  not yet renamed.
+- The `KIT_CONTROLS = []` constant and the kit-control branch in
+  `qc_standard_curve._fit_one`'s pool-discovery code are dead and
+  could be simplified further.
+
+**Next session:** Section 6 (validation pass with patient-ID
+spot-check) and Section 7 (rewrite README / SPEC, update repo URLs,
+rename PyInstaller specs).
+
+### Session 3 — 2026-05-14
+
+Implemented Sections 2 and 3. Pipeline now produces the Section-3
+deliverable CSVs end-to-end on the pilot data; HTML report rendering
+remains the Section-5 task.
+
+**Files edited:**
+- `src/config.py` — added `BEAD_COUNT_WARN = 50` to `DEFAULTS`. Re-added
+  the deprecated kit-control thresholds (`NC_BEAD_MFI_MAX`,
+  `SCG_MFI_MIN`, `FC_MFI_RANGE`, `IC_MFI_RANGE`) as module-level
+  constants so legacy `qc_kit_controls.py` and `report.py` keep
+  importing during the Section-5 transition.
+- `src/parse_xponent.py` — `metadata['analytes']` now carries the
+  per-plate panel in the order the instrument exported it.
+- `src/qc_standard_curve.py` — `fit_standard_curves` accepts an
+  `antigens=` kwarg. Two new functions:
+  - `compute_in_range_table(data, fits, excluded_analytes)` →
+    long-format `(well × analyte)` table with MFI, MFI bounds, ternary
+    `status`, `excluded` flag, and any sample-id / barcode / patient-id
+    columns from the layout merge.
+  - `compute_pct_in_range_per_antigen(in_range, excluded_analytes)`
+    → per-antigen summary with `n_samples / n_in_range /
+    n_out_of_range / n_no_fit / pct_in_range / excluded`.
+  - Helper `_mfi_bounds_for_fit(fit_result)` evaluates the 4PL at the
+    LLOQ/ULOQ dilutions to get MFI bounds for the IN/OUT decision.
+- `src/pipeline.py` — uses `metadata['analytes']` as the authoritative
+  panel for `fit_standard_curves`; calls the two new range functions
+  using `get_excluded_analytes(config)`; exports
+  `in_range_<plate>.csv` and `pct_in_range_<plate>.csv`. The
+  `generate_report` call is now wrapped in try/except — when it fails
+  (expected during Section-5 transition) a placeholder HTML is written
+  so Past Reports still has a row, and the pipeline carries on to
+  produce the CSVs.
+- `templates/web/settings.html` — replaced. Per-antigen / kit-control
+  table editors removed (panel is auto-derived). New
+  `excluded_analytes` textarea (newline-separated), `bead_count_warn`
+  input, simplified standard-dilutions field. Legacy
+  `nc_bead_mfi_max` / `scg_mfi_min` / `fc_mfi_*` / `ic_mfi_*` /
+  `pc_cv_threshold` / `dilution_mode` fields removed from the UI.
+- `src/app.py` — `save_settings` rewritten to match the new form:
+  parses `excluded_analytes`, `bead_count_warn`, single
+  `standard_dilutions` field; drops the per-row antigen / kit-control
+  iteration and the kit-control range parsers.
+- `UVIRA_TODO.md` — Sections 2 and 3 marked done (curve-plot rendering
+  deferred to Section 5).
+
+**Smoke tests run:**
+- `parse_xponent_csv()` on pilot CSV: `metadata['analytes']` carries
+  all 200 names in order.
+- `compute_in_range_table()` with synthetic 4PL fits derived from the
+  standard MFI bounds: 16,800 rows = 84 specimens × 200 antigens;
+  status counts split 14,723 IN_RANGE / 2,077 OUT_OF_RANGE; 252 rows
+  flagged `excluded=True` (84 × 3 erroneous beads).
+- `compute_pct_in_range_per_antigen()`: 200 rows; the three excluded
+  bead regions show 0–3.6% in-range (correctly the worst), good
+  antigens like `RES_Ade3` show 97.6%.
+
+**Known follow-ups (NOT done in Session 3):**
+- `report.py` not rewritten yet — still imports kit-control constants
+  and tries to render an 8-antigen layout. Pipeline now swallows the
+  resulting error and writes a placeholder. Section 5 owns the rewrite.
+- `qc_kit_controls.py`, `qc_nc.py`, `qc_replicates.py` still called
+  from `pipeline.py` — they return empty/safe results on Uvira data
+  but should be deleted in Section 5.
+- Bead-count Red/Yellow/Green matrix and problem list (Section 4) not
+  yet built. The thresholds (`bead_count_min`, `bead_count_warn`) are
+  in config and editable from Settings; the matrix-building helper
+  is the Section-4 task.
+
+**Next session:** Section 4 (bead-count matrix + problem list) and the
+start of Section 5 (200-antigen report layout).
 
 ### Session 2 — 2026-05-13
 

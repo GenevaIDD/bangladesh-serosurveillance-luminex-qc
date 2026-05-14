@@ -3,311 +3,261 @@
 <head>
 <meta charset="UTF-8">
 <title>Uvira Luminex QC Report — {{ metadata.plate_id }}</title>
-<script>{{ plotly_js | safe }}</script>
+<!-- Plotly.js is embedded inline on the first chart below (no CDN; works offline). -->
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         max-width: 1200px; margin: 0 auto; padding: 20px; color: #333; }
-  h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 8px; }
-  h2 { color: #2c3e50; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
-  th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
-  th { background-color: #f5f6fa; font-weight: 600; }
-  tr:nth-child(even) { background-color: #fafbfc; }
-  .flag { background-color: #ffe0e0; }
-  .ok { background-color: #e0ffe0; }
-  .meta-table td:first-child { font-weight: 600; width: 200px; }
-  .summary-box { display: flex; gap: 20px; margin: 10px 0; }
-  .summary-card { background: #f5f6fa; border-radius: 8px; padding: 12px 20px; flex: 1; text-align: center; }
-  .summary-card .number { font-size: 24px; font-weight: 700; color: #2c3e50; }
-  .summary-card .label { font-size: 12px; color: #666; }
-  .plot-container { margin: 15px 0; }
-  .section { margin-bottom: 30px; }
-  .warning { color: #e74c3c; font-weight: 600; }
-  .specimen-table { font-size: 11px; overflow-x: auto; display: block; }
-  .specimen-table td, .specimen-table th { padding: 4px 6px; white-space: nowrap; }
+  :root { --green: #27ae60; --red: #e74c3c; --yellow: #f1c40f; --grey: #95a5a6; --blue: #3498db; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 1300px; margin: 0 auto; padding: 20px 30px; color: #2c3e50;
+    background: #fafbfc;
+  }
+  h1 { color: #2c3e50; border-bottom: 3px solid var(--blue); padding-bottom: 10px; margin-bottom: 6px; }
+  h2 { color: #2c3e50; margin-top: 36px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  h3 { color: #34495e; margin-top: 24px; }
+  .subtitle { color: #7f8c8d; font-size: 14px; margin-top: 0; }
+  .card {
+    background: #fff; border-radius: 8px; padding: 18px 22px; margin: 14px 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .banner {
+    background: #f0f4ff; border-left: 4px solid var(--blue); padding: 10px 16px;
+    border-radius: 4px; font-size: 14px; line-height: 1.55; margin: 12px 0;
+  }
+  .banner.warn { background: #fff7e0; border-left-color: var(--yellow); }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 24px; font-size: 13.5px; }
+  .meta-grid b { color: #34495e; }
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 12px; font-size: 12px;
+    font-weight: 600; margin-right: 6px;
+  }
+  .badge-red { background: var(--red); color: #fff; }
+  .badge-yellow { background: var(--yellow); color: #2c3e50; }
+  .badge-green { background: var(--green); color: #fff; }
+  .badge-grey { background: var(--grey); color: #fff; }
+  .badge-ok { background: var(--green); color: #fff; }
+  .badge-warn { background: var(--red); color: #fff; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; background: #fff; }
+  th, td { border: 1px solid #e1e4e8; padding: 6px 10px; text-align: left; }
+  th { background: #f5f6fa; font-weight: 600; position: sticky; top: 0; }
+  tr.muted td { color: #95a5a6; background: #fafbfc; font-style: italic; }
+  tr.tier-red td.tier-cell { background: var(--red); color: #fff; font-weight: 600; }
+  tr.tier-yellow td.tier-cell { background: var(--yellow); color: #2c3e50; font-weight: 600; }
+  .status-green { color: var(--green); font-weight: 600; }
+  .status-red { color: var(--red); font-weight: 600; }
+  .scroll-tbl { max-height: 420px; overflow-y: auto; border: 1px solid #e1e4e8; border-radius: 4px; }
+
+  .btn {
+    display: inline-block; padding: 8px 18px; background: var(--blue); color: #fff;
+    text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 600;
+    margin-right: 8px;
+  }
+  .btn:hover { background: #2980b9; }
+  .btn.secondary { background: #6c757d; }
+  .btn.secondary:hover { background: #565e64; }
+
+  .footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid #ddd; color: #95a5a6; font-size: 12px; }
+  details { margin: 10px 0; }
+  details summary { cursor: pointer; font-weight: 600; color: #34495e; padding: 6px 0; }
 </style>
 </head>
 <body>
 
-<div style="display: flex; justify-content: space-between; align-items: center;">
-  <h1 style="margin-bottom: 0;">Uvira Luminex QC Report</h1>
-  <a href="/" style="display: inline-block; padding: 8px 16px; background: #3498db; color: #fff;
-     border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600;">
-    &larr; Back to Menu
-  </a>
+<div style="display:flex; justify-content:space-between; align-items:center;">
+  <h1 style="margin:0; border:none;">Uvira Luminex QC Report</h1>
+  <a class="btn secondary" href="/">&larr; Back to Menu</a>
 </div>
+<p class="subtitle"><b>Plate:</b> {{ metadata.plate_id }}
+{% if metadata.run_date %} &nbsp;·&nbsp; <b>Run:</b> {{ metadata.run_date }}{% endif %}
+{% if metadata.instrument_program %} &nbsp;·&nbsp; <b>Instrument:</b> {{ metadata.instrument_program }}{% endif %}
+</p>
 
-<!-- Section 1: Plate Overview -->
-<div class="section">
-<h2>1. Plate Overview</h2>
-<table class="meta-table">
-  <tr><td>Plate ID</td><td>{{ metadata.plate_id }}</td></tr>
-  <tr><td>Batch</td><td>{{ metadata.batch }}</td></tr>
-  <tr><td>Run Date</td><td>{{ metadata.run_date }}</td></tr>
-  <tr><td>Operator</td><td>{{ metadata.operator }}</td></tr>
-  <tr><td>Protocol</td><td>{{ metadata.protocol }}</td></tr>
-  <tr><td>Instrument</td><td>{{ metadata.instrument_sn }}</td></tr>
-  <tr><td>File</td><td>{{ metadata.file }}</td></tr>
-</table>
-
-<div class="summary-box">
-  <div class="summary-card">
-    <div class="number">{{ summary.total_wells }}</div>
-    <div class="label">Total Wells</div>
+<!-- =================== 1. Plate Overview =================== -->
+<h2>Plate Overview</h2>
+<div class="card">
+  <div class="meta-grid">
+    <div><b>Batch:</b> {{ metadata.batch or "—" }}</div>
+    <div><b>Panel:</b> {{ metadata.panel_name or "—" }}</div>
+    <div><b>Instrument SN:</b> {{ metadata.instrument_sn or "—" }}</div>
+    <div><b>Operator:</b> {{ metadata.operator or "—" }}</div>
+    <div><b>Antigens analysed:</b> {{ n_antigens }}</div>
+    <div><b>Specimens:</b> {{ n_specimens }}</div>
+    {% if layout_info.box_ids %}<div><b>Box(es) loaded:</b> {{ layout_info.box_ids | join(", ") }}</div>{% endif %}
+    {% if layout_info.n_with_patient_id is defined %}
+      <div><b>Patient IDs resolved:</b> {{ layout_info.n_with_patient_id }} / {{ layout_info.n_specimens }}</div>
+    {% endif %}
   </div>
-  {% for wtype, count in summary.well_counts.items() %}
-  <div class="summary-card">
-    <div class="number">{{ count }}</div>
-    <div class="label">{{ wtype | upper }} Wells</div>
+</div>
+
+{% if excluded_analytes %}
+<div class="banner warn">
+  <b>⚠ Excluded analytes ({{ excluded_analytes | length }}):</b>
+  {{ excluded_analytes | join(", ") }}.
+  These bead regions were added in error during plate setup and are
+  soft-flagged: they remain in every table and plot but are visually
+  muted and excluded from laboratory decisions.
+</div>
+{% endif %}
+
+<!-- =================== 2. Bead-Count Matrix =================== -->
+<h2>Bead-Count Matrix</h2>
+<div class="card">
+  <p style="margin-top:0;">
+    Thresholds:
+    <span class="badge badge-red">Red &lt; {{ bead_thresholds.red_below }}</span>
+    <span class="badge badge-yellow">Yellow {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }}</span>
+    <span class="badge badge-green">Green ≥ {{ bead_thresholds.yellow_below }}</span>
+    &nbsp;·&nbsp; Problem cells:
+    <b style="color:var(--red);">{{ bead_problem_counts.red }} red</b>,
+    <b style="color:#b58900;">{{ bead_problem_counts.yellow }} yellow</b>.
+  </p>
+  {{ bead_heatmap_html | safe }}
+</div>
+
+{% if bead_problems %}
+<details open>
+  <summary>Bead-count problem list ({{ bead_problems | length }} rows)</summary>
+  <div class="scroll-tbl">
+    <table>
+      <thead>
+        <tr><th>Tier</th><th>Well</th><th>Sample</th><th>Analyte</th><th>Count</th></tr>
+      </thead>
+      <tbody>
+        {% for p in bead_problems %}
+        <tr class="tier-{{ p.tier }}">
+          <td class="tier-cell">{{ p.tier | upper }}</td>
+          <td>{{ p.well }}</td>
+          <td>{{ p.sample_name }}</td>
+          <td>{{ p.analyte }}</td>
+          <td>{{ p.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
-  {% endfor %}
-</div>
-</div>
-
-<!-- Section 2: Bead Counts -->
-<div class="section">
-<h2>2. Bead Counts</h2>
-{% if bead_qc.n_flagged > 0 %}
-<p class="warning">{{ bead_qc.n_flagged }} well-analyte pairs flagged (bead count &lt; 30)</p>
-<table>
-  <tr><th>Well</th><th>Sample</th><th>Analyte</th><th>Count</th></tr>
-  {% for row in bead_qc.flagged.to_dict('records') %}
-  <tr class="flag"><td>{{ row.well }}</td><td>{{ row.sample_name }}</td><td>{{ row.analyte }}</td><td>{{ row.count }}</td></tr>
-  {% endfor %}
-</table>
-{% else %}
-<p>All bead counts &ge; 30. No flags.</p>
-{% endif %}
-
-{% if 'bead_heatmap' in figures %}
-<div class="plot-container" id="bead_heatmap"></div>
-{% endif %}
-</div>
-
-<!-- Section 3: PC Standard Curves -->
-<div class="section">
-<h2>3. PC Standard Curves (4PL)</h2>
-
-<table>
-  <tr>{% if multi_pool %}<th>Pool</th>{% endif %}<th>Analyte</th><th>Fit OK</th><th>a (min)</th><th>b (slope)</th><th>c (IC50)</th><th>d (max)</th><th>Reportable Range</th><th>Issues</th></tr>
-  {% for row in fits %}
-  <tr class="{{ 'ok' if row.fit_ok else 'flag' }}">
-    {% if multi_pool %}<td>{{ row.pool }}</td>{% endif %}
-    <td>{{ row.analyte }}</td>
-    <td>{{ 'Yes' if row.fit_ok else 'FAILED' }}</td>
-    <td>{{ row.a }}</td><td>{{ row.b }}</td><td>{{ row.c }}</td><td>{{ row.d }}</td>
-    <td>{% if row.reportable_range %}1:{{ row.reportable_range.uloq_dilution|int }} – 1:{{ row.reportable_range.lloq_dilution|int }}{% else %}—{% endif %}</td>
-    <td>{% if row.dropped_point %}Dropped outlier at 1:{{ row.dropped_point.dilution|int }} (MFI={{ row.dropped_point.mfi|int }}){% endif %}{% if row.error %}{% if row.dropped_point %}; {% endif %}{{ row.error }}{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
-
-{% if multi_pool %}
-  {% for slug in pool_slugs %}
-  {% set fig_key = 'standard_curves_' + slug %}
-  {% if fig_key in figures %}
-  <div class="plot-container" id="{{ fig_key }}"></div>
-  {% endif %}
-  {% endfor %}
-{% else %}
-  {% if 'standard_curves' in figures %}
-  <div class="plot-container" id="standard_curves"></div>
-  {% endif %}
-{% endif %}
-
-<details>
-<summary>Standard Recovery (Obs/Exp) — backcalculated vs expected dilutions (click to expand)</summary>
-<p style="font-size:12px; color:#666;">For each standard point, the measured MFI is backcalculated through the 4PL curve to get the "observed" dilution. Recovery = (Observed / Expected) × 100%. Values outside {{ recovery_range }} are flagged. The reportable range (LLOQ–ULOQ) spans standard points with acceptable recovery.</p>
-{% for row in fits %}
-{% if row.obs_exp %}
-{% if multi_pool %}<h4>{{ row.pool }} — {{ row.analyte }}</h4>{% else %}<h4>{{ row.analyte }}</h4>{% endif %}
-<table>
-  <tr><th>Expected Dilution</th><th>MFI</th><th>Backcalculated Dilution</th><th>Recovery %</th><th>Status</th></tr>
-  {% for pt in row.obs_exp %}
-  <tr class="{{ 'ok' if pt.in_range else 'flag' }}">
-    <td>1:{{ pt.dilution|int }}</td>
-    <td>{{ pt.mfi|round(0)|int }}</td>
-    <td>{% if pt.obs_dilution %}1:{{ pt.obs_dilution|round(0)|int }}{% else %}—{% endif %}</td>
-    <td>{% if pt.recovery_pct %}{{ pt.recovery_pct }}%{% else %}—{% endif %}</td>
-    <td>{{ '✓' if pt.in_range else '✗ Out of range' }}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% endif %}
-{% endfor %}
-</details>
-</div>
-
-<!-- Section 4: PC Replicate CV -->
-{% if replicate_qc.has_replicates %}
-<div class="section">
-<h2>4. PC Replicate Variability</h2>
-{% if replicate_qc.n_flagged > 0 %}
-<p class="warning">{{ replicate_qc.n_flagged }} replicate pairs with CV &gt; 25%</p>
-{% else %}
-<p>All replicate CVs &le; 25%.</p>
-{% endif %}
-
-<p style="font-size:12px; color:#666;">Panel plot shows <strong>mean MFI across PC replicates</strong> at each dilution, tracked across plates. Current plate highlighted in red.</p>
-{% if multi_pool %}
-  {% for slug in pool_slugs %}
-  {% set fig_key = 'pc_mfi_history_' + slug %}
-  {% if fig_key in figures %}
-  <div class="plot-container" id="{{ fig_key }}"></div>
-  {% endif %}
-  {% endfor %}
-{% else %}
-  {% if 'pc_mfi_history' in figures %}
-  <div class="plot-container" id="pc_mfi_history"></div>
-  {% endif %}
-{% endif %}
-
-<details>
-<summary>Replicate CV details — individual replicate MFI values and CV (click to expand)</summary>
-
-{% if 'replicate_cv' in figures %}
-<div class="plot-container" id="replicate_cv"></div>
-{% endif %}
-
-<table>
-  <tr><th>Analyte</th><th>Dilution</th><th>Rep 1</th><th>Rep 2</th><th>Mean</th><th>CV</th></tr>
-  {% for row in replicate_qc.replicate_cv.to_dict('records') %}
-  <tr class="{{ 'flag' if row.flag else '' }}">
-    <td>{{ row.analyte }}</td><td>1:{{ row.dilution | int }}</td>
-    <td>{{ row.rep1 | round(0) | int }}</td><td>{{ row.rep2 | round(0) | int }}</td>
-    <td>{{ row.mean | round(0) | int }}</td><td>{{ "%.1f%%" | format(row.cv * 100) }}</td>
-  </tr>
-  {% endfor %}
-</table>
-</details>
-</div>
-{% endif %}
-
-<!-- Section 5: Negative Control Levels -->
-<div class="section">
-<h2>5. Negative Control Levels</h2>
-{% if nc_levels %}
-
-<p style="font-size:12px; color:#666;">Panel plot shows <strong>mean NC MFI</strong> per analyte, tracked across plates. Current plate highlighted in red.</p>
-{% if 'nc_history' in figures %}
-<div class="plot-container" id="nc_history"></div>
-{% endif %}
-
-<details>
-<summary>NC details for this plate — individual well MFI values (click to expand)</summary>
-
-{% if 'nc_levels' in figures %}
-<div class="plot-container" id="nc_levels"></div>
-{% endif %}
-
-<table>
-  <tr><th>Well</th><th>Analyte</th><th>MFI</th></tr>
-  {% for row in nc_levels %}
-  <tr><td>{{ row.well }}</td><td>{{ row.analyte }}</td><td>{{ row.mfi | round(0) | int }}</td></tr>
-  {% endfor %}
-</table>
 </details>
 {% else %}
-<p>No NC wells on this plate.</p>
+<div class="banner">No bead-count cells fell below the warn threshold. ✓</div>
 {% endif %}
+
+<!-- =================== 3. Standard-Curve Summary =================== -->
+<h2>Standard-Curve Summary</h2>
+<div class="card">
+  <p style="margin-top:0;">
+    One row per antigen. <b>%-in-range</b> is the fraction of specimens
+    whose MFI falls between the antigen's LLOQ and ULOQ on the 4PL.
+  </p>
+  <div class="scroll-tbl">
+    <table>
+      <thead>
+        <tr>
+          <th>Analyte</th><th>Fit OK</th><th>n pts</th>
+          <th>a (min asym)</th><th>b (slope)</th>
+          <th>c (IC50)</th><th>d (max asym)</th>
+          <th>LLOQ dil.</th><th>ULOQ dil.</th>
+          <th>% in range</th>
+          <th>QC warnings</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in curve_summary %}
+        <tr class="{% if row.excluded %}muted{% endif %}">
+          <td>{{ row.analyte }}{% if row.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+          <td>{% if row.fit_ok %}<span class="badge badge-ok">OK</span>{% else %}<span class="badge badge-warn">FAIL</span>{% endif %}</td>
+          <td>{{ row.n_points }}</td>
+          <td>{{ row.a }}</td><td>{{ row.b }}</td>
+          <td>{{ row.c_ic50 }}</td><td>{{ row.d }}</td>
+          <td>{{ row.lloq_dilution }}</td><td>{{ row.uloq_dilution }}</td>
+          <td>{{ row.pct_in_range }}</td>
+          <td style="font-size:12px; color:#7f8c8d;">{{ row.qc_warnings }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-<!-- Section 6: Kit Control Beads -->
-<div class="section">
-<h2>6. Kit Control Beads</h2>
+<!-- =================== 4. All Curves Overview =================== -->
+<h2>All Curves Overview</h2>
+<div class="card">
+  <p style="margin-top:0; color:#7f8c8d; font-size:13px;">
+    Every 4PL fit at a glance. Title colour:
+    <span style="color:#27ae60; font-weight:600;">green = fit_ok</span> ·
+    <span style="color:#e74c3c; font-weight:600;">red = fit failed</span> ·
+    <span style="color:#95a5a6; font-weight:600;">grey = excluded</span>.
+    For an interactive plot of any single antigen, use the picker below.
+  </p>
+  {{ curve_grid_html | safe }}
+</div>
 
-<table style="margin-bottom:12px; font-size:0.9em;">
-  <thead><tr><th>Control</th><th>Purpose</th><th>Expected Range</th></tr></thead>
-  <tbody>
-  {% for ref in kit_control_refs %}
-  <tr><td><strong>{{ ref.name }}</strong></td><td>{{ ref.purpose }}</td><td>{{ ref.criterion }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<!-- =================== 5. Standard-Curve Picker =================== -->
+<h2>Standard-Curve Picker</h2>
+<div class="card">
+  <p style="margin-top:0; color:#7f8c8d; font-size:13px;">
+    Use the dropdown above the plot to switch between antigens.
+  </p>
+  {{ curve_picker_html | safe }}
+</div>
 
-{% if kit_controls.n_flagged > 0 %}
-<p class="warning">{{ kit_controls.n_flagged }} wells flagged by kit controls: {{ kit_controls.flagged_wells_labeled | join(', ') }}</p>
+<!-- =================== 6. IN/OUT-of-Range Matrix =================== -->
+<h2>IN/OUT-of-Range Matrix</h2>
+<div class="card">
+  <p style="margin-top:0;">
+    Each specimen × antigen cell is classified as
+    <span class="badge badge-green">IN_RANGE</span>
+    <span class="badge badge-red">OUT_OF_RANGE</span>
+    <span class="badge badge-grey">NO_FIT</span>.
+    Below-LLOQ and above-ULOQ both collapse to OUT_OF_RANGE (strictly binary).
+  </p>
+  {{ range_heatmap_html | safe }}
+</div>
+
+{% if range_problems %}
+<details>
+  <summary>OUT_OF_RANGE detail list ({{ range_problems | length }} rows)</summary>
+  <div class="scroll-tbl">
+    <table>
+      <thead>
+        <tr><th>Well</th><th>Sample</th><th>Analyte</th><th>MFI</th><th>MFI LLOQ</th><th>MFI ULOQ</th></tr>
+      </thead>
+      <tbody>
+        {% for p in range_problems %}
+        <tr class="{% if p.excluded %}muted{% endif %}">
+          <td>{{ p.well }}</td>
+          <td>{{ p.sample_name }}</td>
+          <td>{{ p.analyte }}{% if p.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+          <td>{{ p.mfi }}</td>
+          <td>{{ p.mfi_lloq }}</td>
+          <td>{{ p.mfi_uloq }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
 {% else %}
-<p>All kit control beads within expected ranges.</p>
+<div class="banner">Every specimen × antigen cell is IN_RANGE or NO_FIT. ✓</div>
 {% endif %}
 
-{% if 'kit_controls' in figures %}
-<div class="plot-container" id="kit_controls"></div>
-{% endif %}
-</div>
-
-<!-- Section 7: Specimen Results -->
-{% if specimen_results %}
-<div class="section">
-<h2>7. Specimen Results</h2>
-<p>{{ specimen_results | length }} specimens. MFI and AU (Arbitrary Units; first standard dilution = 1000 AU; higher = more antibody) per antigen.</p>
-{% if extrapolation.n_extrapolated > 0 %}
-<p class="warning">{{ extrapolation.n_extrapolated }} specimen-analyte values fall outside the observed standard curve range (marked with *). These AU values are extrapolated and may be unreliable.
-{% for d in extrapolation.details %} {{ d.analyte }}: {{ d.count }}{% if not loop.last %},{% endif %}{% endfor %}</p>
-{% endif %}
-
-<button onclick="downloadSpecimenCSV()" style="margin-bottom:8px; padding:6px 14px; background:#3498db; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:0.9em;">&#8681; Download CSV</button>
-<div class="specimen-table">
-<table id="specimen-table">
-  <tr>
-    <th>Well</th><th>Sample</th>
-    {% for col in specimen_results[0].keys() if col not in ['well', 'sample_name'] %}
-    <th>{{ col }}</th>
-    {% endfor %}
-  </tr>
-  {% for row in specimen_results %}
-  <tr>
-    <td>{{ row.well }}</td><td>{{ row.sample_name }}</td>
-    {% for col in row.keys() if col not in ['well', 'sample_name'] %}
-    <td>{{ row[col] if row[col] is not none else '-' }}</td>
-    {% endfor %}
-  </tr>
-  {% endfor %}
-</table>
-</div>
-
-{% if 'specimen_mfi' in figures %}
-<div class="plot-container" id="specimen_mfi"></div>
-{% endif %}
-</div>
-{% endif %}
-
-<script>
-// Render all plotly figures
-const figures = {{ figures | tojson | safe }};
-for (const [id, figData] of Object.entries(figures)) {
-  const el = document.getElementById(id);
-  if (el && figData) {
-    Plotly.newPlot(el, figData.data, figData.layout, {responsive: true});
-  }
-}
-
-function downloadSpecimenCSV() {
-  const table = document.getElementById('specimen-table');
-  const rows = Array.from(table.querySelectorAll('tr'));
-  const csv = rows.map(row =>
-    Array.from(row.querySelectorAll('th, td'))
-      .map(cell => {
-        const val = cell.textContent.trim();
-        return val.includes(',') || val.includes('"') ? '"' + val.replace(/"/g, '""') + '"' : val;
-      })
-      .join(',')
-  ).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'specimen_results_{{ metadata.plate_id | default("export") }}.csv';
-  a.click();
-}
-</script>
-
-<hr>
-<div style="color:#999; font-size:11px; line-height: 1.6;">
-  <p>Generated by Uvira Luminex QC Tool v{{ version }}</p>
-  <p>Andrew Azman &middot;
-    <a href="mailto:andrew.azman@unige.ch" style="color: #3498db;">andrew.azman@unige.ch</a> &middot;
-    <a href="https://github.com/GenevaIDD/uvira-luminex-qc" style="color: #3498db;">GitHub</a>
+<!-- =================== 7. Downloads =================== -->
+<h2>Downloads</h2>
+<div class="card">
+  <a class="btn" href="/download/specimens/{{ specimen_csv }}">specimens_*.csv</a>
+  <a class="btn" href="/download/specimens/{{ in_range_csv }}">in_range_*.csv</a>
+  <a class="btn" href="/download/specimens/{{ pct_in_range_csv }}">pct_in_range_*.csv</a>
+  <p style="font-size:12px; color:#7f8c8d; margin-top:14px; margin-bottom:0;">
+    Specimen results include AU values for each antigen.
+    The in-range table has one row per (specimen well × antigen)
+    with strictly binary status. The pct-in-range summary has one
+    row per antigen.
   </p>
 </div>
+
+<div class="footer">
+  Generated by Uvira Luminex QC Tool v{{ version }} &middot;
+  <a href="/" style="color: var(--blue);">Menu</a> &middot;
+  <a href="/specification" style="color: var(--blue);">Specification</a>
+</div>
+
 </body>
 </html>

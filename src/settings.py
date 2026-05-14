@@ -1,5 +1,7 @@
 """Configuration loader/saver — merges defaults with user YAML overrides."""
 
+from __future__ import annotations
+
 import copy
 from pathlib import Path
 

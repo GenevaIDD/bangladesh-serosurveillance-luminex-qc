@@ -1,7 +1,7 @@
 [project]
-name = "mpox-luminex-qc"
-version = "0.8.0"
-description = "QC tool for 12-plex MPXV Luminex immunoassays"
+name = "uvira-luminex-qc"
+version = "0.9.0"
+description = "QC tool for 200-plex Uvira Luminex immunoassays on Intelliflex"
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.0",
@@ -11,6 +11,7 @@ dependencies = [
     "openpyxl>=3.1",
     "flask>=3.0",
     "pyyaml>=6.0",
+    "matplotlib>=3.8",
 ]
 
 [project.optional-dependencies]

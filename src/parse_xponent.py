@@ -6,6 +6,8 @@ handles both. The `Program` header field is captured so downstream code
 can branch on instrument type when needed.
 """
 
+from __future__ import annotations
+
 import csv
 import re
 from pathlib import Path
@@ -41,6 +43,10 @@ def parse_xponent_csv(path: str | Path) -> dict:
     counts_wide = _parse_data_block(rows, block_starts["Count"])
 
     analytes = [c for c in mfi_wide.columns if c not in ("well", "sample_name", "total_events")]
+    # Authoritative panel for this plate, in the order the instrument
+    # exported them. Pipeline code uses this rather than the cached
+    # config panel so the per-plate analyte list is always correct.
+    metadata["analytes"] = list(analytes)
 
     mfi_long = _wide_to_long(mfi_wide, analytes, "mfi")
     counts_long = _wide_to_long(counts_wide, analytes, "count")

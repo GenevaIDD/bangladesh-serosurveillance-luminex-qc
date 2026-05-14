@@ -7,20 +7,24 @@
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f8f9fa; }
   h1 { color: #333; }
   h2 { color: #555; margin-top: 30px; border-bottom: 2px solid #e55070; padding-bottom: 5px; }
+  h3 { color: #555; margin-top: 20px; }
   .nav { margin-bottom: 20px; }
   .nav a { color: #e55070; text-decoration: none; font-weight: 500; }
   .nav a:hover { text-decoration: underline; }
   .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
   label { display: block; font-weight: 500; margin: 10px 0 4px; color: #444; }
   label .hint { font-weight: normal; color: #999; font-size: 0.85em; }
-  input[type="text"], input[type="number"] { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+  input[type="text"], input[type="number"], textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+    font-size: 14px; box-sizing: border-box; font-family: inherit;
+  }
+  textarea { min-height: 110px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   input[type="number"] { width: 150px; }
   .row { display: flex; gap: 20px; flex-wrap: wrap; }
   .row .field { flex: 1; min-width: 150px; }
-  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-  th, td { padding: 6px 10px; border: 1px solid #ddd; text-align: left; }
-  th { background: #f0f0f0; font-size: 0.9em; }
-  td input { width: 100%; border: none; padding: 4px; font-size: 14px; }
+  .panel-summary { background: #f0f4ff; border-left: 4px solid #3a78c8; padding: 12px 16px; border-radius: 4px; font-size: 13px; color: #2c3e50; }
+  .panel-summary code { background: rgba(0,0,0,0.05); padding: 1px 4px; border-radius: 3px; }
+  .panel-list { max-height: 180px; overflow-y: auto; background: #fafbfc; border: 1px solid #e1e4e8; border-radius: 4px; padding: 8px 12px; margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: #555; line-height: 1.5; }
   .btn { display: inline-block; padding: 10px 20px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; text-decoration: none; margin-right: 10px; }
   .btn-primary { background: #e55070; color: white; }
   .btn-primary:hover { background: #d03060; }
@@ -32,8 +36,6 @@
   .flash { padding: 12px 16px; border-radius: 6px; margin-bottom: 15px; }
   .flash.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
   .flash.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-  .range-inputs { display: flex; gap: 8px; align-items: center; }
-  .range-inputs input { width: 100px; }
 </style>
 </head>
 <body>
@@ -70,41 +72,39 @@
   </div>
 </div>
 
-<!-- Panel: Antigens -->
+<!-- Panel -->
 <h2>Assay Panel</h2>
 <div class="card">
-  <h3>Antigens</h3>
-  <table>
-    <tr><th>#</th><th>Analyte Name</th><th>Bead Region</th></tr>
-    {% for ag in config.panel.antigens %}
-    <tr>
-      <td>{{ loop.index }}</td>
-      <td><input type="text" name="ag_name_{{ loop.index0 }}" value="{{ ag.name }}"></td>
-      <td><input type="number" name="ag_region_{{ loop.index0 }}" value="{{ ag.bead_region }}" style="width:80px"></td>
-    </tr>
-    {% endfor %}
-  </table>
+  <div class="panel-summary">
+    <strong>{{ config.panel.antigens | length }}</strong> antigens currently configured.
+    On every plate ingest the panel is re-derived from the CSV header
+    row of the <code>Median</code> data block, so this list is the
+    fallback / display-only default. To bulk-replace it, export the YAML,
+    edit the <code>panel.antigens</code> array, and re-import below.
+  </div>
+  <div class="panel-list">
+    {% for ag in config.panel.antigens -%}
+    {{ ag.name }}{% if not loop.last %}, {% endif %}
+    {%- endfor %}
+  </div>
 
-  <h3>Kit Controls</h3>
-  <table>
-    <tr><th>#</th><th>Control Name</th><th>Bead Region</th></tr>
-    {% for kc in config.panel.kit_controls %}
-    <tr>
-      <td>{{ loop.index }}</td>
-      <td><input type="text" name="kc_name_{{ loop.index0 }}" value="{{ kc.name }}"></td>
-      <td><input type="number" name="kc_region_{{ loop.index0 }}" value="{{ kc.bead_region }}" style="width:80px"></td>
-    </tr>
-    {% endfor %}
-  </table>
+  <h3>Excluded Analytes <span class="hint">(soft-flag — kept in data, muted in report)</span></h3>
+  <label>One analyte name per line.</label>
+  <textarea name="excluded_analytes">{{ config.panel.excluded_analytes | join('\n') }}</textarea>
+  <p style="font-size:0.85em; color:#888; margin-top:4px;">
+    These bead regions were identified as added in error and should not
+    influence laboratory decisions. They remain in tables and plots but
+    are visually muted and listed in a banner on the report.
+  </p>
 </div>
 
 <!-- Well Classification -->
 <h2>Well Classification</h2>
 <div class="card">
-  <label>Positive Control Patterns <span class="hint">(regex, comma-separated)</span></label>
+  <label>Positive Control (Standard) Patterns <span class="hint">(regex, comma-separated)</span></label>
   <input type="text" name="pc_patterns" value="{{ config.well_classification.pc_patterns | join(', ') }}">
 
-  <label>Negative Control Patterns <span class="hint">(regex, comma-separated)</span></label>
+  <label>Negative Control (Background) Patterns <span class="hint">(regex, comma-separated)</span></label>
   <input type="text" name="nc_patterns" value="{{ config.well_classification.nc_patterns | join(', ') }}">
 
   <p style="font-size:0.85em; color:#888;">Everything not matching PC or NC patterns is treated as a specimen.</p>
@@ -113,14 +113,13 @@
 <!-- Standard Curve -->
 <h2>Standard Curve</h2>
 <div class="card">
-  <label>Dilution Mode</label>
-  <select name="dilution_mode" style="padding:8px; border:1px solid #ddd; border-radius:4px;">
-    <option value="auto" {{ 'selected' if config.standard.dilutions == 'auto' }}>Auto (parse from sample names)</option>
-    <option value="manual" {{ 'selected' if config.standard.dilutions != 'auto' }}>Manual (specify below)</option>
-  </select>
-
-  <label>Manual Dilutions <span class="hint">(comma-separated, e.g. 100, 300, 900, 2700, 8100, 24300, 72900)</span></label>
-  <input type="text" name="manual_dilutions" value="{% if config.standard.dilutions != 'auto' %}{{ config.standard.dilutions | join(', ') }}{% endif %}">
+  <label>Standard Dilutions <span class="hint">(comma-separated, ordered Standard1 → Standard{N})</span></label>
+  <input type="text" name="standard_dilutions"
+         value="{% if config.standard.dilutions != 'auto' %}{{ config.standard.dilutions | join(', ') }}{% endif %}">
+  <p style="font-size:0.85em; color:#888; margin-top:4px;">
+    Default is the Uvira 10-point 4-fold series (62.5 → 16,384,000).
+    Standard1 maps to the first value, Standard2 to the second, etc.
+  </p>
 </div>
 
 <!-- Specimens -->
@@ -132,13 +131,27 @@
       <input type="number" name="specimen_default_dilution" value="{{ config.specimens.default_dilution }}" min="1">
     </div>
   </div>
-  <p style="font-size:0.85em; color:#888;">Per-well dilution overrides can be specified in the plate layout XLSX (add a "dilution" column).</p>
 </div>
 
 <!-- QC Thresholds -->
 <h2>QC Thresholds</h2>
 <div class="card">
-  <label>
+  <div class="row">
+    <div class="field">
+      <label>Bead Count — Red Below</label>
+      <input type="number" name="bead_count_min" value="{{ config.qc_thresholds.bead_count_min }}" min="1">
+    </div>
+    <div class="field">
+      <label>Bead Count — Yellow Up To <span class="hint">(green above)</span></label>
+      <input type="number" name="bead_count_warn" value="{{ config.qc_thresholds.get('bead_count_warn', 50) }}" min="1">
+    </div>
+    <div class="field">
+      <label>Recovery Tolerance <span class="hint">(e.g. 0.30 = &plusmn;30%)</span></label>
+      <input type="number" name="recovery_tolerance" value="{{ config.qc_thresholds.recovery_tolerance }}" step="0.01" min="0" max="1">
+    </div>
+  </div>
+
+  <label style="margin-top:20px;">
     <input type="checkbox" name="drop_outlier" value="true"
            {{ 'checked' if config.qc_thresholds.get('drop_outlier', true) }}>
     Drop single outlier from standard curve
@@ -148,52 +161,6 @@
     If dropping a single point produces a passing fit, use that fit and flag the dropped point.
     Requires at least 6 remaining points.
   </p>
-</div>
-<div class="card">
-  <div class="row">
-    <div class="field">
-      <label>Min Bead Count</label>
-      <input type="number" name="bead_count_min" value="{{ config.qc_thresholds.bead_count_min }}" min="1">
-    </div>
-    <div class="field">
-      <label>PC Replicate CV Threshold</label>
-      <input type="number" name="pc_cv_threshold" value="{{ config.qc_thresholds.pc_cv_threshold }}" step="0.01" min="0" max="1">
-    </div>
-    <div class="field">
-      <label>Recovery Tolerance <span class="hint">(e.g. 0.30 = &plusmn;30%)</span></label>
-      <input type="number" name="recovery_tolerance" value="{{ config.qc_thresholds.recovery_tolerance }}" step="0.01" min="0" max="1">
-    </div>
-  </div>
-
-  <h3>Kit Control Thresholds</h3>
-  <div class="row">
-    <div class="field">
-      <label>NC Bead MFI Max</label>
-      <input type="number" name="nc_bead_mfi_max" value="{{ config.qc_thresholds.nc_bead_mfi_max }}">
-    </div>
-    <div class="field">
-      <label>ScG MFI Min</label>
-      <input type="number" name="scg_mfi_min" value="{{ config.qc_thresholds.scg_mfi_min }}">
-    </div>
-  </div>
-  <div class="row">
-    <div class="field">
-      <label>FC MFI Range</label>
-      <div class="range-inputs">
-        <input type="number" name="fc_mfi_min" value="{{ config.qc_thresholds.fc_mfi_range[0] }}">
-        <span>to</span>
-        <input type="number" name="fc_mfi_max" value="{{ config.qc_thresholds.fc_mfi_range[1] }}">
-      </div>
-    </div>
-    <div class="field">
-      <label>IC MFI Range</label>
-      <div class="range-inputs">
-        <input type="number" name="ic_mfi_min" value="{{ config.qc_thresholds.ic_mfi_range[0] }}">
-        <span>to</span>
-        <input type="number" name="ic_mfi_max" value="{{ config.qc_thresholds.ic_mfi_range[1] }}">
-      </div>
-    </div>
-  </div>
 </div>
 
 <!-- Actions -->

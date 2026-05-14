@@ -2,13 +2,9 @@
 
 All configurable values have defaults here. User overrides are stored in
 ~/uvira-luminex-qc-results/config.yaml and loaded at runtime via settings.py.
-
-NOTE — Migration from the prior MPXV 12-plex codebase is in progress.
-The aliases at the bottom of this file (``MPXV_ANTIGENS``, ``MPXV_KIT_CONTROLS``)
-exist only so that downstream modules that still import them keep working
-until each is rewritten in Sections 3–5 of UVIRA_TODO.md. Remove the
-aliases when no callers remain.
 """
+
+from __future__ import annotations
 
 APP_VERSION = "0.9.0-uvira"
 
@@ -162,9 +158,3 @@ DEFAULTS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Deprecated aliases — to be removed once Sections 3–5 land.
-# ---------------------------------------------------------------------------
-
-MPXV_ANTIGENS = ANTIGENS
-MPXV_KIT_CONTROLS = KIT_CONTROLS

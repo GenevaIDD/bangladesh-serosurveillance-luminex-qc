@@ -1,20 +1,47 @@
-"""Generate self-contained HTML QC report."""
+"""HTML report generation for the Uvira 200-plex Luminex QC tool.
 
-import json
-import sys
+The report is a single self-contained HTML file (Plotly is loaded from a
+CDN) with these sections:
+
+1. Plate Overview banner — metadata, instrument, panel size, excluded
+   analytes, Box xlsx used (when provided).
+2. Bead-Count Matrix — antigens × samples heatmap with discrete
+   Red / Yellow / Green tiers, plus a problem list of every R/Y cell.
+3. Standard-Curve Summary — per-antigen table with %-in-range, R²,
+   fit-ok flag.
+4. Standard-Curve Picker — dropdown over all 200 antigens; swaps a
+   single 4PL plot at a time.
+5. IN/OUT-of-Range Matrix — antigens × specimens heatmap (binary
+   green/red, grey for NO_FIT) plus the OUT_OF_RANGE problem list.
+6. Downloads — links to per-plate CSV exports.
+
+Excluded analytes (e.g. ``FLU_B_HA_Maryland_1959``) are kept in every
+table but rendered visually muted (light grey) and listed in a banner.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")  # headless — never opens a window in the desktop app
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from jinja2 import Environment, FileSystemLoader
+import plotly.io as pio
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from .config import (
-    APP_VERSION, MPXV_ANTIGENS, MPXV_KIT_CONTROLS, RECOVERY_TOLERANCE,
-    NC_BEAD_MFI_MAX, SCG_MFI_MIN, FC_MFI_RANGE, IC_MFI_RANGE,
-)
+from .config import APP_VERSION, RECOVERY_TOLERANCE
+from .settings import get_excluded_analytes, get_qc_thresholds
+from .qc_standard_curve import four_pl
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 
 def generate_report(
@@ -22,792 +49,481 @@ def generate_report(
     data: pd.DataFrame,
     bead_qc: dict,
     fits: dict,
-    replicate_qc: dict,
-    nc_levels: pd.DataFrame,
-    kit_controls: dict,
     specimen_results: pd.DataFrame,
     summary: dict,
-    history_std: dict | pd.DataFrame | None = None,
-    history_nc: pd.DataFrame | None = None,
-    output_path: str | Path = "report.html",
+    in_range: pd.DataFrame,
+    pct_in_range: pd.DataFrame,
+    history_std: dict | pd.DataFrame | None,
+    history_nc: pd.DataFrame | None,
+    output_path: Path,
     plate_order: list | None = None,
     config: dict | None = None,
+    layout_info: dict | None = None,
+    # ---- Legacy keyword-args, kept so older callers don't break. ----
+    replicate_qc: dict | None = None,
+    nc_levels: pd.DataFrame | None = None,
+    kit_controls: dict | None = None,
 ) -> Path:
-    """Generate the full QC report as a self-contained HTML file."""
-    output_path = Path(output_path)
+    """Render the QC report HTML and write it to ``output_path``."""
+    _reset_plotlyjs_embed_flag()
+    config = config or {}
+    excluded = set(get_excluded_analytes(config))
+    qc_thresh = get_qc_thresholds(config) if config else {}
+    rec_tol = qc_thresh.get("recovery_tolerance", RECOVERY_TOLERANCE)
 
-    current_plate_id = metadata.get("plate_id", "")
+    pool_fits = _first_pool(fits)
+    plate_id = metadata.get("plate_id", "unknown")
 
-    # Resolve antigen names and QC thresholds from config (fall back to module defaults)
-    if config:
-        antigens = [a["name"] for a in config.get("panel", {}).get("antigens", [])] or MPXV_ANTIGENS
-        qc = config.get("qc_thresholds", {})
-        recovery_tolerance = qc.get("recovery_tolerance", RECOVERY_TOLERANCE)
-        nc_bead_mfi_max = qc.get("nc_bead_mfi_max", NC_BEAD_MFI_MAX)
-        scg_mfi_min = qc.get("scg_mfi_min", SCG_MFI_MIN)
-        fc_mfi_range = tuple(qc.get("fc_mfi_range", FC_MFI_RANGE))
-        ic_mfi_range = tuple(qc.get("ic_mfi_range", IC_MFI_RANGE))
-    else:
-        antigens = MPXV_ANTIGENS
-        recovery_tolerance = RECOVERY_TOLERANCE
-        nc_bead_mfi_max = NC_BEAD_MFI_MAX
-        scg_mfi_min = SCG_MFI_MIN
-        fc_mfi_range = FC_MFI_RANGE
-        ic_mfi_range = IC_MFI_RANGE
+    bead_heatmap_html = _make_bead_heatmap(bead_qc, excluded)
+    curve_grid_html = _make_curve_grid(pool_fits, excluded)
+    curve_picker_html = _make_curve_picker(pool_fits, excluded)
+    range_heatmap_html = _make_in_range_heatmap(in_range, excluded)
 
-    # Build all the plotly figures
-    # fits is now dict[pool -> dict[analyte -> fit_result]]
-    pools = list(fits.keys())
-    multi_pool = len(pools) > 1
+    curve_summary = _build_curve_summary(pool_fits, pct_in_range, excluded, rec_tol)
+    bead_problems = _format_problem_list(bead_qc.get("problems", pd.DataFrame()))
+    range_problems = _format_range_problems(in_range, excluded)
 
-    figures = {}
-    figures["bead_heatmap"] = _make_bead_heatmap(bead_qc["by_well"])
+    layout_info = layout_info or _derive_layout_info(data)
 
-    # Standard curve plots — one per pool (use slug for valid HTML IDs)
-    pool_slugs = [p.replace(" ", "_") for p in pools]
-    for pool_name, slug in zip(pools, pool_slugs):
-        pool_fits = fits[pool_name]
-        pool_history = history_std.get(pool_name) if isinstance(history_std, dict) else history_std
-        suffix = f" — {pool_name}"  # always show pool name in title
-        key = f"standard_curves_{slug}" if multi_pool else "standard_curves"
-        figures[key] = _make_standard_curve_plots(
-            pool_fits, specimen_results, pool_history, title_suffix=suffix, antigens=antigens
-        )
-
-    if replicate_qc["has_replicates"]:
-        figures["replicate_cv"] = _make_replicate_plot(replicate_qc["replicate_cv"])
-
-    # PC MFI history — one per pool
-    for pool_name, slug in zip(pools, pool_slugs):
-        pool_history = history_std.get(pool_name) if isinstance(history_std, dict) else history_std
-        suffix = f" — {pool_name}"  # always show pool name in title
-        key = f"pc_mfi_history_{slug}" if multi_pool else "pc_mfi_history"
-        figures[key] = _make_pc_mfi_history(pool_history, current_plate_id, title_suffix=suffix,
-                                             plate_order=plate_order, antigens=antigens)
-
-    figures["nc_levels"] = _make_nc_plot(nc_levels, history_nc)
-    figures["nc_history"] = _make_nc_history(history_nc, current_plate_id, plate_order=plate_order,
-                                              antigens=antigens)
-    figures["kit_controls"] = _make_kit_control_plots(kit_controls)
-    if not specimen_results.empty:
-        figures["specimen_mfi"] = _make_specimen_distribution(specimen_results, antigens=antigens)
-
-    # Convert figures to JSON for embedding
-    figure_json = {}
-    for key, fig in figures.items():
-        if fig is not None:
-            figure_json[key] = json.loads(plotly.io.to_json(fig))
-
-    # Render template (PyInstaller-aware path resolution)
-    if getattr(sys, "frozen", False):
-        template_dir = Path(sys._MEIPASS) / "templates"
-    else:
-        template_dir = Path(__file__).parent.parent / "templates"
-    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)
+    base_dir = Path(__file__).parent.parent
+    env = Environment(
+        loader=FileSystemLoader(str(base_dir / "templates")),
+        autoescape=select_autoescape(["html"]),
+    )
     template = env.get_template("report.html")
-
-    recovery_lo = int((1.0 - recovery_tolerance) * 100)
-    recovery_hi = int((1.0 + recovery_tolerance) * 100)
 
     html = template.render(
         metadata=metadata,
-        summary=summary,
-        bead_qc=bead_qc,
-        fits=_fits_to_table(fits, multi_pool=multi_pool, antigens=antigens),
-        pools=pools,
-        pool_slugs=pool_slugs,
-        multi_pool=multi_pool,
-        replicate_qc=replicate_qc,
-        nc_levels=nc_levels.to_dict("records") if not nc_levels.empty else [],
-        kit_controls=_kit_controls_to_tables(kit_controls),
-        kit_control_refs=_kit_control_reference_table(
-            nc_bead_mfi_max=nc_bead_mfi_max,
-            scg_mfi_min=scg_mfi_min,
-            fc_mfi_range=fc_mfi_range,
-            ic_mfi_range=ic_mfi_range,
-        ),
-        specimen_results=_specimen_to_table(specimen_results, pools=pools if multi_pool else None,
-                                            antigens=antigens),
-        extrapolation=_extrapolation_summary(specimen_results, antigens=antigens),
-        figures=figure_json,
-        plotly_js=plotly.offline.get_plotlyjs(),
         version=APP_VERSION,
-        recovery_range=f"{recovery_lo}–{recovery_hi}%",
+        summary=summary,
+        excluded_analytes=sorted(excluded),
+        layout_info=layout_info,
+        bead_thresholds={
+            "red_below": bead_qc.get("red_threshold"),
+            "yellow_below": bead_qc.get("yellow_threshold"),
+        },
+        bead_heatmap_html=bead_heatmap_html,
+        curve_grid_html=curve_grid_html,
+        bead_problems=bead_problems,
+        bead_problem_counts=_tier_counts(bead_qc.get("problems", pd.DataFrame())),
+        curve_summary=curve_summary,
+        curve_picker_html=curve_picker_html,
+        range_heatmap_html=range_heatmap_html,
+        range_problems=range_problems,
+        n_specimens=int(data[data["well_type"] == "specimen"]["well"].nunique()) if not data.empty else 0,
+        n_antigens=len(pool_fits) if pool_fits else 0,
+        plate_id=plate_id,
+        specimen_csv=f"specimens_{plate_id}.csv",
+        in_range_csv=f"in_range_{plate_id}.csv",
+        pct_in_range_csv=f"pct_in_range_{plate_id}.csv",
     )
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
     return output_path
 
 
-def _make_bead_heatmap(by_well: pd.DataFrame) -> go.Figure:
-    """Plate layout plot of median bead counts with marker shapes by well type."""
-    by_well = by_well.copy()
-    by_well["row"] = by_well["well"].str[0]
-    by_well["col"] = by_well["well"].str[1:].astype(int)
-    # Map row letters to numeric for plotting (A=0, B=1, ...)
-    row_labels = list("ABCDEFGH")
-    by_well["row_num"] = by_well["row"].map({r: i for i, r in enumerate(row_labels)})
-
-    # Well type styling
-    type_style = {
-        "pc":       {"symbol": "circle",         "name": "PC (Standard)"},
-        "nc":       {"symbol": "x",              "name": "NC (Negative)"},
-        "specimen": {"symbol": "square",         "name": "Specimen"},
-    }
-
-    # Assign discrete colors: red < 30, yellow 30–50, green > 50
-    def _bead_color(count):
-        if count < 30:
-            return "#e74c3c"   # red
-        elif count <= 50:
-            return "#f39c12"   # yellow/orange
-        else:
-            return "#27ae60"   # green
-
-    by_well["marker_color"] = by_well["median_count"].apply(_bead_color)
-
-    fig = go.Figure()
-
-    for wtype, style in type_style.items():
-        subset = by_well[by_well["well_type"] == wtype]
-        if subset.empty:
-            continue
-        fig.add_trace(go.Scatter(
-            x=subset["col"],
-            y=subset["row_num"],
-            mode="markers+text",
-            marker=dict(
-                symbol=style["symbol"],
-                size=22,
-                color=subset["marker_color"].tolist(),
-                line=dict(width=1, color="grey"),
-            ),
-            text=subset["median_count"].round(0).astype(int).astype(str),
-            textposition="middle center",
-            textfont=dict(size=8),
-            name=style["name"],
-            hovertemplate=(
-                "Well %{customdata[0]} — %{customdata[2]}"
-                "<br>%{customdata[1]:.0f} beads"
-                "<br>Type: " + style["name"] + "<extra></extra>"
-            ),
-            customdata=list(zip(subset["well"], subset["median_count"], subset["sample_name"])),
-        ))
-
-    # Add invisible traces for the color legend
-    for label, color in [("< 30 beads", "#e74c3c"), ("30–50 beads", "#f39c12"), ("> 50 beads", "#27ae60")]:
-        fig.add_trace(go.Scatter(
-            x=[None], y=[None], mode="markers",
-            marker=dict(size=10, color=color),
-            name=label, showlegend=True,
-        ))
-
-    fig.update_layout(
-        title="Median Bead Count by Well",
-        xaxis=dict(
-            title="Column", tickmode="array",
-            tickvals=list(range(1, 13)), ticktext=[str(i) for i in range(1, 13)],
-            range=[0.5, 12.5],
-        ),
-        yaxis=dict(
-            title="Row", tickmode="array",
-            tickvals=list(range(8)), ticktext=row_labels,
-            autorange="reversed", range=[-0.5, 7.5],
-        ),
-        height=400, margin=dict(t=40, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
-    return fig
+# ---------------------------------------------------------------------------
+# Figure builders
+# ---------------------------------------------------------------------------
 
 
-def _make_standard_curve_plots(
-    fits: dict, specimens: pd.DataFrame, history: pd.DataFrame | None,
-    title_suffix: str = "",
-    antigens: list | None = None,
-) -> go.Figure:
-    """Standard curve plots for all antigens in a 2x4 grid.
+_plotlyjs_embedded = False
 
-    Args:
-        fits: dict[analyte -> fit_result] for ONE pool
-        title_suffix: e.g. ' — ITM PC2' for multi-pool reports
-        antigens: ordered list of antigen names from config (falls back to MPXV_ANTIGENS)
+
+def _plotly_html(fig: go.Figure, div_id: str, height: int = 500) -> str:
+    """Render a Plotly figure to an HTML <div>.
+
+    The first call per report embeds the matching plotly.js inline so the
+    report is fully self-contained (no internet required, no version
+    skew between the JSON we emit and the runtime library). Subsequent
+    calls reference the already-loaded library.
     """
-    _antigens = antigens or MPXV_ANTIGENS
-    fig = make_subplots(rows=2, cols=4, subplot_titles=_antigens,
-                        horizontal_spacing=0.06, vertical_spacing=0.12)
+    global _plotlyjs_embedded
+    include = True if not _plotlyjs_embedded else False
+    _plotlyjs_embedded = True
+    return pio.to_html(
+        fig,
+        include_plotlyjs=include,
+        full_html=False,
+        default_height=f"{height}px",
+        div_id=div_id,
+        config={"displaylogo": False, "responsive": True},
+    )
 
-    for i, analyte in enumerate(_antigens):
-        row = i // 4 + 1
-        col = i % 4 + 1
-        fit = fits.get(analyte, {})
 
-        # Historical curves (grey)
-        if history is not None and not history.empty:
-            hist_analyte = history[history["analyte"] == analyte]
-            for pid in hist_analyte["plate_id"].unique():
-                hdata = hist_analyte[hist_analyte["plate_id"] == pid].sort_values("dilution")
-                fig.add_trace(go.Scatter(
-                    x=hdata["dilution"], y=hdata["mfi"],
-                    mode="lines", line=dict(color="lightgrey", width=1),
-                    showlegend=False, hoverinfo="skip",
-                ), row=row, col=col)
+def _reset_plotlyjs_embed_flag() -> None:
+    """Reset the per-report inline-embed flag. Called once at the top of
+    ``generate_report`` so successive calls each get a self-contained file."""
+    global _plotlyjs_embedded
+    _plotlyjs_embedded = False
 
-        # Current plate observed points — colored by recovery status
-        std_data = fit.get("std_data", pd.DataFrame())
-        mean_data = fit.get("mean_data", pd.DataFrame())
-        obs_exp = fit.get("obs_exp")
 
-        # Build a set of dilutions that are out of tolerance
-        bad_dilutions = set()
-        if obs_exp:
-            for pt in obs_exp:
-                if not pt["in_range"]:
-                    bad_dilutions.add(pt["dilution"])
+def _make_bead_heatmap(bead_qc: dict, excluded: set[str]) -> str:
+    matrix = bead_qc.get("matrix")
+    tier_matrix = bead_qc.get("tier_matrix")
+    if matrix is None or matrix.empty:
+        return "<p style='color:#999;'>No bead-count data.</p>"
 
-        if not std_data.empty:
-            # In-range points (blue circles)
-            ok_mask = ~std_data["dilution"].isin(bad_dilutions)
-            if ok_mask.any():
-                ok_data = std_data[ok_mask]
-                fig.add_trace(go.Scatter(
-                    x=ok_data["dilution"], y=ok_data["mfi"],
-                    mode="markers", marker=dict(color="blue", size=6),
-                    name="Observed", showlegend=(i == 0),
-                    hovertemplate="1:%{x} → MFI %{y:.0f}<extra></extra>",
-                ), row=row, col=col)
-            # Out-of-range points (red triangles)
-            if (~ok_mask).any():
-                bad_data = std_data[~ok_mask]
-                fig.add_trace(go.Scatter(
-                    x=bad_data["dilution"], y=bad_data["mfi"],
-                    mode="markers", marker=dict(
-                        color="red", size=8, symbol="triangle-up",
-                        line=dict(width=1, color="darkred"),
-                    ),
-                    name="Out of tolerance", showlegend=(i == 0 and len(bad_dilutions) > 0),
-                    hovertemplate="1:%{x} → MFI %{y:.0f} (out of tolerance)<extra></extra>",
-                ), row=row, col=col)
+    sample_labels = bead_qc.get("sample_labels", {})
+    well_cols = list(matrix.columns)
+    analyte_rows = list(matrix.index)
 
-        # Dropped outlier point (X marker, grey)
-        dropped = fit.get("dropped_point")
-        if dropped:
-            fig.add_trace(go.Scatter(
-                x=[dropped["dilution"]], y=[dropped["mfi"]],
-                mode="markers", marker=dict(
-                    color="grey", size=10, symbol="x",
-                    line=dict(width=2, color="black"),
-                ),
-                name="Dropped outlier", showlegend=(i == 0),
-                hovertemplate="DROPPED: 1:%{x} → MFI %{y:.0f}<extra></extra>",
-            ), row=row, col=col)
+    tier_to_int = {"red": 0, "yellow": 1, "green": 2}
+    z = np.vectorize(lambda t: tier_to_int.get(t, 0))(tier_matrix.values)
 
-        # Fitted curve
-        params = fit.get("params")
-        if params is not None:
-            # Extend fit line across the full dilution range shown on the plot
-            x_min = min(std_data["dilution"].min(), 30) if not std_data.empty else 30
-            x_max = max(std_data["dilution"].max(), 3200) * 2
-            x_fit = np.logspace(np.log10(x_min), np.log10(x_max), 200)
-            y_fit = four_pl_np(x_fit, *params)
-            fig.add_trace(go.Scatter(
-                x=x_fit, y=y_fit,
-                mode="lines", line=dict(color="red", width=2),
-                name="4PL Fit", showlegend=(i == 0),
-                hoverinfo="skip",
-            ), row=row, col=col)
-
-        # Reportable range box (LLOQ–ULOQ)
-        rr = fit.get("reportable_range")
-        if rr and params is not None and rr.get("lloq_dilution") and rr.get("uloq_dilution"):
-            lloq_dil = rr["lloq_dilution"]
-            uloq_dil = rr["uloq_dilution"]
-            # Compute MFI at the LLOQ and ULOQ dilutions from the 4PL
-            mfi_at_lloq = float(four_pl_np(np.array([lloq_dil]), *params)[0])
-            mfi_at_uloq = float(four_pl_np(np.array([uloq_dil]), *params)[0])
-            # Draw green shaded box — on log axes, use raw data values (Plotly logs them)
-            # Subplot axis refs: first subplot is "x"/"y", rest are "x2"/"y2", "x3"/"y3", etc.
-            ax_idx = i + 1
-            xref = "x" if ax_idx == 1 else f"x{ax_idx}"
-            yref = "y" if ax_idx == 1 else f"y{ax_idx}"
-            fig.add_shape(
-                type="rect",
-                x0=uloq_dil, x1=lloq_dil,
-                y0=min(mfi_at_lloq, mfi_at_uloq),
-                y1=max(mfi_at_lloq, mfi_at_uloq),
-                xref=xref, yref=yref,
-                fillcolor="rgba(0, 180, 0, 0.08)",
-                line=dict(color="rgba(0, 150, 0, 0.4)", width=1, dash="dot"),
+    text = np.empty(z.shape, dtype=object)
+    for i, an in enumerate(analyte_rows):
+        for j, w in enumerate(well_cols):
+            count = matrix.iat[i, j]
+            label = sample_labels.get(w, "")
+            count_str = "—" if pd.isna(count) else f"{int(count)}"
+            text[i, j] = (
+                f"<b>{an}</b><br>Well {w} ({label})<br>Count: {count_str}<br>"
+                f"Tier: {tier_matrix.iat[i, j].upper()}"
             )
 
-        # Specimen rug on y-axis
-        if not specimens.empty:
-            spec_mfi = specimens[specimens["analyte"] == analyte]["mfi"]
-            if not spec_mfi.empty:
-                fig.add_trace(go.Scatter(
-                    x=[30] * len(spec_mfi), y=spec_mfi,
-                    mode="markers", marker=dict(color="green", size=3, symbol="line-ew", line_width=1),
-                    name="Specimens", showlegend=(i == 0),
-                    hoverinfo="skip",
-                ), row=row, col=col)
-
-        fig.update_xaxes(type="log", autorange="reversed", row=row, col=col)
-        fig.update_yaxes(type="log", row=row, col=col)
-
-    # Axis labels — only show on edge subplots to avoid clutter
-    for col in range(1, 5):
-        fig.update_xaxes(title_text="Dilution", row=2, col=col)
-    for row in range(1, 3):
-        fig.update_yaxes(title_text="MFI", row=row, col=1)
-
-    fig.update_layout(height=600, title_text=f"PC Standard Curves (4PL){title_suffix}", margin=dict(t=60))
-    return fig
-
-
-def four_pl_np(x, a, b, c, d):
-    """Numpy-compatible 4PL for plotting."""
-    return d + (a - d) / (1.0 + (x / c) ** b)
-
-
-def _make_replicate_plot(cv_df: pd.DataFrame) -> go.Figure:
-    """Bar chart of replicate CVs by analyte and dilution."""
-    fig = go.Figure()
-    for analyte in cv_df["analyte"].unique():
-        adata = cv_df[cv_df["analyte"] == analyte].sort_values("dilution")
-        colors = ["red" if f else "steelblue" for f in adata["flag"]]
-        fig.add_trace(go.Bar(
-            x=[f"1:{int(d)}" for d in adata["dilution"]],
-            y=adata["cv"],
-            name=analyte,
-            marker_color=colors,
-            visible=True if analyte == cv_df["analyte"].unique()[0] else "legendonly",
-        ))
-    fig.update_layout(
-        title="PC Replicate CV by Dilution",
-        xaxis_title="Dilution", yaxis_title="CV",
-        yaxis=dict(tickformat=".0%"),
-        height=400,
-        barmode="group",
-    )
-    fig.add_hline(y=0.25, line_dash="dash", line_color="red", annotation_text="25% threshold")
-    return fig
-
-
-def _plate_sort_and_label(history: pd.DataFrame,
-                          plate_order: list | None = None) -> list[tuple[str, str]]:
-    """Sort plates and create short labels (date + PLATEXX).
-
-    If plate_order (list of plate_ids) is provided, plates are sorted by their
-    position in that list. Plates not in the list go at the end, sorted by date.
-    Otherwise, falls back to run_date sort.
-
-    Returns list of (plate_id, label) tuples.
-    """
-    import re
-    from datetime import datetime
-
-    plate_info = history.groupby("plate_id").first().reset_index()
-
-    def _parse_date(d):
-        for fmt in ("%m/%d/%Y %I:%M %p", "%m/%d/%Y %I:%M:%S %p", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(str(d).strip(), fmt)
-            except (ValueError, TypeError):
-                continue
-        return datetime.min
-
-    if "run_date" in plate_info.columns:
-        plate_info["_sort_date"] = plate_info["run_date"].apply(_parse_date)
-    else:
-        plate_info["_sort_date"] = datetime.min
-
-    if plate_order:
-        order_map = {pid: i for i, pid in enumerate(plate_order)}
-        max_idx = len(plate_order)
-        plate_info["_order"] = plate_info["plate_id"].map(
-            lambda pid: order_map.get(pid, max_idx)
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=[f"{w} {sample_labels.get(w, '')}".strip() for w in well_cols],
+            y=analyte_rows,
+            text=text,
+            hoverinfo="text",
+            colorscale=[
+                [0.0, "#e74c3c"], [0.34, "#e74c3c"],
+                [0.34, "#f1c40f"], [0.67, "#f1c40f"],
+                [0.67, "#27ae60"], [1.0, "#27ae60"],
+            ],
+            zmin=0, zmax=2, showscale=False, xgap=0.5, ygap=0.5,
         )
-        plate_info = plate_info.sort_values(["_order", "_sort_date"])
-    else:
-        plate_info = plate_info.sort_values("_sort_date")
-
-    result = []
-    for _, row in plate_info.iterrows():
-        pid = row["plate_id"]
-        # Extract PLATEXX from plate_id
-        m = re.search(r"(PLATE\s*\d+)", pid, re.IGNORECASE)
-        plate_part = m.group(1) if m else pid[-8:]
-        # Extract short date
-        date_part = ""
-        sd = row.get("_sort_date")
-        if sd and sd != datetime.min:
-            try:
-                date_part = sd.strftime("%m/%d")
-            except Exception:
-                pass
-        label = f"{date_part} {plate_part}".strip() if date_part else plate_part
-        result.append((pid, label))
-    return result
-
-
-def _make_pc_mfi_history(history: pd.DataFrame | None, current_plate_id: str,
-                         title_suffix: str = "",
-                         plate_order: list | None = None,
-                         antigens: list | None = None) -> go.Figure | None:
-    """Panel plot: PC MFI by plate for each analyte (2x4 grid)."""
-    if history is None or history.empty:
-        return None
-
-    _antigens = antigens or MPXV_ANTIGENS
-    antigens_in_history = [a for a in _antigens if a in history["analyte"].unique()]
-    if not antigens_in_history:
-        return None
-
-    fig = make_subplots(rows=2, cols=4, subplot_titles=antigens_in_history[:8],
-                        horizontal_spacing=0.06, vertical_spacing=0.25)
-
-    sorted_plates = _plate_sort_and_label(history, plate_order=plate_order)
-    plates = [pid for pid, _ in sorted_plates]
-    plate_labels = [label for _, label in sorted_plates]
-
-    for i, analyte in enumerate(antigens_in_history[:8]):
-        row = i // 4 + 1
-        col = i % 4 + 1
-        adata = history[history["analyte"] == analyte]
-
-        for dil in sorted(adata["dilution"].unique()):
-            dil_data = adata[adata["dilution"] == dil]
-            plate_mfis = []
-            labels = []
-            colors = []
-            for j, pid in enumerate(plates):
-                pdata = dil_data[dil_data["plate_id"] == pid]
-                if not pdata.empty:
-                    plate_mfis.append(pdata["mfi"].mean())
-                    labels.append(plate_labels[j])
-                    colors.append("red" if pid == current_plate_id else "steelblue")
-
-            fig.add_trace(go.Scatter(
-                x=labels, y=plate_mfis,
-                mode="markers+lines",
-                marker=dict(size=6, color=colors),
-                line=dict(color="lightgrey", width=1),
-                name=f"1:{int(dil)}", showlegend=(i == 0),
-                hovertemplate="%{x}: MFI %{y:.0f}<extra>1:" + str(int(dil)) + "</extra>",
-            ), row=row, col=col)
-
-        fig.update_yaxes(type="log", row=row, col=col)
-
-    fig.update_layout(
-        height=800,
-        title_text=f"PC Standard MFI Across Plates (by dilution){title_suffix}",
-        margin=dict(t=60, b=120),
     )
-    fig.update_xaxes(tickangle=-90, tickfont=dict(size=10))
-    return fig
-
-
-def _make_nc_plot(nc_levels: pd.DataFrame, history: pd.DataFrame | None) -> go.Figure:
-    """NC MFI by analyte — current plate bar chart."""
-    if nc_levels.empty:
-        fig = go.Figure()
-        fig.update_layout(title="No NC wells on this plate")
-        return fig
-
-    mean_nc = nc_levels.groupby("analyte")["mfi"].mean().reset_index()
-    fig = go.Figure(go.Bar(
-        x=mean_nc["analyte"], y=mean_nc["mfi"],
-        marker_color="steelblue",
-        hovertemplate="%{x}: %{y:.1f}<extra></extra>",
-    ))
+    height = max(400, min(20 + 14 * len(analyte_rows), 4500))
     fig.update_layout(
-        title="Negative Control MFI by Analyte",
-        xaxis_title="Analyte", yaxis_title="MFI",
-        height=350,
+        margin=dict(l=180, r=20, t=20, b=120),
+        xaxis=dict(tickangle=-90, tickfont=dict(size=8), side="top"),
+        yaxis=dict(tickfont=dict(size=8), autorange="reversed"),
     )
-    return fig
+    if excluded:
+        fig.update_yaxes(
+            ticktext=[f"<i>{a} (excluded)</i>" if a in excluded else a for a in analyte_rows],
+            tickvals=list(range(len(analyte_rows))),
+        )
+    return _plotly_html(fig, "fig-bead-heatmap", height=height)
 
 
-def _make_nc_history(history_nc: pd.DataFrame | None, current_plate_id: str,
-                     plate_order: list | None = None,
-                     antigens: list | None = None) -> go.Figure | None:
-    """Panel plot: NC MFI by plate for each analyte (2x4 grid)."""
-    if history_nc is None or history_nc.empty:
-        return None
+def _make_curve_grid(pool_fits: dict, excluded: set[str], cols: int = 10) -> str:
+    """Small-multiples grid of every 4PL fit, embedded as inline base64 PNG.
 
-    _antigens = antigens or MPXV_ANTIGENS
-    antigens = [a for a in _antigens if a in history_nc["analyte"].unique()]
-    if not antigens:
-        return None
-
-    fig = make_subplots(rows=2, cols=4, subplot_titles=antigens[:8],
-                        horizontal_spacing=0.06, vertical_spacing=0.25)
-
-    sorted_plates = _plate_sort_and_label(history_nc, plate_order=plate_order)
-    plates = [pid for pid, _ in sorted_plates]
-    plate_labels = [label for _, label in sorted_plates]
-
-    for i, analyte in enumerate(antigens[:8]):
-        row = i // 4 + 1
-        col = i % 4 + 1
-        adata = history_nc[history_nc["analyte"] == analyte]
-
-        mfis = []
-        labels = []
-        colors = []
-        for j, pid in enumerate(plates):
-            pdata = adata[adata["plate_id"] == pid]
-            if not pdata.empty:
-                mfis.append(pdata["mfi"].mean())
-                labels.append(plate_labels[j])
-                colors.append("red" if pid == current_plate_id else "steelblue")
-
-        fig.add_trace(go.Scatter(
-            x=labels, y=mfis,
-            mode="markers+lines",
-            marker=dict(size=8, color=colors),
-            line=dict(color="lightgrey", width=1),
-            showlegend=False,
-            hovertemplate="%{x}: MFI %{y:.1f}<extra></extra>",
-        ), row=row, col=col)
-
-    fig.update_layout(
-        height=800,
-        title_text="Negative Control MFI Across Plates",
-        margin=dict(t=60, b=120),
-    )
-    fig.update_xaxes(tickangle=-90, tickfont=dict(size=10))
-    return fig
-
-
-def _make_kit_control_plots(kit_controls: dict) -> go.Figure:
-    """Combined plot for kit control beads."""
-    fig = make_subplots(rows=1, cols=4,
-                        subplot_titles=["NC Bead", "ScG", "FC", "IC"])
-
-    for i, (key, title) in enumerate([
-        ("nc_bead", "NC Bead"), ("scg", "ScG"), ("fc", "FC"), ("ic", "IC")
-    ]):
-        cdata = kit_controls[key]
-        colors = ["red" if f else "steelblue" for f in cdata["flag"]]
-        fig.add_trace(go.Bar(
-            x=cdata["well"], y=cdata["mfi"],
-            marker_color=colors,
-            showlegend=False,
-            hovertemplate="Well %{x}: %{y:.0f}<extra></extra>",
-        ), row=1, col=i+1)
-
-    fig.update_yaxes(title_text="MFI")
-    fig.update_layout(height=300, title_text="Kit Control Beads", margin=dict(t=60))
-    return fig
-
-
-def _make_specimen_distribution(specimens: pd.DataFrame, antigens: list | None = None) -> go.Figure:
-    """MFI distribution histograms for specimens, faceted by antigen."""
-    _antigens = antigens or MPXV_ANTIGENS
-    antigens_present = [a for a in _antigens if a in specimens["analyte"].unique()]
-    n = len(antigens_present)
-    if n == 0:
-        return None
-
-    fig = make_subplots(rows=2, cols=4, subplot_titles=antigens_present[:8])
-
-    for i, analyte in enumerate(antigens_present[:8]):
-        row = i // 4 + 1
-        col = i % 4 + 1
-        vals = specimens[specimens["analyte"] == analyte]["mfi"].dropna()
-        # Use log(MFI) for histogram; filter out non-positive values
-        log_vals = np.log(vals[vals > 0])
-        fig.add_trace(go.Histogram(
-            x=log_vals, nbinsx=20, marker_color="steelblue",
-            showlegend=False,
-            hovertemplate="ln(MFI) %{x:.2f}: count %{y}<extra></extra>",
-        ), row=row, col=col)
-
-    # Axis labels on edge subplots
-    for col in range(1, 5):
-        fig.update_xaxes(title_text="ln(MFI)", row=2, col=col)
-    for row in range(1, 3):
-        fig.update_yaxes(title_text="Count", row=row, col=1)
-
-    fig.update_layout(height=500, title_text="Specimen MFI Distribution (ln scale)", margin=dict(t=60))
-    return fig
-
-
-def _fits_to_table(fits: dict, multi_pool: bool = False, antigens: list | None = None) -> list[dict]:
-    """Convert nested fits dict to a list of dicts for the template.
-
-    Args:
-        fits: dict[pool_name -> dict[analyte -> fit_result]]
-        multi_pool: if True, include 'pool' key in each row
-        antigens: ordered antigen list from config (falls back to MPXV_ANTIGENS)
+    Each panel: log-log scatter of the standard points + the fitted curve
+    (when present). The panel title shows the analyte name, colour-coded:
+        green   = fit_ok
+        red     = fit failed
+        grey    = soft-flagged / excluded
+    Static image (matplotlib → PNG); the interactive picker below this
+    grid is the place to drill into a single curve.
     """
-    _antigens = antigens or MPXV_ANTIGENS
+    if not pool_fits:
+        return "<p style='color:#999;'>No standard curve fits.</p>"
+
+    analytes = list(pool_fits.keys())
+    n = len(analytes)
+    rows = (n + cols - 1) // cols
+
+    panel_w = 1.6  # inches
+    panel_h = 1.05
+    fig, axes = plt.subplots(
+        rows, cols,
+        figsize=(cols * panel_w, rows * panel_h),
+        squeeze=False,
+    )
+
+    for i, an in enumerate(analytes):
+        r, c = divmod(i, cols)
+        ax = axes[r][c]
+        fit = pool_fits[an]
+        std = fit.get("mean_data")
+        params = fit.get("params")
+        is_excluded = an in excluded
+        if is_excluded:
+            title_color = "#95a5a6"
+        elif fit.get("fit_ok"):
+            title_color = "#27ae60"
+        else:
+            title_color = "#e74c3c"
+
+        if std is not None and not std.empty:
+            ax.scatter(std["dilution"], std["mfi"], s=10, color="#2c3e50", zorder=3)
+            if params is not None:
+                xs = np.geomspace(std["dilution"].min(), std["dilution"].max(), 80)
+                ys = four_pl(xs, *params)
+                ax.plot(xs, ys, color="#3498db", linewidth=1.2)
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+        ax.tick_params(labelsize=5, length=2, pad=1)
+        # Truncate long analyte names so titles don't overlap
+        title = an if len(an) <= 20 else an[:18] + "…"
+        ax.set_title(title, fontsize=6.5, color=title_color, pad=2)
+
+    # Hide unused axes
+    for j in range(n, rows * cols):
+        r, c = divmod(j, cols)
+        axes[r][c].axis("off")
+
+    plt.tight_layout(pad=0.4, h_pad=0.6, w_pad=0.4)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return (
+        f'<img src="data:image/png;base64,{b64}" '
+        f'alt="All {n} standard curves" '
+        f'style="width:100%; height:auto; display:block;">'
+    )
+
+
+def _make_curve_picker(pool_fits: dict, excluded: set[str]) -> str:
+    """All 4PL curves rendered as visibility-toggled traces with a dropdown."""
+    if not pool_fits:
+        return "<p style='color:#999;'>No standard curve fits.</p>"
+
+    analytes = list(pool_fits.keys())
+    fig = go.Figure()
+    n_per_analyte = 2  # points trace + curve trace
+
+    for ai, an in enumerate(analytes):
+        fit = pool_fits[an]
+        std = fit.get("mean_data")
+        if std is not None and not std.empty:
+            fig.add_trace(go.Scatter(
+                x=std["dilution"], y=std["mfi"], mode="markers", name="Standards",
+                marker=dict(size=10, color="#2c3e50"),
+                visible=(ai == 0),
+            ))
+        else:
+            fig.add_trace(go.Scatter(x=[], y=[], mode="markers", visible=(ai == 0)))
+        params = fit.get("params")
+        if params is not None and std is not None and not std.empty:
+            xs = np.geomspace(std["dilution"].min(), std["dilution"].max(), 80)
+            ys = four_pl(xs, *params)
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines", name="4PL fit",
+                line=dict(color="#3498db", width=2),
+                visible=(ai == 0),
+            ))
+        else:
+            fig.add_trace(go.Scatter(x=[], y=[], mode="lines", visible=(ai == 0)))
+
+    n_traces = len(analytes) * n_per_analyte
+    buttons = []
+    for ai, an in enumerate(analytes):
+        vis = [False] * n_traces
+        vis[ai * n_per_analyte] = True
+        vis[ai * n_per_analyte + 1] = True
+        label = f"⚠ {an} (excluded)" if an in excluded else an
+        fit = pool_fits[an]
+        title = (
+            f"<b>{label}</b> &nbsp;·&nbsp; "
+            f"fit_ok={fit.get('fit_ok')} &nbsp;·&nbsp; "
+            f"params={_fmt_params(fit.get('params'))}"
+        )
+        buttons.append(dict(
+            label=label[:60],
+            method="update",
+            args=[{"visible": vis}, {"title.text": title}],
+        ))
+
+    first_label = ("⚠ " if analytes[0] in excluded else "") + analytes[0]
+    first_fit = pool_fits[analytes[0]]
+    fig.update_layout(
+        title=dict(text=(
+            f"<b>{first_label}</b> &nbsp;·&nbsp; "
+            f"fit_ok={first_fit.get('fit_ok')} &nbsp;·&nbsp; "
+            f"params={_fmt_params(first_fit.get('params'))}"
+        )),
+        xaxis=dict(type="log", title="Dilution factor (1 : x)"),
+        yaxis=dict(type="log", title="MFI"),
+        updatemenus=[dict(
+            buttons=buttons, direction="down",
+            x=0, xanchor="left", y=1.16, yanchor="top",
+            showactive=True,
+        )],
+        margin=dict(l=70, r=30, t=110, b=60),
+        height=500,
+    )
+    return _plotly_html(fig, "fig-curve-picker", height=540)
+
+
+def _make_in_range_heatmap(in_range: pd.DataFrame, excluded: set[str]) -> str:
+    if in_range is None or in_range.empty:
+        return "<p style='color:#999;'>No in-range data.</p>"
+
+    status_to_int = {"OUT_OF_RANGE": 0, "NO_FIT": 1, "IN_RANGE": 2}
+    pivot = in_range.pivot_table(
+        index="analyte", columns="well", values="status", aggfunc="first",
+    )
+    analyte_order = list(in_range.drop_duplicates("analyte")["analyte"])
+    well_order = list(in_range.drop_duplicates("well")["well"])
+    pivot = pivot.reindex(index=analyte_order, columns=well_order)
+
+    z = np.vectorize(lambda s: status_to_int.get(s, 1))(pivot.values)
+    sample_labels = (
+        in_range.drop_duplicates("well").set_index("well")["sample_name"].to_dict()
+    )
+    text = np.empty(z.shape, dtype=object)
+    for i, an in enumerate(analyte_order):
+        for j, w in enumerate(well_order):
+            status = pivot.iat[i, j]
+            text[i, j] = f"<b>{an}</b><br>Well {w} ({sample_labels.get(w, '')})<br>{status}"
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=[f"{w} {sample_labels.get(w, '')}".strip() for w in well_order],
+            y=analyte_order,
+            text=text,
+            hoverinfo="text",
+            colorscale=[
+                [0.0, "#e74c3c"], [0.34, "#e74c3c"],
+                [0.34, "#bdc3c7"], [0.67, "#bdc3c7"],
+                [0.67, "#27ae60"], [1.0, "#27ae60"],
+            ],
+            zmin=0, zmax=2, showscale=False, xgap=0.5, ygap=0.5,
+        )
+    )
+    height = max(400, min(20 + 14 * len(analyte_order), 4500))
+    fig.update_layout(
+        margin=dict(l=180, r=20, t=20, b=120),
+        xaxis=dict(tickangle=-90, tickfont=dict(size=8), side="top"),
+        yaxis=dict(tickfont=dict(size=8), autorange="reversed"),
+    )
+    if excluded:
+        fig.update_yaxes(
+            ticktext=[f"<i>{a} (excluded)</i>" if a in excluded else a for a in analyte_order],
+            tickvals=list(range(len(analyte_order))),
+        )
+    return _plotly_html(fig, "fig-range-heatmap", height=height)
+
+
+# ---------------------------------------------------------------------------
+# Table builders
+# ---------------------------------------------------------------------------
+
+
+def _build_curve_summary(
+    pool_fits: dict,
+    pct_in_range: pd.DataFrame,
+    excluded: set[str],
+    recovery_tolerance: float,
+) -> list[dict]:
+    pct_lookup: dict = {}
+    if pct_in_range is not None and not pct_in_range.empty:
+        pct_lookup = pct_in_range.set_index("analyte")["pct_in_range"].to_dict()
     rows = []
-    for pool_name, pool_fits in fits.items():
-        for analyte in _antigens:
-            f = pool_fits.get(analyte, {})
-            row = {"analyte": analyte, "fit_ok": f.get("fit_ok", False)}
-            if multi_pool:
-                row["pool"] = pool_name
-            if f.get("params"):
-                a, b, c, d = f["params"]
-                row.update({"a": f"{a:.1f}", "b": f"{b:.3f}", "c": f"{c:.1f}", "d": f"{d:.1f}"})
-            else:
-                row.update({"a": "-", "b": "-", "c": "-", "d": "-"})
-            row["error"] = f.get("error", "")
-            row["qc_warnings"] = f.get("qc_warnings", [])
-            row["obs_exp"] = f.get("obs_exp")
-            row["reportable_range"] = f.get("reportable_range")
-            row["dropped_point"] = f.get("dropped_point")
-            rows.append(row)
+    for an, fit in pool_fits.items():
+        params = fit.get("params") or (None, None, None, None)
+        a, b, c, d = params
+        rr = fit.get("reportable_range") or {}
+        pct = pct_lookup.get(an)
+        rows.append({
+            "analyte": an,
+            "excluded": an in excluded,
+            "fit_ok": bool(fit.get("fit_ok")),
+            "n_points": len(fit.get("mean_data", [])) if fit.get("mean_data") is not None else 0,
+            "a": _fmt(a, 1),
+            "b": _fmt(b, 2),
+            "c_ic50": _fmt(c, 1),
+            "d": _fmt(d, 1),
+            "lloq_dilution": _fmt(rr.get("lloq_dilution"), 1),
+            "uloq_dilution": _fmt(rr.get("uloq_dilution"), 1),
+            "pct_in_range": _fmt(pct, 1),
+            "qc_warnings": "; ".join(fit.get("qc_warnings") or []) or "—",
+            "dropped_point": fit.get("dropped_point"),
+        })
     return rows
 
 
-def _kit_control_reference_table(
-    nc_bead_mfi_max: int = NC_BEAD_MFI_MAX,
-    scg_mfi_min: int = SCG_MFI_MIN,
-    fc_mfi_range: tuple = FC_MFI_RANGE,
-    ic_mfi_range: tuple = IC_MFI_RANGE,
-) -> list[dict]:
-    """Return reference info for kit control beads for display in report."""
+def _format_problem_list(problems: pd.DataFrame) -> list[dict]:
+    if problems is None or problems.empty:
+        return []
     return [
         {
-            "name": "NC (Negative Control)",
-            "purpose": "Non-specific background; should be near-zero MFI",
-            "criterion": f"MFI ≤ {nc_bead_mfi_max}",
-        },
-        {
-            "name": "ScG (Human IgG Sample Control)",
-            "purpose": "Verifies sample detection pathway; confirms assay recognizes human IgG",
-            "criterion": f"MFI ≥ {scg_mfi_min:,}",
-        },
-        {
-            "name": "FC (Fluorescent Conjugate)",
-            "purpose": "Fluorescent reference bead; checks detector calibration",
-            "criterion": f"MFI {fc_mfi_range[0]:,} – {fc_mfi_range[1]:,}",
-        },
-        {
-            "name": "IC (Instrument Control)",
-            "purpose": "Internal bead consistency control; should be stable across plates",
-            "criterion": f"MFI {ic_mfi_range[0]:,} – {ic_mfi_range[1]:,}",
-        },
+            "well": r.well,
+            "sample_name": r.sample_name,
+            "analyte": r.analyte,
+            "count": "—" if pd.isna(r.count) else int(r.count),
+            "tier": r.tier,
+        }
+        for r in problems.itertuples(index=False)
     ]
 
 
-def _kit_controls_to_tables(kit_controls: dict) -> dict:
-    """Convert kit control DataFrames to lists of dicts for the template."""
-    result = {}
-    # Build well → sample_name lookup from any of the control DataFrames
-    well_to_sample = {}
-    for key in ["nc_bead", "scg", "fc", "ic"]:
-        df = kit_controls[key]
-        result[key] = df.to_dict("records")
-        if "sample_name" in df.columns:
-            well_to_sample.update(dict(zip(df["well"], df["sample_name"])))
-
-    result["n_flagged"] = len(kit_controls["flagged_wells"])
-    # flagged_wells_labeled: list of "A1 (Sample ID)" strings
-    flagged = sorted(kit_controls["flagged_wells"])
-    result["flagged_wells"] = flagged
-    result["flagged_wells_labeled"] = [
-        f"{w} ({well_to_sample[w]})" if w in well_to_sample else w
-        for w in flagged
-    ]
-    return result
+def _tier_counts(problems: pd.DataFrame) -> dict:
+    if problems is None or problems.empty:
+        return {"red": 0, "yellow": 0}
+    counts = problems["tier"].value_counts().to_dict()
+    return {"red": int(counts.get("red", 0)), "yellow": int(counts.get("yellow", 0))}
 
 
-def _specimen_to_table(specimens: pd.DataFrame, pools: list[str] | None = None,
-                       antigens: list | None = None) -> list[dict]:
-    """Pivot specimen results to wide format for the table.
-
-    When multiple pools are present, AU columns are output per pool:
-    {analyte}_AU_{pool_slug} for each pool, plus {analyte}_AU as default.
-    """
-    if specimens.empty:
+def _format_range_problems(in_range: pd.DataFrame, excluded: set[str]) -> list[dict]:
+    if in_range is None or in_range.empty:
         return []
-    _antigens = antigens or MPXV_ANTIGENS
-    antigens = [a for a in _antigens if a in specimens["analyte"].unique()]
-    multi_pool = pools is not None and len(pools) > 1
-
+    out = in_range[in_range["status"] == "OUT_OF_RANGE"]
     rows = []
-    for well in specimens["well"].unique():
-        wdata = specimens[specimens["well"] == well]
-        sample_name = wdata["sample_name"].iloc[0]
-        row = {"well": well, "sample_name": sample_name}
-        for analyte in antigens:
-            arow = wdata[wdata["analyte"] == analyte]
-            if not arow.empty:
-                row[f"{analyte}_mfi"] = int(round(arow["mfi"].iloc[0]))
-
-                # Per-pool AU values
-                if multi_pool:
-                    for pool_name in pools:
-                        slug = pool_name.replace(" ", "_")
-                        rau_col = f"rau_{slug}"
-                        lloq_col = f"below_lloq_{slug}"
-                        uloq_col = f"above_uloq_{slug}"
-                        extrap_col = f"extrapolated_{slug}"
-
-                        rau = arow[rau_col].iloc[0] if rau_col in arow.columns else np.nan
-                        below = bool(arow[lloq_col].iloc[0]) if lloq_col in arow.columns else False
-                        above = bool(arow[uloq_col].iloc[0]) if uloq_col in arow.columns else False
-                        extrap = bool(arow[extrap_col].iloc[0]) if extrap_col in arow.columns else False
-
-                        rau_str = None
-                        if pd.notna(rau):
-                            if extrap and not below and not above:
-                                rau_str = f"{rau:.1f}*"
-                            else:
-                                rau_str = f"{rau:.1f}"
-                        row[f"{analyte}_AU_{slug}"] = rau_str
-
-                        if below:
-                            cens = "left"
-                        elif above:
-                            cens = "right"
-                        else:
-                            cens = "none"
-                        row[f"{analyte}_censored_{slug}"] = cens
-
-                # Default AU (from plain columns — present when fit succeeded)
-                rau = arow["rau"].iloc[0] if "rau" in arow.columns else np.nan
-                below_lloq = bool(arow["below_lloq"].iloc[0]) if "below_lloq" in arow.columns else False
-                above_uloq = bool(arow["above_uloq"].iloc[0]) if "above_uloq" in arow.columns else False
-                extrap = bool(arow["extrapolated"].iloc[0]) if "extrapolated" in arow.columns else False
-                if below_lloq:
-                    censored = "left"
-                elif above_uloq:
-                    censored = "right"
-                else:
-                    censored = "none"
-                rau_str = None
-                if pd.notna(rau):
-                    if extrap and not below_lloq and not above_uloq:
-                        rau_str = f"{rau:.1f}*"
-                    else:
-                        rau_str = f"{rau:.1f}"
-                row[f"{analyte}_AU"] = rau_str
-                row[f"{analyte}_censored"] = censored
-                net_mfi = arow["net_mfi"].iloc[0] if "net_mfi" in arow.columns else None
-                row[f"{analyte}_net_mfi"] = int(round(net_mfi)) if pd.notna(net_mfi) and net_mfi is not None else None
-        rows.append(row)
+    for r in out.itertuples(index=False):
+        rows.append({
+            "well": r.well,
+            "sample_name": r.sample_name,
+            "analyte": r.analyte,
+            "mfi": _fmt(r.mfi, 1),
+            "mfi_lloq": _fmt(r.mfi_lloq, 1),
+            "mfi_uloq": _fmt(r.mfi_uloq, 1),
+            "excluded": r.analyte in excluded,
+        })
     return rows
 
 
-def _extrapolation_summary(specimens: pd.DataFrame, antigens: list | None = None) -> dict:
-    """Summarise how many specimen-analyte pairs are extrapolated."""
-    if specimens.empty or "extrapolated" not in specimens.columns:
-        return {"n_extrapolated": 0, "details": []}
-    extrap = specimens[specimens["extrapolated"]].copy()
-    n = len(extrap)
-    # Summarise by analyte
-    _antigens = antigens or MPXV_ANTIGENS
-    details = []
-    if n > 0:
-        for analyte in _antigens:
-            aext = extrap[extrap["analyte"] == analyte]
-            if not aext.empty:
-                above = (aext["mfi"] > aext["mfi"].median()).sum()  # rough
-                details.append({"analyte": analyte, "count": len(aext)})
-    return {"n_extrapolated": n, "details": details}
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _first_pool(fits: dict | None) -> dict:
+    if not fits:
+        return {}
+    pools = list(fits.keys())
+    return fits[pools[0]] if pools else {}
+
+
+def _fmt(v, decimals=2) -> str:
+    if v is None:
+        return "—"
+    try:
+        if pd.isna(v):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    try:
+        return f"{float(v):,.{decimals}f}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _fmt_params(params) -> str:
+    if not params:
+        return "—"
+    a, b, c, d = params
+    return f"a={_fmt(a, 1)}, b={_fmt(b, 2)}, c={_fmt(c, 1)}, d={_fmt(d, 1)}"
+
+
+def _derive_layout_info(data: pd.DataFrame) -> dict:
+    info: dict = {}
+    if "box_id" in data.columns:
+        boxes = sorted(set(b for b in data["box_id"].dropna().unique() if b))
+        if boxes:
+            info["box_ids"] = boxes
+    if "patient_id" in data.columns:
+        spec = data[data["well_type"] == "specimen"]
+        if not spec.empty:
+            n_with_pid = spec.drop_duplicates("well")["patient_id"].astype(str).str.len().gt(0).sum()
+            info["n_with_patient_id"] = int(n_with_pid)
+            info["n_specimens"] = int(spec["well"].nunique())
+    return info

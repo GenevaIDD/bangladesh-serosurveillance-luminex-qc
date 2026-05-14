@@ -1,12 +1,14 @@
 """4-parameter logistic (4PL) curve fitting for PC standard curves."""
 
+from __future__ import annotations
+
 import warnings
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
 
-from .config import MPXV_ANTIGENS, RECOVERY_TOLERANCE
+from .config import ANTIGENS, RECOVERY_TOLERANCE
 from .settings import get_antigen_names, get_qc_thresholds, load_config
 
 
@@ -38,21 +40,31 @@ def invert_4pl(y, a, b, c, d):
     return result
 
 
-def fit_standard_curves(df: pd.DataFrame, config: dict | None = None) -> dict:
+def fit_standard_curves(
+    df: pd.DataFrame,
+    config: dict | None = None,
+    antigens: list[str] | None = None,
+) -> dict:
     """Fit 4PL curves to PC standard data for each antigen, per pool.
 
     Args:
-        df: DataFrame with columns [well, sample_name, analyte, mfi, well_type, dilution, pc_pool]
+        df: DataFrame with columns [well, sample_name, analyte, mfi, well_type, dilution]
+            and optionally `pc_pool`.
         config: optional config dict (from settings.load_config)
+        antigens: optional list of analytes to fit. If None, derived from
+            ``config['panel']['antigens']``. Pass the per-plate panel
+            (from ``metadata['analytes']``) to fit only the analytes
+            actually present in the CSV.
 
     Returns dict keyed by pool name, each value is a dict keyed by analyte:
-        {"ITM PC": {analyte: {params, fit_ok, std_data, ...}}, "ITM PC2": {...}}
+        {"PC": {analyte: {params, fit_ok, std_data, ...}}}
 
-    When only one pool exists, the dict has a single key.
+    On Uvira plates a single pool ("PC") is always returned.
     """
     if config is None:
         config = load_config()
-    antigens = get_antigen_names(config)
+    if antigens is None:
+        antigens = get_antigen_names(config)
     recovery_tolerance = get_qc_thresholds(config).get("recovery_tolerance", RECOVERY_TOLERANCE)
     drop_outlier = get_qc_thresholds(config).get("drop_outlier", True)
 
@@ -102,8 +114,11 @@ def fit_standard_curves(df: pd.DataFrame, config: dict | None = None) -> dict:
 
             dropped_point = None
 
-            # Try dropping one outlier if enabled and fit failed
-            if drop_outlier and not fit_ok and len(x) >= 6:
+            # Try dropping one outlier if enabled and fit failed *because of
+            # QC criteria* (not because the input was degenerate). When
+            # params is None the curve either had no signal or scipy
+            # didn't converge; dropping a point won't rescue it.
+            if drop_outlier and params is not None and not fit_ok and len(x) >= 6:
                 best = _try_drop_one_outlier(x, y, x_min=x.min(), x_max=x.max())
                 if best is not None:
                     params, fit_ok, error, qc_warnings, drop_idx = best
@@ -146,21 +161,50 @@ def _fit_one(x, y, x_min=None, x_max=None):
     - error: error message if fit failed or quality check failed
     - warnings: list of quality warnings (may be non-empty even if fit_ok)
     """
-    # Initial guesses
-    d_init = np.max(y)   # upper asymptote (low dilution = high MFI)
-    a_init = np.min(y)   # lower asymptote (high dilution = low MFI)
-    c_init = np.median(x)  # inflection point
-    b_init = 1.0          # Hill slope
+    # Bail out fast on degenerate input. With ~200 antigens per plate,
+    # a few will be all-zero noise (e.g. excluded bead regions); without
+    # this guard scipy.curve_fit thrashes for the full maxfev budget.
+    y_arr = np.asarray(y, dtype=float)
+    y_max = float(np.nanmax(y_arr)) if y_arr.size else 0.0
+    y_min = float(np.nanmin(y_arr)) if y_arr.size else 0.0
+    if not np.isfinite(y_max) or y_max <= 0:
+        return None, False, "All-zero / non-finite MFI — no signal", []
+    if y_max < 50:  # well below typical noise floor for IgG MFI
+        return None, False, f"Signal floor (max MFI {y_max:.0f} < 50) — no curve", []
+    # Dynamic-range pre-check: 4PL needs at least ~3× separation to fit
+    if y_min > 0 and (y_max / max(y_min, 1.0)) < 2.0:
+        return None, False, f"Flat response (max/min ratio {y_max / max(y_min, 1.0):.1f}x)", []
+
+    # Initial guesses. For descending dilution series:
+    #   y = d + (a - d) / (1 + (x/c)^b)
+    # At x → 0  (low dilution / high antigen): y → a   (upper plateau)
+    # At x → ∞ (high dilution / no antigen):   y → d   (lower plateau / noise floor)
+    a_init = y_max  # upper plateau
+    d_init = y_min  # lower plateau / noise floor
+    c_init = float(np.median(x))  # inflection point (IC50)
+    b_init = 1.0  # Hill slope
 
     p0 = [a_init, b_init, c_init, d_init]
     bounds = (
-        [0, 0.1, 1, 0],          # lower bounds
+        [0, 0.1, 1, 0],            # lower bounds (a, b, c, d)
         [np.inf, 10, 1e6, np.inf]  # upper bounds
     )
 
+    # Fit on log10(MFI) so that the noise floor and the high-signal upper
+    # plateau contribute comparably to the residuals. A linear-residual
+    # fit lets the upper plateau (~10⁵ MFI) dominate, so the optimizer
+    # ignores points at the tail (~10² MFI) and lands at d=0 instead of
+    # the true noise floor (~10²). Log-residual fitting is the standard
+    # immunoassay approach and gives a sensible lower plateau.
+    Y_FLOOR = 1.0  # MFI floor to keep log defined for occasional zeros
+    log_y = np.log10(np.maximum(y, Y_FLOOR))
+
+    def _four_pl_log(xx, a_, b_, c_, d_):
+        return np.log10(np.maximum(four_pl(xx, a_, b_, c_, d_), Y_FLOOR))
+
     try:
         popt, _ = curve_fit(
-            four_pl, x, y, p0=p0, bounds=bounds, maxfev=50000
+            _four_pl_log, x, log_y, p0=p0, bounds=bounds, maxfev=10000
         )
     except Exception as e:
         return None, False, str(e), []
@@ -170,13 +214,14 @@ def _fit_one(x, y, x_min=None, x_max=None):
     # --- Fit quality checks ---
     qc_warnings = []
 
-    # 1. R² (goodness of fit)
-    y_pred = four_pl(x, *popt)
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    # 1. R² (goodness of fit) — computed in log space, matching the
+    # objective the optimizer actually minimized.
+    log_y_pred = _four_pl_log(x, *popt)
+    ss_res = np.sum((log_y - log_y_pred) ** 2)
+    ss_tot = np.sum((log_y - np.mean(log_y)) ** 2)
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     if r_squared < 0.95:
-        qc_warnings.append(f"R²={r_squared:.3f} (< 0.95)")
+        qc_warnings.append(f"R²={r_squared:.3f} (< 0.95, log scale)")
 
     # 2. IC50 within the tested dilution range (with some margin)
     ic50_lo = (x_min or x.min()) / 3.0
@@ -223,10 +268,11 @@ def _try_drop_one_outlier(x, y, x_min=None, x_max=None):
         )
 
         if params is not None and fit_ok:
-            # Compute R² for this subset fit
-            y_pred = four_pl(x_sub, *params)
-            ss_res = np.sum((y_sub - y_pred) ** 2)
-            ss_tot = np.sum((y_sub - np.mean(y_sub)) ** 2)
+            # Compute R² in log space, matching the optimizer's objective.
+            log_y_sub = np.log10(np.maximum(y_sub, 1.0))
+            log_pred = np.log10(np.maximum(four_pl(x_sub, *params), 1.0))
+            ss_res = np.sum((log_y_sub - log_pred) ** 2)
+            ss_tot = np.sum((log_y_sub - np.mean(log_y_sub)) ** 2)
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
             if r2 > best_r2:
@@ -420,3 +466,153 @@ def compute_net_mfi(df: pd.DataFrame) -> pd.DataFrame:
         result = result.drop(columns=["nc_mfi_well"])
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Section 3 — per-(antigen × sample) IN/OUT-of-range table & summary metric.
+# Uvira-specific: a specimen MFI is "in range" if it falls between the
+# LLOQ MFI and ULOQ MFI of that antigen's standard curve. Below LLOQ and
+# above ULOQ both collapse to OUT_OF_RANGE (decision #3 in UVIRA_TODO.md).
+# ---------------------------------------------------------------------------
+
+
+def _mfi_bounds_for_fit(fit_result: dict) -> tuple[float | None, float | None]:
+    """Return (mfi_lloq, mfi_uloq) for an antigen's fit, or (None, None).
+
+    LLOQ corresponds to the highest dilution that passed Obs/Exp recovery
+    (lowest MFI in the reportable range); ULOQ corresponds to the lowest
+    dilution (highest MFI). Bounds are evaluated by passing those
+    dilutions through the fitted 4PL.
+    """
+    if fit_result.get("params") is None:
+        return None, None
+    rr = fit_result.get("reportable_range") or {}
+    lloq_d = rr.get("lloq_dilution")
+    uloq_d = rr.get("uloq_dilution")
+    if lloq_d is None or uloq_d is None:
+        return None, None
+    a, b, c, d = fit_result["params"]
+    mfi_lloq = float(four_pl(np.array([float(lloq_d)]), a, b, c, d)[0])
+    mfi_uloq = float(four_pl(np.array([float(uloq_d)]), a, b, c, d)[0])
+    # Defensive: ensure ordering (lower MFI bound first)
+    lo, hi = sorted((mfi_lloq, mfi_uloq))
+    return lo, hi
+
+
+def compute_in_range_table(
+    df: pd.DataFrame,
+    fits: dict,
+    excluded_analytes: list[str] | None = None,
+) -> pd.DataFrame:
+    """Per-(specimen well × antigen) IN_RANGE / OUT_OF_RANGE table.
+
+    Args:
+        df: long-format data with columns [well, sample_name, analyte, mfi, well_type]
+            and optionally [sample_id, patient_id, barcode].
+        fits: dict[pool -> dict[analyte -> fit_result]] from fit_standard_curves
+        excluded_analytes: analyte names to soft-flag (kept in output, with
+            ``excluded=True``). Defaults to empty.
+
+    Returns DataFrame with columns:
+        well, sample_name, analyte, mfi, mfi_lloq, mfi_uloq, status, excluded
+
+    Where ``status`` ∈ {"IN_RANGE", "OUT_OF_RANGE", "NO_FIT"}. NO_FIT
+    occurs when the antigen's standard curve had no usable reportable
+    range. Both below-LLOQ and above-ULOQ collapse to OUT_OF_RANGE.
+    Optional sample-id columns (``sample_id``, ``patient_id``,
+    ``barcode``, ``box_id``) are forwarded when present in ``df``.
+    """
+    excluded = set(excluded_analytes or [])
+    pools = list(fits.keys())
+    if not pools:
+        return pd.DataFrame(
+            columns=["well", "sample_name", "analyte", "mfi", "mfi_lloq",
+                     "mfi_uloq", "status", "excluded"]
+        )
+    # Single-pool assumption for Uvira; if multi-pool present (legacy),
+    # use the first pool.
+    pool_fits = fits[pools[0]]
+
+    specimens = df[df["well_type"] == "specimen"].copy()
+    if specimens.empty:
+        return specimens.assign(
+            mfi_lloq=np.nan, mfi_uloq=np.nan, status="", excluded=False
+        )[["well", "sample_name", "analyte", "mfi", "mfi_lloq", "mfi_uloq",
+           "status", "excluded"]]
+
+    # Pre-compute MFI bounds per analyte
+    bounds: dict[str, tuple[float | None, float | None]] = {
+        analyte: _mfi_bounds_for_fit(fit) for analyte, fit in pool_fits.items()
+    }
+
+    rows = []
+    optional_cols = [c for c in ("sample_id", "patient_id", "barcode", "box_id")
+                     if c in specimens.columns]
+    for r in specimens.itertuples(index=False):
+        analyte = r.analyte
+        mfi = float(r.mfi) if pd.notna(r.mfi) else np.nan
+        lo, hi = bounds.get(analyte, (None, None))
+        if lo is None or hi is None or np.isnan(mfi):
+            status = "NO_FIT"
+        elif lo <= mfi <= hi:
+            status = "IN_RANGE"
+        else:
+            status = "OUT_OF_RANGE"
+        row = {
+            "well": r.well,
+            "sample_name": r.sample_name,
+            "analyte": analyte,
+            "mfi": mfi,
+            "mfi_lloq": lo if lo is not None else np.nan,
+            "mfi_uloq": hi if hi is not None else np.nan,
+            "status": status,
+            "excluded": analyte in excluded,
+        }
+        for c in optional_cols:
+            row[c] = getattr(r, c)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def compute_pct_in_range_per_antigen(
+    in_range: pd.DataFrame,
+    excluded_analytes: list[str] | None = None,
+) -> pd.DataFrame:
+    """Summarize the IN/OUT table to one row per antigen.
+
+    Returns DataFrame with columns:
+        analyte, n_samples, n_in_range, n_out_of_range, n_no_fit,
+        pct_in_range, excluded
+
+    ``pct_in_range`` is ``n_in_range / n_samples * 100`` (0 if no
+    samples). NO_FIT samples are counted in ``n_samples`` denominator.
+    Excluded analytes are still tabulated; the report layer mutes them.
+    """
+    excluded = set(excluded_analytes or [])
+    if in_range.empty:
+        return pd.DataFrame(columns=[
+            "analyte", "n_samples", "n_in_range", "n_out_of_range",
+            "n_no_fit", "pct_in_range", "excluded",
+        ])
+
+    grouped = in_range.groupby("analyte", sort=False)["status"].value_counts().unstack(fill_value=0)
+    for col in ("IN_RANGE", "OUT_OF_RANGE", "NO_FIT"):
+        if col not in grouped.columns:
+            grouped[col] = 0
+    summary = pd.DataFrame({
+        "analyte": grouped.index,
+        "n_in_range": grouped["IN_RANGE"].astype(int).values,
+        "n_out_of_range": grouped["OUT_OF_RANGE"].astype(int).values,
+        "n_no_fit": grouped["NO_FIT"].astype(int).values,
+    }).reset_index(drop=True)
+    summary["n_samples"] = summary["n_in_range"] + summary["n_out_of_range"] + summary["n_no_fit"]
+    summary["pct_in_range"] = np.where(
+        summary["n_samples"] > 0,
+        100.0 * summary["n_in_range"] / summary["n_samples"],
+        0.0,
+    ).round(1)
+    summary["excluded"] = summary["analyte"].isin(excluded)
+    return summary[[
+        "analyte", "n_samples", "n_in_range", "n_out_of_range",
+        "n_no_fit", "pct_in_range", "excluded",
+    ]]

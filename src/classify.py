@@ -9,6 +9,8 @@ Dilution for PC wells is looked up by the trailing integer of the
 'Standard{N}' name into config['standard']['dilutions'].
 """
 
+from __future__ import annotations
+
 import re
 
 import pandas as pd

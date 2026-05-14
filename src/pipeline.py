@@ -1,5 +1,7 @@
 """Main QC pipeline — orchestrates parsing, QC, and report generation."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import pandas as pd
@@ -7,10 +9,14 @@ import pandas as pd
 from .parse_xponent import parse_xponent_csv
 from .classify import classify_wells
 from .qc_beads import qc_bead_counts
-from .qc_standard_curve import fit_standard_curves, compute_concentrations, compute_net_mfi
-from .qc_replicates import qc_pc_replicates
-from .qc_nc import qc_nc_levels
-from .qc_kit_controls import qc_kit_controls
+from .qc_standard_curve import (
+    fit_standard_curves,
+    compute_concentrations,
+    compute_net_mfi,
+    compute_in_range_table,
+    compute_pct_in_range_per_antigen,
+)
+from .settings import get_excluded_analytes
 from .qc_history import load_history, append_history, save_history
 from .parse_layout import read_plate_layout, build_layout
 from .plate_summary import plate_summary
@@ -87,34 +93,35 @@ def run_pipeline(
     # 4. QC: bead counts
     bead_qc = qc_bead_counts(data, config=config)
 
-    # 5. QC: 4PL standard curves
-    fits = fit_standard_curves(data, config=config)
+    # 5. QC: 4PL standard curves. Use the per-plate analyte list captured
+    # by parse_xponent so the panel is always authoritative for this run
+    # (Section 2 — auto-derivation from the CSV header).
+    plate_antigens = list(metadata.get("analytes") or [])
+    fits = fit_standard_curves(data, config=config, antigens=plate_antigens or None)
 
-    # 6. QC: PC replicate CV
-    replicate_qc = qc_pc_replicates(data, config=config)
-
-    # 7. QC: NC levels
-    nc_levels = qc_nc_levels(data, config=config)
-
-    # 8. QC: kit controls
-    kit_ctrl = qc_kit_controls(data, config=config)
-
-    # 9. Compute specimen AU and Net MFI
+    # 6. Compute specimen AU and Net MFI.
+    # (Legacy QC modules — qc_pc_replicates, qc_nc_levels, qc_kit_controls
+    # — were removed in Session 4: Uvira plates have no PC duplicates, no
+    # MagPix kit-control beads, and the row-A "Background" wells are
+    # already classified as NC; their MFI is reported alongside specimens.)
     specimen_results = compute_concentrations(data, fits)
     data = compute_net_mfi(data)
-    # Add net_mfi to specimen_results by index alignment
     if "net_mfi" in data.columns:
         specimen_results["net_mfi"] = data.loc[specimen_results.index, "net_mfi"]
+
+    # 9b. Section-3 deliverables: per-(antigen × sample) IN/OUT-of-range
+    # table and the per-antigen "% samples in linear range" summary.
+    excluded_analytes = get_excluded_analytes(config)
+    in_range = compute_in_range_table(data, fits, excluded_analytes=excluded_analytes)
+    pct_in_range = compute_pct_in_range_per_antigen(in_range, excluded_analytes=excluded_analytes)
 
     # 10. Plate summary
     summary = plate_summary(data)
 
-    # 11. History — load, append, save (per pool)
-    nc_history_path = Path(history_dir) / "nc_history.json"
-    fit_history_path = Path(history_dir) / "fit_history.json"
-
-    # Standard curve history — per pool
-    history_std = {}
+    # 8. History — load, append, save. Single pool on Uvira but the
+    # per-pool dict structure is preserved for forward-compat.
+    history_std: dict = {}
+    history_fit: dict = {}
     for pool_name in fits:
         pool_slug = pool_name.replace(" ", "_")
         std_path = Path(history_dir) / f"std_curve_history_{pool_slug}.json"
@@ -125,17 +132,6 @@ def run_pipeline(
             save_history(h, std_path)
         history_std[pool_name] = h
 
-    # NC history
-    history_nc = load_history(nc_history_path)
-    new_nc = _build_nc_history(metadata, nc_levels)
-    if not new_nc.empty:
-        history_nc = append_history(history_nc, new_nc, ["plate_id", "analyte"])
-        save_history(history_nc, nc_history_path)
-
-    # Fit history — per pool
-    history_fit = {}
-    for pool_name in fits:
-        pool_slug = pool_name.replace(" ", "_")
         fit_path = Path(history_dir) / f"fit_history_{pool_slug}.json"
         h = load_history(fit_path)
         new_fit = _build_fit_history(metadata, fits[pool_name], pool_name)
@@ -143,8 +139,9 @@ def run_pipeline(
             h = append_history(h, new_fit, ["plate_id", "analyte"])
             save_history(h, fit_path)
         history_fit[pool_name] = h
+    history_nc = None  # NC kit-bead history no longer applicable to Uvira
 
-    # 12. Generate report
+    # 9. Generate the Uvira QC report.
     report_name = f"QC_{metadata['plate_id']}.html"
     report_path = output_dir / report_name
 
@@ -153,11 +150,10 @@ def run_pipeline(
         data=data,
         bead_qc=bead_qc,
         fits=fits,
-        replicate_qc=replicate_qc,
-        nc_levels=nc_levels,
-        kit_controls=kit_ctrl,
         specimen_results=specimen_results,
         summary=summary,
+        in_range=in_range,
+        pct_in_range=pct_in_range,
         history_std=history_std,
         history_nc=history_nc,
         output_path=report_path,
@@ -203,6 +199,26 @@ def run_pipeline(
 
         export_df.to_csv(csv_out, index=False, encoding="utf-8")
 
+    # 14. Export Section-3 deliverables: per-(antigen × sample) IN/OUT-of-
+    # range table and per-antigen %-in-range summary.
+    if not in_range.empty:
+        in_range.to_csv(
+            output_dir / f"in_range_{metadata['plate_id']}.csv",
+            index=False, encoding="utf-8",
+        )
+    if not pct_in_range.empty:
+        pct_in_range.to_csv(
+            output_dir / f"pct_in_range_{metadata['plate_id']}.csv",
+            index=False, encoding="utf-8",
+        )
+    # Section-4 deliverable: bead-count problem list (red + yellow cells).
+    bead_problems = bead_qc.get("problems")
+    if bead_problems is not None and not bead_problems.empty:
+        bead_problems.to_csv(
+            output_dir / f"bead_problems_{metadata['plate_id']}.csv",
+            index=False, encoding="utf-8",
+        )
+
     return report_path
 
 
@@ -225,16 +241,6 @@ def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> 
                 row["pool"] = pool_name
             rows.append(row)
     return pd.DataFrame(rows)
-
-
-def _build_nc_history(metadata: dict, nc_levels: pd.DataFrame) -> pd.DataFrame:
-    """Build NC history entries."""
-    if nc_levels.empty:
-        return pd.DataFrame()
-    nc_mean = nc_levels.groupby("analyte")["mfi"].mean().reset_index()
-    nc_mean["plate_id"] = metadata["plate_id"]
-    nc_mean["run_date"] = metadata.get("run_date", "")
-    return nc_mean
 
 
 def _build_fit_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> pd.DataFrame:
