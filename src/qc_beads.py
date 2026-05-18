@@ -120,3 +120,106 @@ def qc_bead_counts(
         "problems": problems,
         "by_well": by_well,
     }
+
+
+def bead_problem_summary(
+    bead_qc: dict,
+    well_types: dict[str, str] | None = None,
+    fraction_threshold: float = 0.20,
+) -> dict:
+    """Aggregate the bead-count QC matrix into per-antigen and per-sample
+    "≥ X% problematic" summaries.
+
+    An antigen is "problem" when at least ``fraction_threshold`` of its
+    wells fall into the red or yellow tier. Similarly for samples.
+
+    Args:
+        bead_qc: dict returned by :func:`qc_bead_counts`.
+        well_types: optional {well -> well_type} map.  When provided,
+            specimen wells are the only ones that count toward the
+            sample summary (Standards / Background / NC are excluded
+            from the denominator so that the threshold reflects
+            unknown-sample QC).  When omitted, every well counts.
+        fraction_threshold: ≥ this fraction of bad wells flags the
+            antigen / sample.
+
+    Returns dict:
+        antigen_summary: DataFrame per antigen with n_wells,
+            n_problem, frac_problem, is_problem, problem_wells.
+        sample_summary:  DataFrame per well with n_analytes,
+            n_problem, frac_problem, is_problem, problem_analytes,
+            sample_name, well_type.
+        n_problem_antigens / n_problem_samples: ints.
+        threshold: the fraction used.
+    """
+    matrix = bead_qc.get("matrix")
+    tier_matrix = bead_qc.get("tier_matrix")
+    sample_labels = bead_qc.get("sample_labels", {}) or {}
+
+    empty = pd.DataFrame()
+    if matrix is None or matrix.empty or tier_matrix is None:
+        return {
+            "antigen_summary": empty,
+            "sample_summary": empty,
+            "n_problem_antigens": 0,
+            "n_problem_samples": 0,
+            "threshold": fraction_threshold,
+        }
+
+    well_types = well_types or {}
+    is_problem_cell = tier_matrix.isin(("red", "yellow"))
+
+    # Per antigen — denominator is all wells where the antigen was measured.
+    ag_rows = []
+    for analyte in tier_matrix.index:
+        row = is_problem_cell.loc[analyte]
+        n_wells = int(row.shape[0])
+        n_problem = int(row.sum())
+        frac = (n_problem / n_wells) if n_wells else 0.0
+        problem_wells = [w for w, bad in row.items() if bad]
+        ag_rows.append({
+            "analyte": analyte,
+            "n_wells": n_wells,
+            "n_problem": n_problem,
+            "frac_problem": round(frac, 4),
+            "is_problem": frac >= fraction_threshold,
+            "problem_wells": ";".join(problem_wells),
+            "problem_well_labels": ";".join(
+                f"{w} ({sample_labels.get(w, '')})".strip() for w in problem_wells
+            ),
+        })
+    antigen_summary = pd.DataFrame(ag_rows)
+
+    # Per sample — count only specimen wells when well_types is provided,
+    # otherwise count all columns.
+    if well_types:
+        sample_wells = [w for w in tier_matrix.columns if well_types.get(w) == "specimen"]
+    else:
+        sample_wells = list(tier_matrix.columns)
+
+    sm_rows = []
+    for well in sample_wells:
+        col = is_problem_cell[well]
+        n_analytes = int(col.shape[0])
+        n_problem = int(col.sum())
+        frac = (n_problem / n_analytes) if n_analytes else 0.0
+        problem_analytes = [a for a, bad in col.items() if bad]
+        sm_rows.append({
+            "well": well,
+            "sample_name": sample_labels.get(well, ""),
+            "well_type": well_types.get(well, ""),
+            "n_analytes": n_analytes,
+            "n_problem": n_problem,
+            "frac_problem": round(frac, 4),
+            "is_problem": frac >= fraction_threshold,
+            "problem_analytes": ";".join(problem_analytes),
+        })
+    sample_summary = pd.DataFrame(sm_rows)
+
+    return {
+        "antigen_summary": antigen_summary,
+        "sample_summary": sample_summary,
+        "n_problem_antigens": int(antigen_summary["is_problem"].sum()) if not antigen_summary.empty else 0,
+        "n_problem_samples": int(sample_summary["is_problem"].sum()) if not sample_summary.empty else 0,
+        "threshold": fraction_threshold,
+    }

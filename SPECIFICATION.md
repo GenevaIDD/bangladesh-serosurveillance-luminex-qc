@@ -1,223 +1,241 @@
 # Uvira Luminex QC Tool — Specification
-# Version 0.9.0-uvira (in progress, 2026-05-13)
-
-> **Migration in progress.** Sections below still describe the legacy
-> MPXV 12-plex MagPix behaviour. They will be rewritten as Sections 3–7
-> of [UVIRA_TODO.md](UVIRA_TODO.md) land. Foundational changes (panel
-> definition, Intelliflex parser, two-file plate-layout reader) have
-> been made; the report rendering pipeline is the next milestone.
+# Version 0.9.0-uvira
 
 ## Overview
 
-Standalone quality control tool for 12-plex MPXV (monkeypox virus) Luminex immunoassays from Tetracore run on a MagPix instrument. Processes xPONENT CSV exports, performs automated QC checks, fits standard curves, computes 1/RAU (inverse Relative Antibody Units), and generates interactive HTML reports. Distributed as a macOS `.app` (or Windows `.exe`) requiring no installation.
+Standalone quality control tool for **200-plex Luminex immunoassays** run on a Luminex **Intelliflex** instrument. Processes the xPONENT plate-run CSV (and optionally the Intelliflex input-file CSV and a barcode-map XLSX), runs the QC pipeline, fits 4PL standard curves per antigen, and renders a self-contained interactive HTML report.
+
+Distributed as a macOS `.app` or Windows `.exe` requiring no Python installation or internet connection.
 
 ## Assay Panel
 
-### Antigens (8 beads)
+The Uvira pilot panel is **~200 antigens** across families (ARB, FLU, HCoV, SARS, HEP, HHV, MAL, NTD, POX, RES, STI, TBD, VPD, plus a handful of `BAC_`, `CHO_`, `CTRL_`, `ENT_`, `HAN_`, `OTH_`, `TOXO_`). The full default panel lives in `src/config.py::ANTIGENS`; on every plate ingest the panel is **re-derived from the CSV's `Median` block header** so the per-plate panel is always authoritative.
 
-| Bead Region | Analyte    | Description                     |
-|-------------|------------|---------------------------------|
-| 01          | MVA Ag     | Modified Vaccinia Ankara antigen |
-| 02          | VACV A33R  | Vaccinia virus A33R protein      |
-| 03          | MPXV A35R  | Monkeypox virus A35R protein     |
-| 04          | MPXV B6R   | Monkeypox virus B6R protein      |
-| 05          | MPXV A27   | Monkeypox virus A27 protein      |
-| 06          | MPXV E8L   | Monkeypox virus E8L protein      |
-| 07          | MPXV H3L   | Monkeypox virus H3L protein      |
-| 08          | MPXV M1R   | Monkeypox virus M1R protein      |
+Three bead regions are flagged as **excluded** (added in error during plate setup) and rendered visually muted everywhere but never dropped from the data:
 
-### Kit Control Beads (4 beads)
+- `FLU_B_HA_Maryland_1959`
+- `FLU_B_NP_Brisbane_2008`
+- `VPD_Tet_tox`
 
-| Bead Region | Name | Purpose                                                    |
-|-------------|------|------------------------------------------------------------|
-| 09          | NC   | Negative control bead — monitors non-specific binding       |
-| 10          | ScG  | Sample control (goat) — confirms sample was added to well   |
-| 11          | FC   | Fluorescent conjugate control — confirms PE reporter added  |
-| 12          | IC   | Instrument control — monitors instrument performance        |
+The excluded list is editable from the Settings page.
 
 ## Plate Layout
 
-Standard 96-well plate:
+Standard 96-well plate, Intelliflex convention used in the Uvira pilot:
 
-- **Columns 1-2**: PC (positive control) standard curve in duplicate (serial dilution, e.g. 3-fold: 1:100, 1:300, ..., 1:72900). Dilutions are parsed from sample names, not hardcoded.
-- **Row H, columns 1-2**: NC (negative control) wells
-- **Remaining wells**: Specimen wells (single dilution, no replicates)
+- **A1 – A10** — Standard1 .. Standard10 (10-point, 4-fold serial dilution from `62.5` to `16,384,000`).
+- **A11 – A12** — Background wells (plate blanks, used by Background QC).
+- **B1 onward** — Specimen wells, named by on-plate barcode (e.g. `FD22124871`).
 
 Variations handled:
-- Single PC replicate (no duplicate in column 2)
-- Missing NC wells
-- Variable number of specimen wells (up to 80 per plate)
-- **Two standard curve pools on one plate** (e.g., ITM PC and ITM PC2) — each pool is fit independently and produces separate AU columns in specimen output
+
+- Missing Background wells (Background QC section renders an empty-state banner).
+- Plates that include named NC samples (`NC*` / `Negative*` patterns, editable on the Settings page) — they are classified as a separate well type and reported in a dedicated NC QC section, distinct from Background.
+
+Pool-based standard curves (the MagPix-era `ITM PC` / `ITM PC2` concept) are not used; a single `PC` pool is fit per plate. The per-pool dict structure is preserved internally for forward-compat.
 
 ## Input Files
 
-### xPONENT CSV (required)
+### xPONENT plate-run CSV (required)
 
-Multi-block CSV exported from the MagPix xPONENT software. Contains:
-- Header metadata (batch ID, run date, operator, protocol, instrument serial number)
-- `Median` data block: median fluorescent intensity (MFI) per well per analyte
-- `Count` data block: bead count per well per analyte
+Multi-block CSV exported from the Intelliflex xPONENT software. The parser handles both Intelliflex and legacy MagPix headers (`Program` line, `Build`, `Date`, `SN`, `Batch`, `BatchDescription`, `PanelName`, `BatchStopTime`) plus the expanded Intelliflex `DataType:` set (Median, Mean, Count, %CV, Peak, Std Dev, Trimmed Peak / SD / Mean, Net MFI, Avg Net MFI, Units, Dilution Factor). Only the `Median` and `Count` blocks are used today.
 
-Filename convention: `A{date}-{batch}-{plate}-{panel}_{timestamp}.csv`
+The plate ID is taken from `BatchDescription` verbatim on Intelliflex (e.g. `PLATE_05112026_RUN000`); the legacy MagPix `-Plate\d+` regex is kept as a fallback.
 
-### Plate Layout XLSX (optional)
+### Intelliflex input-file CSV (optional)
 
-Excel workbook with a "Sample list" sheet containing columns:
-- `well_number`: sequential well number
-- `well`: well position (e.g., A1, B2)
-- `sample_id`: sample identifier
-- `date` or `dt_visit`: visit date
+Plate input file (`*_inputfile.csv`) with columns `Location, Plate Type, Type, Description, Dilution`. Used to map wells to plate-well type and the on-plate barcode (`Description`). The pipeline merges this onto the parsed plate data via `parse_layout.build_layout()`.
 
-When provided, enriches specimen results with sample IDs and visit dates.
+### Barcode-map XLSX (optional)
+
+One of the `RENAMED-Box{N}_Uvira_*.xlsx` files (one per Box). Provides `Container Id`, `Barcode`, `ID` (patient ID) and others. The pipeline joins on `Barcode` to add `patient_id` and `box_id` to every specimen well. The picker plate-label uses the leading `Box\d+` portion of the Container Id (e.g. `Box1_Uvira_sera_2023` → `Box1`).
 
 ## QC Checks
 
-### 1. Bead Counts
+### 1. Bead counts
 
-- **Threshold**: minimum 30 beads per well-analyte pair
-- **Output**: count of flagged pairs, flagged details table, plate heatmap of median bead counts per well
-- **Interpretation**: low bead counts indicate aspiration issues or bead loss; affected results are unreliable
+Three-tier classification per well-analyte:
 
-### 2. Standard Curve Fitting (4-Parameter Logistic)
+- **Red**: count `<` `bead_count_min` (default 30). Bead loss / aspiration issue.
+- **Yellow**: `bead_count_min ≤` count `<` `bead_count_warn` (default 50).
+- **Green**: count `≥` `bead_count_warn`.
+
+The report renders the matrix as a Plotly heatmap with dotted vertical separators between well-type groups (Standards / Background / NC / specimen), and a summary card pair counting:
+
+- Antigens where `≥ problem_fraction_threshold` (default 0.20 = 20 %) of wells are red or yellow.
+- Specimens where `≥ problem_fraction_threshold` of antigens are red or yellow.
+
+Both axes export problem CSVs (`bead_problem_antigens_<plate>.csv`, `bead_problem_samples_<plate>.csv`).
+
+### 2. Standard curve fitting (4PL)
 
 Model: `y = d + (a - d) / (1 + (x / c)^b)`
 
-| Parameter | Meaning                                |
-|-----------|----------------------------------------|
-| a         | Minimum asymptote (high dilution → low MFI) |
-| b         | Hill slope                              |
-| c         | Inflection point (IC50)                 |
-| d         | Maximum asymptote (low dilution → high MFI) |
+| Parameter | Meaning |
+|-----------|---------|
+| a | Minimum asymptote (high dilution → low MFI) |
+| b | Hill slope |
+| c | Inflection point (IC50) |
+| d | Maximum asymptote (low dilution → high MFI) |
 
-- Fit independently for each antigen, per standard curve pool
-- Supports one or two standard curve pools per plate (e.g., ITM PC / ITM PC2); when both are present each is fit independently
-- Uses mean of PC duplicates at each dilution point
-- Fitted via `scipy.optimize.curve_fit` with bounds
-- Reports fit success/failure, all 4 parameters, and quality issues per analyte
+Fits run **on log10(MFI)** so the noise floor and the high-signal upper plateau contribute comparably to the residuals. Linear-residual fitting let the upper plateau dominate and pushed `d` to 0 on faint-signal antigens.
 
-**Fit quality checks** (all must pass for `fit_ok = True`):
+Implementation: `scipy.optimize.curve_fit` with bounds; degenerate-input guard (max-MFI floor, flat-response check); `maxfev=10000`.
 
-| Check          | Criterion                    | Rationale                                    |
-|----------------|------------------------------|----------------------------------------------|
-| R²             | ≥ 0.95                       | Goodness of fit                              |
-| IC50 (c)       | Within [min_dil/3, max_dil×3] | Inflection point within the tested dilution range |
-| Hill slope (b) | Between 0.3 and 5.0          | Prevents step-function or flat fits           |
-| Dynamic range  | max/min asymptote ≥ 3-fold   | Ensures adequate signal separation            |
+**Fit quality criteria** (all must pass for `fit_ok = True`):
 
-If any check fails, `fit_ok` is `False`, 1/RAU is not computed for that analyte, and the specific issues are reported in the QC table.
+| Check | Criterion | Rationale |
+|-------|-----------|-----------|
+| R² | ≥ 0.95 (log space) | Goodness of fit |
+| IC50 (c) | Within `[min_dil / 3, max_dil × 3]` | Inflection inside the tested dilution range |
+| Hill slope (b) | `0.3 ≤ b ≤ 5.0` | Prevents flat or step-function fits |
+| Dynamic range | `max / min asymptote ≥ 3×` | Adequate signal separation |
 
-### 3. PC Replicate Variability
+If the initial fit converges but fails any criterion, an optional **leave-one-out retry** drops a single standard point (any of the 10) and re-fits. The retry is gated on the initial scipy call having converged (i.e. `params is not None`) so all-zero / flat antigens don't burn 10× the fit time.
 
-- **Metric**: Coefficient of Variation (CV) between duplicate PC wells at each dilution
-- **Threshold**: CV ≤ 25%
-- **Skipped**: when only a single PC replicate is present
+### 3. Range classification per (specimen × antigen)
 
-### 4. Negative Control Monitoring
+For every specimen well × antigen the parsed MFI is compared to the antigen's LLOQ-MFI and ULOQ-MFI (derived from the fitted 4PL at the LLOQ / ULOQ dilutions). Status:
 
-- Reports mean MFI per analyte across NC wells
-- Tracked historically across plates for drift detection
+| Status | Meaning |
+|--------|---------|
+| `IN_RANGE` | `LLOQ-MFI ≤ MFI ≤ ULOQ-MFI` |
+| `BELOW_RANGE` | `MFI < LLOQ-MFI` |
+| `ABOVE_RANGE` | `MFI > ULOQ-MFI` |
+| `NO_FIT` | antigen has no usable reportable range |
 
-### 5. Kit Control Bead QC
+LLOQ / ULOQ are the highest / lowest dilutions whose Obs/Exp recovery sits inside `recovery_tolerance` (default ±30 %).
 
-| Control | Check                          | Threshold              |
-|---------|-------------------------------|------------------------|
-| NC bead | Non-specific binding          | MFI ≤ 150              |
-| ScG     | Sample addition verification   | MFI ≥ 10,000           |
-| FC      | Conjugate addition verification | MFI 2,000–5,000       |
-| IC      | Instrument consistency         | MFI 2,000–3,000        |
+The report renders the range table as:
+
+- **Standard-Curve Range Matrix** — (specimen × antigen) heatmap, colour-blind-safe palette (BELOW = blue, IN = teal, ABOVE = orange, NO_FIT = yellow).
+- **Range summary cards** — antigens / samples that exceed `problem_fraction_threshold` (default 20 %) below or above, with downloadable CSVs (`range_problem_antigens_*.csv`, `range_problem_samples_*.csv`).
+
+### 4. Background QC
+
+For each antigen we look across the Background wells (Row A `^Background`) and compute:
+
+- `n_wells` — number of contributing Background wells.
+- `mean_mfi` — mean MFI.
+- `sd_mfi` — sample SD (ddof = 1).
+- `cv = sd / mean` — coefficient of variation.
+- `max_mfi` — single highest Background MFI.
+- `cv_flag` — `cv > bg_cv_threshold` (default 0.25).
+- `max_flag` — `max_mfi > bg_max_mfi` (default 100).
+
+The section renders three summary cards (CV-flagged count, max-flagged count, antigens with data) and a per-antigen table. Exported as `background_qc_<plate>.csv`. Mirrors the legacy MPOX NC-bead checks, applied to the plate blanks when no named NC sample is present.
+
+### 5. Negative Control QC (when present)
+
+NC wells are identified by `well_type == "nc"` after sample-name pattern matching (`^NC` / `^Negative`, editable on the Settings page; distinct from Background). When present:
+
+- **Per-plate NC heatmap** — MFI per (NC well × antigen) on a Purples ramp.
+- **Cross-plate NC history heatmap** — mean NC MFI per antigen, one row per plate, with the current plate suffixed `(current)`. Populated from `nc_well_history.json` which accumulates per-(plate, well, analyte) rows on every run.
+- Exported as `nc_levels_<plate>.csv`.
+
+The Uvira pilot plate has only Background wells and no NC samples, so the heatmap renders an empty-state banner and a "to track NCs name a future well `NC1` / `Negative_pool`" hint.
 
 ## Computed Outputs
 
-### 1/RAU (Inverse Relative Antibody Units)
+### AU (Arbitrary Units)
 
-For each specimen well and antigen:
-1. Invert the fitted 4PL standard curve: given MFI, solve for the equivalent dilution factor
-2. Compute 1/RAU = 1 / dilution_factor
+For each specimen well and antigen the 4PL is inverted to find the equivalent dilution factor; AU is anchored so the first (lowest) standard dilution = 1000 AU:
 
-**Interpretation**: higher 1/RAU = more antibody. A specimen with 1/RAU = 0.02 produces the same signal as a 1:50 dilution of the positive control standard.
+```
+AU = (first_dilution / interpolated_dilution) × 1000
+```
 
-1/RAU is `NaN` when:
-- The 4PL fit failed quality checks for that analyte
-- The specimen MFI falls outside the standard curve range
+`au_censored` carries `"none" | "left" | "right"` depending on whether the interpolated value falls below LLOQ / above ULOQ.
+
+### Net MFI
+
+`net_mfi = mfi - mean(NC-bead MFI in same well)` clipped at 0. The "NC" analyte (MagPix kit bead) does not exist on Intelliflex Uvira plates, so `net_mfi` is `NaN` in practice on this assay; the column is kept for legacy compatibility.
 
 ## Reports
 
 ### Per-Plate HTML QC Report
 
-Self-contained HTML file with embedded interactive Plotly charts. Sections:
+Self-contained HTML (Plotly.js embedded inline, no CDN, fully offline). Two-column layout: sticky **TOC sidebar** on the left, scrollable content on the right. Every top-level section is a `<details>` block, `open` by default; the sidebar's hash links force-open the targeted section on click.
 
-1. **Plate Overview** — metadata table, well count summary (total, PC, NC, specimen)
-2. **Bead Counts** — flagged pairs count, flagged details table, plate heatmap
-3. **Standard Curves** — 4PL parameter table with fit quality issues, 2×4 grid of curve plots with historical overlays (grey) and specimen rug marks
-4. **PC Replicate Variability** — 2×4 panel plot of PC MFI across plates (by dilution), with CV bar chart and details table in a fold (conditional: only when duplicates present)
-5. **Negative Control Levels** — 2×4 panel plot of NC MFI across plates, with per-plate bar chart and details table in a fold
-6. **Kit Control Beads** — flagged wells, 1×4 bar chart per control bead
-7. **Specimen Results** — wide-format table with MFI and 1/RAU per antigen
+Section order:
 
-Each report includes a "Back to Menu" button linking to the main upload interface.
+1. **Plate Overview** — metadata table, panel size, Box ID(s) loaded, patient-ID resolution count, excluded-analyte banner.
+2. **Background QC** — three summary cards, plain-English explainer (Mean / %CV / Max checks with current thresholds inlined), per-antigen table.
+3. **Bead-Count Matrix** — four summary cards (antigens flagged, specimens flagged, red cells, yellow cells), Plotly heatmap with group separators, problem-antigen / problem-specimen / every-cell drill-down tables.
+4. **Standard-Curve Summary** — four range summary cards (antigens / specimens flagged BELOW or ABOVE), `Fit OK` explainer banner listing the four pass criteria, per-antigen 4PL parameter table, range-problem drill-down tables.
+5. **All Curves Overview** — small-multiples PNG grid of every 4PL fit, panel title coloured green/red/grey for `fit_ok` / fail / excluded.
+6. **Standard-Curve Picker** — antigen typeahead; two-panel Plotly figure:
+   - Left: standards + current 4PL fit (blue) + grey overlays of every prior plate's 4PL (each is a separate legend entry, click to toggle).
+   - Right: rug panel with two columns — "This plate" (specimens stacked, coloured by status) and "Past" (historical specimens in grey).
+   - Upper-right of the curve panel: a status-count box showing `BELOW n (%)`, `IN n (%)`, `ABOVE n (%)`, `NO_FIT n (%)` for the selected antigen. Refreshes on antigen pick via `Plotly.relayout("annotations", …)`.
+7. **Standard-Curve Range Matrix** — (specimen × antigen) heatmap with the CB-safe palette, out-of-range detail list.
+8. **Negative Control QC** — heatmap of NC MFI per (well × antigen) when present, cross-plate NC history heatmap when ≥ 1 plate has history.
+9. **Downloads** — grouped by section, every CSV exported with a one-line description.
 
-### Per-Plate Specimen CSV
+### Per-Plate CSVs
 
-Long-format CSV with columns: `well, sample_name, analyte, mfi, count, well_type, dilution, 1/rau`
-
-### Export All Data (Excel workbook)
-
-Combined data across all processed plates. Sheets:
-
-| Sheet                  | Contents                                          |
-|------------------------|--------------------------------------------------|
-| `specimens`            | All specimen results with `plate_id` column       |
-| `standard_curve_params`| 4PL parameters (a, b, c, d) per plate per analyte |
-| `standard_curve_data`  | Raw standard curve MFI data points                |
-| `nc_levels`            | Negative control MFI per plate per analyte        |
+| File | Contents |
+|------|----------|
+| `specimens_<plate>.csv` | Long-form per (well × analyte) with MFI, net MFI, AU, censoring flag |
+| `in_range_<plate>.csv` | Per (specimen × antigen) status (IN / BELOW / ABOVE / NO_FIT) + MFI bounds + optional layout columns (sample_id, barcode, patient_id, box_id) |
+| `pct_in_range_<plate>.csv` | Per-antigen rollup (`n_in_range`, `n_below_range`, `n_above_range`, `n_no_fit`, `pct_in_range`) |
+| `bead_problems_<plate>.csv` | Long-form red / yellow cell list |
+| `bead_problem_antigens_<plate>.csv` | Per-antigen problem fraction + list of problem wells |
+| `bead_problem_samples_<plate>.csv` | Per-specimen problem fraction + list of problem antigens |
+| `range_problem_antigens_<plate>.csv` | Per-antigen below / above fractions + lists of problem specimens |
+| `range_problem_samples_<plate>.csv` | Per-specimen below / above fractions + lists of problem antigens |
+| `background_qc_<plate>.csv` | Per-antigen Background mean / SD / %CV / max MFI + flags |
+| `nc_levels_<plate>.csv` | Per (NC well × antigen) MFI (written only when NC present) |
 
 ## Historical Tracking
 
-JSON files accumulate data across plates for trend monitoring:
+JSON files in `<output-dir>/history/` accumulate data across plates for trend monitoring:
 
-- `std_curve_history.json` — standard curve data points (plate_id, run_date, analyte, dilution, mfi)
-- `nc_history.json` — NC MFI per analyte per plate
-- `fit_history.json` — 4PL fit coefficients per plate per analyte
+| File | Dedup key | Used by |
+|------|-----------|---------|
+| `std_curve_history_PC.json` | `(plate_id, analyte, dilution)` | report (currently unused in the live picker but available for trend plots) |
+| `fit_history_PC.json` | `(plate_id, analyte)` | curve picker — past-plate 4PL overlays |
+| `specimen_mfi_history.json` | `(plate_id, well, analyte)` | curve picker — past-plate specimen rug |
+| `nc_well_history.json` | `(plate_id, well, analyte)` | NC QC — cross-plate NC heatmap |
 
-History is deduplicated on plate_id — reprocessing a plate overwrites its previous history entry. Historical standard curves appear as grey lines behind the current plate's curves in the report.
-
-When multiple standard curve pools are present, history files are scoped per pool (e.g., `std_curve_history_ITM_PC.json`, `std_curve_history_ITM_PC2.json`).
+Re-processing a plate overwrites its previous history entries (same dedup key). History is **per output directory**; to start fresh, delete the corresponding `history/` folder.
 
 ## Application Architecture
 
 ### Web Interface (Flask)
 
-- Local-only web server (binds to `127.0.0.1` on a random free port)
-- Browser auto-opens on launch
-- Upload form: one or more xPONENT CSVs + optional layout XLSX
-- Past reports table with view/download links and per-plate delete button
-- "Export All Data" button for combined Excel workbook
-- Delete plate: removes report, specimen CSV, history entries, and stored upload file
-- **Drag-and-drop plate reordering**: drag rows in the past reports table, then click "Save Order"
-- **Regenerate All**: re-runs the full pipeline for all plates in the saved order, rebuilding history trend plots in that order
-- "Quit Application" button for graceful shutdown
+- Local-only web server (binds to `127.0.0.1` on a random free port).
+- Browser auto-opens on launch.
+- Upload form: plate-run CSV (required) + input-file CSV + Box xlsx (both optional).
+- Past Reports table with view / download links and per-plate delete button.
+- **Regenerate All** — re-runs the full pipeline for every plate in the saved order, rebuilding history overlays.
+- Drag-and-drop plate reordering (vendored SortableJS) + Save Order.
+- Settings page for thresholds / patterns / panel / soft-flags (persisted to YAML, importable / exportable).
+- Quit Application button for graceful shutdown.
 
 ### Data Storage
 
-All persistent data stored in `~/mpox-luminex-qc-results/`:
-
 ```
-~/mpox-luminex-qc-results/
-  reports/            # Generated HTML QC reports
-  specimens/          # Per-plate specimen CSV files
-  history/            # JSON history files (accumulate across plates)
-  uploads/            # Uploaded CSV/layout files (kept for regeneration)
-  plate_registry.json # Plate order and upload file manifest
+~/uvira-luminex-qc-results/
+  <output dir>/                       # one per "Generate Report" run
+    QC_<plate_id>.html
+    *.csv                              # per-plate exports
+    history/
+      fit_history_PC.json
+      std_curve_history_PC.json
+      specimen_mfi_history.json
+      nc_well_history.json
+  uploads/                             # original CSVs / xlsx retained
+  plate_registry.json                  # plate order + upload manifest
+  config.yaml                          # user overrides (created on first save)
 ```
-
-`plate_registry.json` records each plate's CSV filename and sort order. Uploaded files are retained so that "Regenerate All" can re-run the pipeline without requiring re-upload.
 
 ### Distribution
 
-- **macOS**: `.app` bundle via PyInstaller (~128 MB)
-- **Windows**: folder with `.exe` via PyInstaller (build on Windows machine)
-- No Python installation required on target machine
-- No internet connection required (all assets embedded)
+- **macOS**: `.app` bundle via PyInstaller (`uvira-luminex-qc.spec`).
+- **Windows**: folder with `.exe` via PyInstaller (`uvira-luminex-qc-win.spec`, built on a Windows machine).
+- No Python installation required on target machine.
+- No internet connection required — Plotly.js is embedded inline on the first chart of each report.
 
 ## Technology Stack
 
@@ -225,9 +243,9 @@ All persistent data stored in `~/mpox-luminex-qc-results/`:
 |---------------|------------------------|--------------------------------|
 | Language      | Python 3.11+           | Core logic                     |
 | Data          | pandas ≥ 2.0           | Data manipulation              |
-| Curve fitting | scipy ≥ 1.11           | 4PL fitting (curve_fit)        |
-| Visualization | plotly ≥ 5.18          | Interactive HTML charts        |
+| Curve fitting | scipy ≥ 1.11           | 4PL fitting (`curve_fit` on log10 MFI) |
+| Visualization | plotly ≥ 5.18 + matplotlib | Interactive Plotly figures + the small-multiples PNG curve grid |
 | Templating    | Jinja2 ≥ 3.1           | HTML report generation         |
-| Excel I/O     | openpyxl ≥ 3.1         | Layout reading, Excel export   |
+| Excel I/O     | openpyxl ≥ 3.1         | Layout reading                 |
 | Web server    | Flask ≥ 3.0            | Local web UI                   |
 | Packaging     | PyInstaller ≥ 6.0      | Standalone executable          |

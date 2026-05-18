@@ -105,6 +105,16 @@ BEAD_COUNT_WARN = 50         # Yellow between MIN and WARN; green above
 PC_CV_THRESHOLD = 0.25       # Unused on Uvira (no PC duplicates) — kept for legacy callers
 RECOVERY_TOLERANCE = 0.30    # ±30% Obs/Exp recovery for standard curve points
 
+# Shared "≥ X% problematic" threshold used by the bead-count and range
+# summary cards. An antigen is "problem" when at least this fraction of
+# its wells (resp. samples) hits the problem state (red/yellow for bead
+# counts; BELOW_RANGE / ABOVE_RANGE for ranges).
+PROBLEM_FRACTION_THRESHOLD = 0.20
+
+# Background QC (used when no NC wells are present on the plate).
+BG_CV_THRESHOLD = 0.25       # Flag antigen if Background %CV > 25%
+BG_MAX_MFI = 100             # Flag antigen if max Background MFI > 100
+
 # --- Standard curve dilution series ---
 # 10-point 4-fold dilution from Std+Mabs row of the dilution-series screenshot.
 # Standard1 maps to STANDARD_DILUTIONS[0] (the most concentrated point) and
@@ -120,8 +130,16 @@ SPECIMEN_DEFAULT_DILUTION = 100  # placeholder; specimens are run at a single di
 # Intelliflex inputfile labels A1..A10 = "Standard" (sample names
 # "Standard1".."Standard10"), A11/A12 = "Background" (sample name
 # "Background"). Specimen sample names are FD-prefixed barcodes.
+#
+# Background wells are the plate-blank rows in A11/A12 — they capture
+# non-specific signal and are reported alongside the curve.  Negative
+# controls are a separate concept: a known seronegative sample that
+# should read below LLOQ on every antigen.  The pilot plate has no NC
+# wells, but the patterns are kept here so future plates can add one
+# by naming the well `NC1`, `Negative_pool`, etc.
 PC_PATTERNS = [r"^Standard\d+$"]
-NC_PATTERNS = [r"^Background"]
+BACKGROUND_PATTERNS = [r"^Background"]
+NC_PATTERNS = [r"^NC", r"^Negative"]
 
 # --- Structured defaults dict for settings.py ---
 
@@ -139,6 +157,7 @@ DEFAULTS = {
     },
     "well_classification": {
         "pc_patterns": PC_PATTERNS,
+        "background_patterns": BACKGROUND_PATTERNS,
         "nc_patterns": NC_PATTERNS,
     },
     "standard": {
@@ -154,6 +173,9 @@ DEFAULTS = {
         "pc_cv_threshold": PC_CV_THRESHOLD,
         "recovery_tolerance": RECOVERY_TOLERANCE,
         "drop_outlier": True,
+        "problem_fraction_threshold": PROBLEM_FRACTION_THRESHOLD,
+        "bg_cv_threshold": BG_CV_THRESHOLD,
+        "bg_max_mfi": BG_MAX_MFI,
     },
 }
 

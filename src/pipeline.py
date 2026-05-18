@@ -8,13 +8,16 @@ import pandas as pd
 
 from .parse_xponent import parse_xponent_csv
 from .classify import classify_wells
-from .qc_beads import qc_bead_counts
+from .qc_beads import qc_bead_counts, bead_problem_summary
+from .qc_nc import qc_nc_levels
+from .qc_background import qc_background_levels
 from .qc_standard_curve import (
     fit_standard_curves,
     compute_concentrations,
     compute_net_mfi,
     compute_in_range_table,
     compute_pct_in_range_per_antigen,
+    range_problem_summary,
 )
 from .settings import get_excluded_analytes
 from .qc_history import load_history, append_history, save_history
@@ -109,11 +112,35 @@ def run_pipeline(
     if "net_mfi" in data.columns:
         specimen_results["net_mfi"] = data.loc[specimen_results.index, "net_mfi"]
 
-    # 9b. Section-3 deliverables: per-(antigen × sample) IN/OUT-of-range
-    # table and the per-antigen "% samples in linear range" summary.
+    # 9b. Section-3 deliverables: per-(antigen × sample) range table
+    # and the per-antigen "% samples in linear range" summary.
     excluded_analytes = get_excluded_analytes(config)
     in_range = compute_in_range_table(data, fits, excluded_analytes=excluded_analytes)
     pct_in_range = compute_pct_in_range_per_antigen(in_range, excluded_analytes=excluded_analytes)
+
+    # 9c. NC well levels (empty when the plate has no NC samples).
+    nc_levels = qc_nc_levels(data)
+
+    # 9d. Section-8 summaries: "≥ X% problematic" counts for bead-count
+    # and range tables, plus Background QC.
+    qc_thresh = config.get("qc_thresholds", {})
+    problem_frac = float(qc_thresh.get("problem_fraction_threshold", 0.20))
+    well_types_map = (
+        data.drop_duplicates("well").set_index("well")["well_type"].to_dict()
+        if "well_type" in data.columns else {}
+    )
+    bead_summary = bead_problem_summary(
+        bead_qc, well_types=well_types_map, fraction_threshold=problem_frac
+    )
+    range_summary = range_problem_summary(
+        in_range, fraction_threshold=problem_frac, excluded_analytes=excluded_analytes
+    )
+    bg_levels = qc_background_levels(
+        data,
+        cv_threshold=float(qc_thresh.get("bg_cv_threshold", 0.25)),
+        max_mfi_threshold=float(qc_thresh.get("bg_max_mfi", 100)),
+        excluded_analytes=excluded_analytes,
+    )
 
     # 10. Plate summary
     summary = plate_summary(data)
@@ -134,12 +161,46 @@ def run_pipeline(
 
         fit_path = Path(history_dir) / f"fit_history_{pool_slug}.json"
         h = load_history(fit_path)
-        new_fit = _build_fit_history(metadata, fits[pool_name], pool_name)
+        # Capture box(es) on this plate so the picker legend can compose
+        # a labelled plate name (e.g. "PLATE_05112026_RUN000 · Box1").
+        box_ids_str = ""
+        if "box_id" in data.columns:
+            boxes = sorted({b for b in data["box_id"].dropna().astype(str).unique() if b})
+            box_ids_str = ",".join(boxes)
+        new_fit = _build_fit_history(metadata, fits[pool_name], pool_name, box_ids=box_ids_str)
         if not new_fit.empty:
             h = append_history(h, new_fit, ["plate_id", "analyte"])
             save_history(h, fit_path)
         history_fit[pool_name] = h
-    history_nc = None  # NC kit-bead history no longer applicable to Uvira
+    # Specimen-MFI history: one row per (plate × specimen well × antigen)
+    # with the IN_RANGE / BELOW_RANGE / ABOVE_RANGE / NO_FIT status from
+    # the current run. Used by the curve picker to render a per-antigen
+    # historical rug in grey alongside the current plate.
+    spec_hist_path = Path(history_dir) / "specimen_mfi_history.json"
+    spec_hist_existing = load_history(spec_hist_path)
+    new_spec = _build_specimen_mfi_history(metadata, in_range)
+    if not new_spec.empty:
+        history_specimens = append_history(
+            spec_hist_existing, new_spec, ["plate_id", "well", "analyte"]
+        )
+        save_history(history_specimens, spec_hist_path)
+    else:
+        history_specimens = spec_hist_existing
+
+    # NC well history: persist mean NC MFI per (plate × well × antigen)
+    # so we can spot cross-plate drift when a future plate has an NC
+    # sample. The legacy MagPix kit-bead "NC" check does not apply; this
+    # is the named-NC-sample history.
+    nc_history_path = Path(history_dir) / "nc_well_history.json"
+    history_nc_existing = load_history(nc_history_path)
+    new_nc = _build_nc_history(metadata, nc_levels)
+    if not new_nc.empty:
+        history_nc = append_history(
+            history_nc_existing, new_nc, ["plate_id", "well", "analyte"]
+        )
+        save_history(history_nc, nc_history_path)
+    else:
+        history_nc = history_nc_existing
 
     # 9. Generate the Uvira QC report.
     report_name = f"QC_{metadata['plate_id']}.html"
@@ -154,8 +215,11 @@ def run_pipeline(
         summary=summary,
         in_range=in_range,
         pct_in_range=pct_in_range,
+        nc_levels=nc_levels,
         history_std=history_std,
         history_nc=history_nc,
+        history_fit=history_fit,
+        history_specimens=history_specimens,
         output_path=report_path,
         plate_order=plate_order,
         config=config,
@@ -211,6 +275,44 @@ def run_pipeline(
             output_dir / f"pct_in_range_{metadata['plate_id']}.csv",
             index=False, encoding="utf-8",
         )
+    # NC well levels (one row per NC well × analyte). Only written when
+    # the plate actually has NC wells.
+    if nc_levels is not None and not nc_levels.empty:
+        nc_levels.to_csv(
+            output_dir / f"nc_levels_{metadata['plate_id']}.csv",
+            index=False, encoding="utf-8",
+        )
+    # Background QC (mean / SD / CV / max-flag per antigen). Written
+    # whenever the plate has Background wells (the pilot always does).
+    if bg_levels is not None and not bg_levels.empty:
+        bg_levels.to_csv(
+            output_dir / f"background_qc_{metadata['plate_id']}.csv",
+            index=False, encoding="utf-8",
+        )
+    # Section-8 problem CSVs: per-antigen and per-sample summaries for
+    # bead-count and range. One file per axis × QC so users can drill in
+    # without scrolling through the report.
+    plate_id = metadata["plate_id"]
+    if not bead_summary["antigen_summary"].empty:
+        bead_summary["antigen_summary"].to_csv(
+            output_dir / f"bead_problem_antigens_{plate_id}.csv",
+            index=False, encoding="utf-8",
+        )
+    if not bead_summary["sample_summary"].empty:
+        bead_summary["sample_summary"].to_csv(
+            output_dir / f"bead_problem_samples_{plate_id}.csv",
+            index=False, encoding="utf-8",
+        )
+    if not range_summary["antigen_summary"].empty:
+        range_summary["antigen_summary"].to_csv(
+            output_dir / f"range_problem_antigens_{plate_id}.csv",
+            index=False, encoding="utf-8",
+        )
+    if not range_summary["sample_summary"].empty:
+        range_summary["sample_summary"].to_csv(
+            output_dir / f"range_problem_samples_{plate_id}.csv",
+            index=False, encoding="utf-8",
+        )
     # Section-4 deliverable: bead-count problem list (red + yellow cells).
     bead_problems = bead_qc.get("problems")
     if bead_problems is not None and not bead_problems.empty:
@@ -243,13 +345,54 @@ def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> 
     return pd.DataFrame(rows)
 
 
-def _build_fit_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> pd.DataFrame:
+def _build_specimen_mfi_history(metadata: dict, in_range: pd.DataFrame) -> pd.DataFrame:
+    """Per-(plate × specimen well × antigen) MFI rows for the curve-picker rug.
+
+    Carries ``status`` (IN_RANGE / BELOW_RANGE / ABOVE_RANGE / NO_FIT)
+    and ``box_id`` so the picker can compose human-readable plate
+    labels in the legend (e.g. ``PLATE_05112026_RUN000 · Box1``).
+    """
+    if in_range is None or in_range.empty:
+        return pd.DataFrame()
+    keep = [c for c in ("well", "sample_name", "analyte", "mfi", "status", "box_id") if c in in_range.columns]
+    sub = in_range[keep].copy()
+    sub["plate_id"] = metadata["plate_id"]
+    sub["run_date"] = metadata.get("run_date", "")
+    # Drop NaN MFI rows — nothing to plot.
+    sub = sub.dropna(subset=["mfi"])
+    return sub[["plate_id", "run_date"] + keep]
+
+
+def _build_nc_history(metadata: dict, nc_levels: pd.DataFrame) -> pd.DataFrame:
+    """Build NC well history entries from the current plate's NC MFI.
+
+    One row per (plate, well, analyte). Empty if the plate has no NC
+    wells. Re-running the same plate overwrites prior rows because the
+    dedup key in ``append_history`` is ``(plate_id, well, analyte)``.
+    """
+    if nc_levels is None or nc_levels.empty:
+        return pd.DataFrame()
+    rows = []
+    for r in nc_levels.itertuples(index=False):
+        rows.append({
+            "plate_id": metadata["plate_id"],
+            "run_date": metadata.get("run_date", ""),
+            "well": r.well,
+            "sample_name": r.sample_name,
+            "analyte": r.analyte,
+            "mfi": float(r.mfi) if pd.notna(r.mfi) else None,
+        })
+    return pd.DataFrame(rows)
+
+
+def _build_fit_history(metadata: dict, pool_fits: dict, pool_name: str = "", box_ids: str = "") -> pd.DataFrame:
     """Build fit coefficient history entries for one pool."""
     rows = []
     for analyte, fit in pool_fits.items():
         row = {
             "plate_id": metadata["plate_id"],
             "run_date": metadata.get("run_date", ""),
+            "box_ids": box_ids,
             "analyte": analyte,
             "fit_ok": fit["fit_ok"],
         }

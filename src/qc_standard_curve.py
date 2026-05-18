@@ -469,10 +469,11 @@ def compute_net_mfi(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Section 3 — per-(antigen × sample) IN/OUT-of-range table & summary metric.
-# Uvira-specific: a specimen MFI is "in range" if it falls between the
-# LLOQ MFI and ULOQ MFI of that antigen's standard curve. Below LLOQ and
-# above ULOQ both collapse to OUT_OF_RANGE (decision #3 in UVIRA_TODO.md).
+# Section 3 — per-(antigen × sample) range table & summary metric.
+# A specimen MFI is "in range" if it falls between the LLOQ MFI and ULOQ
+# MFI of that antigen's standard curve.  Out-of-range specimens are split
+# into BELOW_RANGE (MFI < LLOQ-MFI) and ABOVE_RANGE (MFI > ULOQ-MFI) so
+# users can tell which tail of the curve they're falling off.
 # ---------------------------------------------------------------------------
 
 
@@ -516,9 +517,10 @@ def compute_in_range_table(
     Returns DataFrame with columns:
         well, sample_name, analyte, mfi, mfi_lloq, mfi_uloq, status, excluded
 
-    Where ``status`` ∈ {"IN_RANGE", "OUT_OF_RANGE", "NO_FIT"}. NO_FIT
-    occurs when the antigen's standard curve had no usable reportable
-    range. Both below-LLOQ and above-ULOQ collapse to OUT_OF_RANGE.
+    Where ``status`` ∈ {"IN_RANGE", "BELOW_RANGE", "ABOVE_RANGE",
+    "NO_FIT"}. NO_FIT occurs when the antigen's standard curve had no
+    usable reportable range; BELOW_RANGE means the specimen MFI is
+    under the LLOQ-MFI; ABOVE_RANGE means it sits above the ULOQ-MFI.
     Optional sample-id columns (``sample_id``, ``patient_id``,
     ``barcode``, ``box_id``) are forwarded when present in ``df``.
     """
@@ -554,10 +556,12 @@ def compute_in_range_table(
         lo, hi = bounds.get(analyte, (None, None))
         if lo is None or hi is None or np.isnan(mfi):
             status = "NO_FIT"
-        elif lo <= mfi <= hi:
-            status = "IN_RANGE"
+        elif mfi < lo:
+            status = "BELOW_RANGE"
+        elif mfi > hi:
+            status = "ABOVE_RANGE"
         else:
-            status = "OUT_OF_RANGE"
+            status = "IN_RANGE"
         row = {
             "well": r.well,
             "sample_name": r.sample_name,
@@ -581,38 +585,144 @@ def compute_pct_in_range_per_antigen(
     """Summarize the IN/OUT table to one row per antigen.
 
     Returns DataFrame with columns:
-        analyte, n_samples, n_in_range, n_out_of_range, n_no_fit,
-        pct_in_range, excluded
+        analyte, n_samples, n_in_range, n_below_range, n_above_range,
+        n_no_fit, pct_in_range, excluded
 
     ``pct_in_range`` is ``n_in_range / n_samples * 100`` (0 if no
     samples). NO_FIT samples are counted in ``n_samples`` denominator.
     Excluded analytes are still tabulated; the report layer mutes them.
     """
     excluded = set(excluded_analytes or [])
+    cols = [
+        "analyte", "n_samples", "n_in_range", "n_below_range",
+        "n_above_range", "n_no_fit", "pct_in_range", "excluded",
+    ]
     if in_range.empty:
-        return pd.DataFrame(columns=[
-            "analyte", "n_samples", "n_in_range", "n_out_of_range",
-            "n_no_fit", "pct_in_range", "excluded",
-        ])
+        return pd.DataFrame(columns=cols)
 
     grouped = in_range.groupby("analyte", sort=False)["status"].value_counts().unstack(fill_value=0)
-    for col in ("IN_RANGE", "OUT_OF_RANGE", "NO_FIT"):
+    for col in ("IN_RANGE", "BELOW_RANGE", "ABOVE_RANGE", "NO_FIT"):
         if col not in grouped.columns:
             grouped[col] = 0
     summary = pd.DataFrame({
         "analyte": grouped.index,
         "n_in_range": grouped["IN_RANGE"].astype(int).values,
-        "n_out_of_range": grouped["OUT_OF_RANGE"].astype(int).values,
+        "n_below_range": grouped["BELOW_RANGE"].astype(int).values,
+        "n_above_range": grouped["ABOVE_RANGE"].astype(int).values,
         "n_no_fit": grouped["NO_FIT"].astype(int).values,
     }).reset_index(drop=True)
-    summary["n_samples"] = summary["n_in_range"] + summary["n_out_of_range"] + summary["n_no_fit"]
+    summary["n_samples"] = (
+        summary["n_in_range"]
+        + summary["n_below_range"]
+        + summary["n_above_range"]
+        + summary["n_no_fit"]
+    )
     summary["pct_in_range"] = np.where(
         summary["n_samples"] > 0,
         100.0 * summary["n_in_range"] / summary["n_samples"],
         0.0,
     ).round(1)
     summary["excluded"] = summary["analyte"].isin(excluded)
-    return summary[[
-        "analyte", "n_samples", "n_in_range", "n_out_of_range",
-        "n_no_fit", "pct_in_range", "excluded",
-    ]]
+    return summary[cols]
+
+
+def range_problem_summary(
+    in_range: pd.DataFrame,
+    fraction_threshold: float = 0.20,
+    excluded_analytes: list[str] | None = None,
+) -> dict:
+    """Per-antigen / per-sample summary of BELOW_RANGE and ABOVE_RANGE.
+
+    An antigen is "below-range problem" when ≥ ``fraction_threshold`` of
+    its specimens are BELOW_RANGE; same logic for above-range. Samples
+    are evaluated against their antigen-level results (NO_FIT cells are
+    counted in the denominator).
+
+    Returns dict with:
+        antigen_summary: one row per analyte with n_below / n_above /
+            frac_below / frac_above / below_flag / above_flag /
+            problem_wells_below / problem_wells_above / excluded.
+        sample_summary: one row per specimen well with n_below /
+            n_above / frac_below / frac_above / below_flag /
+            above_flag / problem_analytes_below / problem_analytes_above.
+        n_below_antigens / n_above_antigens / n_below_samples /
+            n_above_samples: scalar counts.
+        threshold: the fraction used.
+    """
+    excluded = set(excluded_analytes or [])
+    empty = pd.DataFrame()
+    base = {
+        "antigen_summary": empty, "sample_summary": empty,
+        "n_below_antigens": 0, "n_above_antigens": 0,
+        "n_below_samples": 0, "n_above_samples": 0,
+        "threshold": fraction_threshold,
+    }
+    if in_range is None or in_range.empty:
+        return base
+
+    # Per antigen
+    ag = (
+        in_range.groupby("analyte", sort=False)
+        .agg(
+            n_samples=("well", "nunique"),
+            n_below=("status", lambda s: int((s == "BELOW_RANGE").sum())),
+            n_above=("status", lambda s: int((s == "ABOVE_RANGE").sum())),
+        )
+        .reset_index()
+    )
+    ag["frac_below"] = (ag["n_below"] / ag["n_samples"]).round(4)
+    ag["frac_above"] = (ag["n_above"] / ag["n_samples"]).round(4)
+    ag["below_flag"] = ag["frac_below"] >= fraction_threshold
+    ag["above_flag"] = ag["frac_above"] >= fraction_threshold
+    ag["excluded"] = ag["analyte"].isin(excluded)
+
+    # Detail strings ("FD123 (B1);FD124 (B2);…") per analyte
+    detail_below: dict[str, list[str]] = {}
+    detail_above: dict[str, list[str]] = {}
+    for r in in_range.itertuples(index=False):
+        if r.status == "BELOW_RANGE":
+            detail_below.setdefault(r.analyte, []).append(
+                f"{getattr(r, 'sample_name', '')} ({r.well})".strip()
+            )
+        elif r.status == "ABOVE_RANGE":
+            detail_above.setdefault(r.analyte, []).append(
+                f"{getattr(r, 'sample_name', '')} ({r.well})".strip()
+            )
+    ag["problem_samples_below"] = ag["analyte"].map(lambda a: ";".join(detail_below.get(a, [])))
+    ag["problem_samples_above"] = ag["analyte"].map(lambda a: ";".join(detail_above.get(a, [])))
+
+    # Per sample (well)
+    sm = (
+        in_range.groupby(["well"], sort=False)
+        .agg(
+            sample_name=("sample_name", "first"),
+            n_analytes=("analyte", "nunique"),
+            n_below=("status", lambda s: int((s == "BELOW_RANGE").sum())),
+            n_above=("status", lambda s: int((s == "ABOVE_RANGE").sum())),
+        )
+        .reset_index()
+    )
+    sm["frac_below"] = (sm["n_below"] / sm["n_analytes"]).round(4)
+    sm["frac_above"] = (sm["n_above"] / sm["n_analytes"]).round(4)
+    sm["below_flag"] = sm["frac_below"] >= fraction_threshold
+    sm["above_flag"] = sm["frac_above"] >= fraction_threshold
+
+    sample_detail_below: dict[str, list[str]] = {}
+    sample_detail_above: dict[str, list[str]] = {}
+    for r in in_range.itertuples(index=False):
+        if r.status == "BELOW_RANGE":
+            sample_detail_below.setdefault(r.well, []).append(r.analyte)
+        elif r.status == "ABOVE_RANGE":
+            sample_detail_above.setdefault(r.well, []).append(r.analyte)
+    sm["problem_analytes_below"] = sm["well"].map(lambda w: ";".join(sample_detail_below.get(w, [])))
+    sm["problem_analytes_above"] = sm["well"].map(lambda w: ";".join(sample_detail_above.get(w, [])))
+
+    return {
+        "antigen_summary": ag,
+        "sample_summary": sm,
+        "n_below_antigens": int(ag["below_flag"].sum()),
+        "n_above_antigens": int(ag["above_flag"].sum()),
+        "n_below_samples": int(sm["below_flag"].sum()),
+        "n_above_samples": int(sm["above_flag"].sum()),
+        "threshold": fraction_threshold,
+    }

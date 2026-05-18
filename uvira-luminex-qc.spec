@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec file for MPXV Luminex QC Tool."""
+"""PyInstaller spec file for Uvira Luminex QC Tool — macOS build."""
 
 from pathlib import Path
 
@@ -31,9 +31,8 @@ a = Analysis(
         "src.classify",
         "src.qc_beads",
         "src.qc_standard_curve",
-        "src.qc_replicates",
         "src.qc_nc",
-        "src.qc_kit_controls",
+        "src.qc_background",
         "src.qc_history",
         "src.plate_summary",
         "src.report",
@@ -48,6 +47,9 @@ a = Analysis(
         "plotly.subplots",
         "plotly.io",
         "plotly.offline",
+        "matplotlib",
+        "matplotlib.pyplot",
+        "matplotlib.backends.backend_agg",
         "jinja2",
         "openpyxl",
         "flask",
@@ -59,7 +61,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "notebook", "IPython"],
+    excludes=["tkinter", "notebook", "IPython"],
     noarchive=False,
 )
 
@@ -70,7 +72,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="MPXV-Luminex-QC",
+    name="Uvira-Luminex-QC",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -86,15 +88,15 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="MPXV-Luminex-QC",
+    name="Uvira-Luminex-QC",
 )
 
 # macOS .app bundle — no Terminal window on launch
 app = BUNDLE(
     coll,
-    name="MPXV Luminex QC.app",
+    name="Uvira Luminex QC.app",
     icon=str(project_root / "assets" / "app_icon.icns"),
-    bundle_identifier="com.mpxv.luminex-qc",
+    bundle_identifier="ch.unige.uvira-luminex-qc",
     info_plist={
         "LSBackgroundOnly": False,
         "NSHighResolutionCapable": True,

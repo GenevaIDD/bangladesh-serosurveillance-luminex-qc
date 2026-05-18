@@ -104,10 +104,18 @@
   <label>Positive Control (Standard) Patterns <span class="hint">(regex, comma-separated)</span></label>
   <input type="text" name="pc_patterns" value="{{ config.well_classification.pc_patterns | join(', ') }}">
 
-  <label>Negative Control (Background) Patterns <span class="hint">(regex, comma-separated)</span></label>
+  <label>Background Patterns <span class="hint">(regex, comma-separated; plate blanks like Row-A Background wells)</span></label>
+  <input type="text" name="background_patterns" value="{{ config.well_classification.get('background_patterns', ['^Background']) | join(', ') }}">
+
+  <label>Negative Control Patterns <span class="hint">(regex, comma-separated; named NC sample, separate from Background)</span></label>
   <input type="text" name="nc_patterns" value="{{ config.well_classification.nc_patterns | join(', ') }}">
 
-  <p style="font-size:0.85em; color:#888;">Everything not matching PC or NC patterns is treated as a specimen.</p>
+  <p style="font-size:0.85em; color:#888;">
+    Background and NC are distinct concepts: Background wells are the
+    plate blanks (reported alongside the curve); NC wells are a named
+    seronegative sample that gets its own QC section. Anything not
+    matching any pattern is treated as a specimen.
+  </p>
 </div>
 
 <!-- Standard Curve -->
@@ -150,6 +158,28 @@
       <input type="number" name="recovery_tolerance" value="{{ config.qc_thresholds.recovery_tolerance }}" step="0.01" min="0" max="1">
     </div>
   </div>
+
+  <div class="row" style="margin-top:14px;">
+    <div class="field">
+      <label>Problem-fraction Threshold <span class="hint">(0&ndash;1; default 0.20 = 20%)</span></label>
+      <input type="number" name="problem_fraction_threshold" value="{{ config.qc_thresholds.get('problem_fraction_threshold', 0.20) }}" step="0.01" min="0" max="1">
+    </div>
+    <div class="field">
+      <label>Background %CV Threshold <span class="hint">(flag antigen if Background %CV exceeds)</span></label>
+      <input type="number" name="bg_cv_threshold" value="{{ config.qc_thresholds.get('bg_cv_threshold', 0.25) }}" step="0.01" min="0" max="5">
+    </div>
+    <div class="field">
+      <label>Background Max-MFI Flag <span class="hint">(flag antigen if any Background MFI exceeds)</span></label>
+      <input type="number" name="bg_max_mfi" value="{{ config.qc_thresholds.get('bg_max_mfi', 100) }}" min="0">
+    </div>
+  </div>
+  <p style="font-size:0.85em; color:#888; margin-top:4px;">
+    The problem-fraction threshold is the cutoff used in the bead-count
+    and range summary cards: an antigen is flagged when at least this
+    fraction of its wells (resp. samples) is problematic. Same number is
+    applied to bead-count problems and to BELOW_RANGE / ABOVE_RANGE
+    counts.
+  </p>
 
   <label style="margin-top:20px;">
     <input type="checkbox" name="drop_outlier" value="true"

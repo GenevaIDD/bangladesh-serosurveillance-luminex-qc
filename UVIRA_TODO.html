@@ -696,6 +696,59 @@ IN/OUT-of-range matrix populate correctly.</label></li>
 against <code>RENAMED-Box1_Uvira_sera_2023.xlsx</code>.</label></li>
 </ul>
 </div>
+<div id="usability-cross-plate-features-session-6" class="section level3">
+<h3>8. Usability + cross-plate features (Session 6+)</h3>
+<p>User requests (2026-05-18) after reviewing the first end-to-end Uvira
+report:</p>
+<ul class="task-list">
+<li><label><input type="checkbox" checked></input><strong>Report
+navigation.</strong> Sticky left sidebar with section links (TOC) plus
+per-section <code>&lt;details&gt;</code> collapse. Done Session
+6.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Bead-Count Matrix
+— summary cards</strong> + downloadable
+<code>bead_problem_antigens_&lt;plate&gt;.csv</code> /
+<code>bead_problem_samples_&lt;plate&gt;.csv</code>. Threshold shared
+across bead + range summaries (Settings:
+<code>problem_fraction_threshold</code>, default 0.20). Done Session
+6.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Bead-Count Matrix
+— group separators.</strong> Dotted vertical lines between Standards /
+Background / NC / specimen columns, derived from <code>well_type</code>.
+Done Session 6.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Standard-Curve
+summary cards</strong> + downloadable
+<code>range_problem_antigens_&lt;plate&gt;.csv</code> /
+<code>range_problem_samples_&lt;plate&gt;.csv</code>. Four cards:
+antigens below / above + samples below / above. Done Session
+6.</label></li>
+<li><label><input type="checkbox"></input><strong>Curve Picker — rug
+plot.</strong> Add right-edge specimen MFI ticks colored by BELOW_RANGE
+/ IN_RANGE / ABOVE_RANGE. Historical specimens from earlier plates
+appear in grey so curve drift across runs is visible. <strong>Next
+session</strong> — substantial work, needs a new specimen-MFI history
+file.</label></li>
+<li><label><input type="checkbox"></input><strong>Curve Picker — historical
+curves.</strong> Overlay grey curves from every previous plate alongside
+the current 4PL fit, sourced from
+<code>fit_history_&lt;pool&gt;.json</code>. Decision #9: include all
+historical plates. <strong>Next session.</strong></label></li>
+<li><label><input type="checkbox" checked></input><strong>Range Matrix —
+CB-friendly recolor.</strong> Palette: BELOW = #4477AA blue, IN =
+#44AA99 teal, ABOVE = #EE7733 orange, NO_FIT = #CCBB44 yellow (Paul Tol
+/ Okabe-Ito). Grey reserved for the historical overlays now. Done
+Session 6.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Background
+QC.</strong> New <code>qc_background.py</code> module computing
+<code>n_wells</code>, <code>mean_mfi</code>, <code>sd_mfi</code>,
+<code>cv</code>, <code>max_mfi</code>, <code>cv_flag</code>,
+<code>max_flag</code> per antigen. Renders as the Background QC section
+with summary cards and a per-antigen table; exported as
+<code>background_qc_&lt;plate&gt;.csv</code>. Settings:
+<code>bg_cv_threshold</code> (default 0.25 = 25%),
+<code>bg_max_mfi</code> (default 100). Done Session 6.</label></li>
+</ul>
+</div>
 <div id="packaging-docs" class="section level3">
 <h3>7. Packaging &amp; docs</h3>
 <ul class="task-list">
@@ -739,15 +792,56 @@ muted, never dropped).</td>
 </tr>
 <tr class="odd">
 <td>3</td>
-<td>IN/OUT-of-range table is <strong>strictly binary</strong>.
-Below-LLOQ and above-ULOQ both collapse to “OUT OF RANGE”.</td>
-<td>2026-05-13</td>
+<td><del>Strictly binary IN/OUT-of-range</del> <strong>Reversed</strong>
+in Session 5: split into BELOW_RANGE / IN_RANGE / ABOVE_RANGE (plus
+NO_FIT).</td>
+<td>2026-05-13 / 2026-05-18</td>
 </tr>
 <tr class="even">
 <td>4</td>
 <td>Barcode-map workflow: <strong>manual upload</strong> at submit time
 (no auto-matching by filename / BatchDescription).</td>
 <td>2026-05-13</td>
+</tr>
+<tr class="odd">
+<td>5</td>
+<td>Background and NC are <strong>separate</strong> well types.
+<code>^Background</code> = plate blank (A11/A12); <code>^NC</code> /
+<code>^Negative</code> = the QC’d negative-control sample (not present
+on the pilot plate).</td>
+<td>2026-05-18</td>
+</tr>
+<tr class="even">
+<td>6</td>
+<td>NC QC follows the legacy MPOX behaviour: render NC MFI per (well ×
+antigen) as a heatmap, <strong>no automatic flagging</strong>. Threshold
+logic deferred.</td>
+<td>2026-05-18</td>
+</tr>
+<tr class="odd">
+<td>7</td>
+<td>Report navigation: <strong>sticky left sidebar</strong> with section
+links + collapsible sections.</td>
+<td>2026-05-18</td>
+</tr>
+<tr class="even">
+<td>8</td>
+<td>One <strong>shared <code>problem_fraction_threshold</code></strong>
+(default 0.20) drives all the “≥X% problematic” summary counts.</td>
+<td>2026-05-18</td>
+</tr>
+<tr class="odd">
+<td>9</td>
+<td>Curve-picker historical overlays show <strong>all</strong> prior
+plates (no N-most-recent cap).</td>
+<td>2026-05-18</td>
+</tr>
+<tr class="even">
+<td>10</td>
+<td>Background QC runs <strong>mean + %CV + max-MFI flag</strong> per
+antigen — all three legacy MPOX metrics, applied to Background wells
+when no NC is present.</td>
+<td>2026-05-18</td>
 </tr>
 </tbody>
 </table>
@@ -760,6 +854,287 @@ Below-LLOQ and above-ULOQ both collapse to “OUT OF RANGE”.</td>
 </div>
 <div id="session-history" class="section level2">
 <h2>Session History</h2>
+<div id="session-7b-2026-05-18-continuation" class="section level3">
+<h3>Session 7b — 2026-05-18 (continuation)</h3>
+<p>Small follow-up: ported the legacy MPOX cross-plate NC history so
+that when a future plate has a named NC sample, drift across runs is
+visible in the report.</p>
+<p><strong>Files edited:</strong> - <code>src/pipeline.py</code> — - New
+helper <code>_build_nc_history(metadata, nc_levels)</code> returns one
+row per (<code>plate_id</code>, <code>well</code>, <code>analyte</code>)
+with the NC well’s MFI. - <code>run_pipeline</code> now loads
+<code>&lt;history_dir&gt;/nc_well_history.json</code>, appends the
+current plate’s NC rows (dedup on <code>[plate_id, well, analyte]</code>
+via <code>append_history</code>), and saves back. When the current plate
+has no NC wells the existing history is still loaded and passed through
+so the report can show prior plates. - <code>history_nc</code> now flows
+through to <code>generate_report</code> as a <code>DataFrame</code>
+instead of <code>None</code>. - <code>src/report.py</code> — new
+<code>_make_nc_history_plot(history_nc,   current_plate_id)</code>:
+aggregates to per-(plate × analyte) mean MFI and renders a Purples
+heatmap. Plates ordered by <code>run_date</code> when present; the
+current plate gets a <code>(current)</code> suffix on its row label.
+Empty / no-history → empty string, template hides the subsection. Wired
+into <code>generate_report</code> via <code>nc_history_html</code> and
+<code>nc_history_present</code>. - <code>templates/report.html</code> —
+added an “NC MFI across plates” subsection inside the NC QC section,
+rendered only when <code>nc_history_present</code>. NC explainer banner
+gained a fifth bullet noting that NC MFI is persisted to a cross-plate
+history JSON.</p>
+<p><strong>Smoke tests:</strong> - Real pilot plate (no NC wells): JSON
+not written; history section correctly hidden in the report. No
+regression. - Synthesised two test plates (<code>TEST_PLATE_A</code>,
+<code>TEST_PLATE_B</code>) by monkey-patching
+<code>parse_xponent_csv</code> to relabel <code>A11</code> as
+<code>NC_pool</code> and to inject a small drift on RES_* antigens for
+Plate B. After two runs: - <code>nc_well_history.json</code> contains
+400 rows (200 antigens × 2 plates), no duplicates. - Plate B’s report
+contains “NC MFI across plates”, <code>fig-nc-history</code>,
+<code>TEST_PLATE_A</code>, and <code>TEST_PLATE_B (current)</code>. -
+The injected drift surfaces as a per-plate mean MFI bump (132.4 → 141.4
+across the panel).</p>
+</div>
+<div id="session-7-2026-05-18" class="section level3">
+<h3>Session 7 — 2026-05-18</h3>
+<p>Polish pass on the Session-6 report. Several rounds of user feedback
+on copy clarity, section order, and the curve picker UI.</p>
+<p><strong>Files edited:</strong> - <code>src/report.py</code> — -
+<code>_make_bead_heatmap</code> group separators now drawn as
+<code>add_shape(yref=&quot;paper&quot;, y0=0, y1=1.08)</code> so the dotted lines
+extend above the heatmap into the x-tick label band instead of stopping
+at the plot edge. - <code>_make_curve_picker</code> rewritten: the
+Plotly <code>updatemenus</code> dropdown was removed entirely (it
+duplicated the new typeahead). An HTML5
+<code>&lt;datalist&gt;</code>-backed <code>&lt;input&gt;</code> sits
+above the figure; a tiny JS shim reads a per-antigen
+<code>{vis, title}</code> lookup and calls
+<code>Plotly.update(&quot;fig-curve-picker&quot;, …)</code> on
+<code>change</code>/<code>input</code>. The lookup is embedded as a JS
+object literal with <code>&lt;/</code> escaped, so nothing leaks out of
+the <code>&lt;script&gt;</code> block. -
+<code>templates/report.html</code> — - <strong>Section reorder.</strong>
+New order: Plate Overview → Negative Control QC → Background QC →
+Bead-Count Matrix → Standard-Curve Summary → All Curves Overview →
+Standard-Curve Picker → Range Matrix → Downloads. NC + BG QC moved up
+from the bottom; sidebar TOC mirrors the new order. - “Negative-Control
+Levels” renamed to <strong>Negative Control QC</strong>. - Every
+top-level <code>&lt;details class=&quot;section&quot;&gt;</code> now has the
+<code>open</code> attribute by default. - Sidebar JS at end of
+<code>&lt;body&gt;</code>: listens for
+<code>&lt;nav.sidebar a&gt;</code> clicks + <code>hashchange</code> and
+force-opens the targeted <code>&lt;details&gt;</code>, then
+smooth-scrolls to it. Section nav always lands on visible content even
+if the user has manually collapsed something. - <strong>Bead summary
+cards</strong> split into four cards with consistent typography
+(Antigens flagged / Specimens flagged / Red cells / Yellow cells), each
+with a one-line subtitle naming the criterion. - <strong>Range summary
+cards moved</strong> from “All Curves Overview” into “Standard-Curve
+Summary” (the natural home — the summary table is right there). - New
+<strong>“What does Fit OK mean?”</strong> banner in Standard-Curve
+Summary listing all four pass criteria (R² ≥ 0.95 on log10, IC50 inside
+the tested dilution range with ±3× margin, Hill slope 0.3–5.0, dynamic
+range ≥ 3×). - New <strong>“How Background QC works”</strong> banner in
+Background QC explaining Mean / %CV / Max checks in plain English, with
+the live <code>bg_cv_pct</code> and <code>bg_max_mfi</code> thresholds
+inlined. - <strong>Downloads section reorganised</strong>. Buttons
+grouped by section (NC QC → Background QC → Bead-Count Matrix →
+Standard-Curve Summary → Range Matrix → Specimens cross-cutting), one
+row per button with a plain-English description of the CSV’s contents.
+NC group only renders when the plate has NC wells. Added the long-form
+<code>bead_problems_*.csv</code> button that was previously missing from
+the page. - Curve-picker introductory copy updated: “Pick an antigen
+either by typing in the search box (with autocomplete) or via the
+dropdown menu above the plot.” → “Pick an antigen by typing in the
+search box (with autocomplete).”</p>
+<p><strong>Smoke tests:</strong> - Full pipeline ran cleanly on
+<code>Pilot_Uvira_XXL/</code>. Report at ~12 MB. Section-order grep
+confirmed Plate Overview → NC QC → Background QC → Bead-Count → … →
+Downloads in that order. No duplicate <code>sec-nc</code> /
+<code>sec-bg</code> blocks. Sidebar JS present (<code>openTarget</code>
+defined, click + <code>hashchange</code> listeners wired). All five
+<code>&lt;h4&gt;</code> Downloads groups render in section order. -
+Typeahead manually tested: typing a partial name pops the matching
+analyte via the datalist; selection triggers <code>Plotly.update</code>
+and the figure swaps to that analyte’s curve + standards. No matching
+name shows a “no match” hint instead of breaking. Dropdown is gone from
+the picker layout (the lone remaining <code>updatemenus</code> string in
+the HTML is inside the embedded plotly.js bundle, not our figure).</p>
+<p><strong>Known follow-ups (carrying over from Session 6 → Session
+8):</strong> - Curve-picker right-edge <strong>rug plot</strong> of
+specimen MFI colored by BELOW / IN / ABOVE / NO_FIT status. -
+<strong>Historical curves + rugs in grey</strong> for every prior plate
+run. (NC well history shipped in Session 7b; specimen-MFI history is the
+remaining piece.) - New <strong>specimen-MFI history JSON</strong> to
+feed the rug. - Section 6 validation patient-ID spot-check. - Section 7
+(the original): rewrite README / SPEC, rename PyInstaller specs, update
+GitHub URLs in templates/footer.</p>
+</div>
+<div id="session-6-2026-05-18" class="section level3">
+<h3>Session 6 — 2026-05-18</h3>
+<p>User-driven usability pass on the Session-5 report. Most of Section 8
+landed; the historical-overlay items (curve picker rug + grey historical
+curves) are explicitly deferred to Session 7.</p>
+<p><strong>Files added / edited:</strong> - <code>src/config.py</code> —
+new <code>PROBLEM_FRACTION_THRESHOLD = 0.20</code>,
+<code>BG_CV_THRESHOLD = 0.25</code>, <code>BG_MAX_MFI = 100</code>.
+Surfaced through <code>DEFAULTS[&quot;qc_thresholds&quot;]</code>.
+<code>well_classification.background_patterns</code> added. -
+<code>src/qc_background.py</code> (new) —
+<code>qc_background_levels(df, cv_threshold,   max_mfi_threshold, excluded_analytes)</code>
+returns per-antigen
+<code>n_wells / mean_mfi / sd_mfi / cv / max_mfi / cv_flag / max_flag /   excluded</code>.
+- <code>src/qc_beads.py</code> — added
+<code>bead_problem_summary(bead_qc, well_types,   fraction_threshold)</code>.
+Returns per-antigen and per-sample summaries (count + list of problem
+wells / analytes). Sample summary counts only specimens (Standards /
+Background / NC excluded from the denominator). -
+<code>src/qc_standard_curve.py</code> — added
+<code>range_problem_summary(in_range,   fraction_threshold, excluded_analytes)</code>.
+Returns four counts (antigens below / above; samples below / above) plus
+the detail rows for each axis. - <code>src/report.py</code> — - Imported
+the two new helpers + <code>qc_background_levels</code>. -
+<code>generate_report</code> now computes summaries, formats them via
+<code>_format_bead_summary</code>, <code>_format_range_summary</code>,
+<code>_format_bg_levels</code>, and passes everything through. -
+<code>_make_in_range_heatmap</code> recoloured to a CB-safe four-stop
+scale (BELOW = #4477AA, IN = #44AA99, ABOVE = #EE7733, NO_FIT =
+#CCBB44). Grey reserved for historical overlays. -
+<code>_make_bead_heatmap</code> now takes <code>well_types=</code> and
+draws dotted vertical lines between well-type groups via
+<code>_group_boundaries</code>. - <code>src/pipeline.py</code> —
+computes the three new summaries (bead, range, background) and exports
+five new CSVs: <code>bead_problem_antigens_&lt;plate&gt;.csv</code>,
+<code>bead_problem_samples_&lt;plate&gt;.csv</code>,
+<code>range_problem_antigens_&lt;plate&gt;.csv</code>,
+<code>range_problem_samples_&lt;plate&gt;.csv</code>,
+<code>background_qc_&lt;plate&gt;.csv</code>. -
+<code>templates/report.html</code> — full body rewrite. Two-column
+layout with a sticky <code>&lt;nav class=&quot;sidebar&quot;&gt;</code> TOC plus a
+<code>&lt;main class=&quot;content&quot;&gt;</code> containing nine
+<code>&lt;details class=&quot;section&quot;&gt;</code> blocks (one per section),
+all collapsible. New <code>.stat-row</code> / <code>.stat</code> summary
+cards at the top of the bead-count, all-curves, and background sections.
+New <code>badge-r-below / -r-in / -r-above / -r-nofit</code> CSS classes
+matching the recoloured heatmap. New section: <strong>Background
+QC</strong> (between NC and Downloads), with three summary cards and a
+per-antigen table (n wells / mean / SD / %CV / max / flags). Downloads
+section expanded with the five new CSV buttons. -
+<code>templates/web/settings.html</code> — added Background pattern
+field separately from NC; added <code>problem_fraction_threshold</code>,
+<code>bg_cv_threshold</code>, <code>bg_max_mfi</code> inputs. -
+<code>src/app.py::save_settings</code> — parses
+<code>background_patterns</code> and the three new thresholds.</p>
+<p><strong>Smoke test on <code>Pilot_Uvira_XXL/</code>:</strong></p>
+<p>Full pipeline ran clean. Report at 12.3 MB. Output: -
+<code>bead_problem_antigens_*.csv</code> (200×7): 7 antigens flagged (≥
+20% of wells problematic). - <code>bead_problem_samples_*.csv</code>
+(84×8): 6 specimens flagged (≥ 20% of antigens problematic). -
+<code>range_problem_antigens_*.csv</code> (200×11): 7 below_flag, 41
+above_flag. - <code>range_problem_samples_*.csv</code> (84×11): 3
+below_flag, 14 above_flag. - <code>background_qc_*.csv</code> (200×9): 0
+CV-flagged, 93 max-flagged at the default <code>bg_max_mfi=100</code>.
+The default is aggressive for this panel — user can raise it on the
+Settings page.</p>
+<p>HTML contains 9 <code>&lt;details class=&quot;section&quot;&gt;</code> blocks,
+a sidebar with 9 section links, and 10 summary stat cards. Dotted group
+separators visible in the bead-count heatmap between A1-A10 (Standards)
+and A11-A12 (Background) and at A12 → B1 (specimens). New CB-safe
+palette swatches (#4477AA / #44AA99 / #EE7733 / #CCBB44) appear in the
+range matrix.</p>
+<p><strong>Deferred to Session 7 (explicit scope cut):</strong> -
+Curve-picker rug plot of specimen MFI colored by status. - Curve-picker
+grey overlays of every previous plate’s curve. - A new specimen-MFI
+history JSON to feed the historical rug.</p>
+<p>These three are coupled (same panel) and need their own design pass —
+specifically: what plate identifier to use, how to throttle the rug on
+antigens with hundreds of historical specimens, and how to handle the
+case where the per-plate antigen panel changes over time.</p>
+</div>
+<div id="session-5-2026-05-18" class="section level3">
+<h3>Session 5 — 2026-05-18</h3>
+<p>Two user-driven adjustments to the Section-5 report.</p>
+<p><strong>1. Range classification — 3-state instead of binary.</strong>
+<code>compute_in_range_table</code> now emits <code>IN_RANGE</code> /
+<code>BELOW_RANGE</code> / <code>ABOVE_RANGE</code> /
+<code>NO_FIT</code> (decision #3 reversed). Below-LLOQ and above-ULOQ
+are distinct so users can tell which tail of the curve a specimen falls
+off.</p>
+<ul>
+<li><code>src/qc_standard_curve.py</code> —
+<ul>
+<li><code>compute_in_range_table</code>: classify
+<code>mfi &lt; lloq</code> as <code>BELOW_RANGE</code> and
+<code>mfi &gt; uloq</code> as <code>ABOVE_RANGE</code>.</li>
+<li><code>compute_pct_in_range_per_antigen</code>: split
+<code>n_out_of_range</code> into <code>n_below_range</code> and
+<code>n_above_range</code>. <code>pct_in_range</code> formula
+unchanged.</li>
+</ul></li>
+<li><code>src/report.py::_make_in_range_heatmap</code>: rewrote the
+colorscale to 4 stops — BELOW = blue (#3498db), IN = pale neutral
+(#ecf0f1), ABOVE = orange (#e67e22), NO_FIT = grey (#7f8c8d). User chose
+this scheme to keep red/green out of the heatmap.</li>
+<li><code>src/report.py::_format_range_problems</code>: include
+<code>status</code> column, filter on
+<code>status in {BELOW_RANGE, ABOVE_RANGE}</code>.</li>
+<li><code>templates/report.html</code>: section retitled “Standard-Curve
+Range Matrix”; badges and legend rewritten; detail list shows a BELOW /
+ABOVE badge per row.</li>
+</ul>
+<p><strong>2. Negative-control tracking.</strong> Background wells
+(<code>^Background</code>, A11/A12) and NC wells (<code>^NC</code> /
+<code>^Negative</code>) are now distinct well types. The pilot plate has
+only Background, so the NC report section renders a “No NC wells on this
+plate” banner; future plates can drop in a sample named <code>NC1</code>
+/ <code>Negative_pool</code> and the section will populate
+automatically.</p>
+<ul>
+<li><code>src/config.py</code>: added
+<code>BACKGROUND_PATTERNS = [r&quot;^Background&quot;]</code>;
+<code>NC_PATTERNS = [r&quot;^NC&quot;, r&quot;^Negative&quot;]</code>.
+<code>DEFAULTS.well_classification</code> gained
+<code>background_patterns</code>.</li>
+<li><code>src/classify.py</code>: <code>_classify_sample</code> returns
+<code>pc</code> / <code>background</code> / <code>nc</code> /
+<code>specimen</code> (3-way match before specimen fallback).</li>
+<li><code>src/qc_nc.py</code> (new): <code>qc_nc_levels(df)</code>
+returns <code>[well, sample_name, analyte, mfi]</code> filtered to
+<code>well_type == &quot;nc&quot;</code>. Empty frame when no NC wells.</li>
+<li><code>src/pipeline.py</code>: calls <code>qc_nc_levels</code>,
+passes to <code>generate_report</code>, exports
+<code>nc_levels_&lt;plate&gt;.csv</code> only when non-empty.</li>
+<li><code>src/report.py::_make_nc_heatmap</code>: Purples MFI heatmap
+per (well × analyte). Returns empty string when no NC wells, and the
+template renders the banner.</li>
+<li><code>templates/report.html</code>: new “Negative-Control Levels”
+section between the range matrix and Downloads.</li>
+<li><code>src/report.py::generate_report</code>: signature now takes
+<code>nc_levels=</code> and <code>n_nc_wells</code> /
+<code>nc_present</code> flow into the template.</li>
+</ul>
+<p><strong>Smoke tests run:</strong> - Imports OK after refactor. -
+<code>classify_wells</code> on a 4-row fixture: Standard1 → pc,
+Background0 → background, FD123 → specimen, NC_pool → nc. -
+<code>compute_in_range_table</code> on a 4-row fixture: BELOW_RANGE,
+IN_RANGE, ABOVE_RANGE, NO_FIT all produced as expected; summary row has
+all four count columns. - <strong>Full pipeline run on
+<code>Pilot_Uvira_XXL/</code></strong>: report renders at 12.4 MB in
+well under a minute on the local 3.13 venv. CSV status distribution:
+13,625 IN_RANGE / 2,159 ABOVE_RANGE / 764 BELOW_RANGE / 252 NO_FIT (= 84
+× 3 excluded analytes, as expected). HTML contains 2× “Standard-Curve
+Range Matrix”, 766× <code>badge-blue</code>, 2,161×
+<code>badge-orange</code>, 2× <code>badge-neutral</code>, 2×
+<code>badge-slate</code>, and the “No negative-control wells” banner. -
+The lone residual <code>OUT_OF_RANGE</code> string in the HTML is inside
+the embedded plotly.js minified bundle (unrelated).</p>
+<p><strong>Known follow-ups:</strong> - Section 6 validation patient-ID
+spot-check still outstanding. - Section 7 docs/PyInstaller specs still
+outstanding. - NC threshold flagging deferred per decision #6. -
+Settings page does not yet expose the new
+<code>background_patterns</code> field (current default works for all
+pilot plates; revisit if a future plate needs custom Background
+naming).</p>
+</div>
 <div id="session-4-2026-05-14" class="section level3">
 <h3>Session 4 — 2026-05-14</h3>
 <p>Implemented Sections 4 and 5. The pipeline now produces a fully
@@ -803,12 +1178,64 @@ kit-control aliases (<code>MPXV_ANTIGENS</code>,
 <code>src/*.py</code> — <code>from __future__ import annotations</code>
 added so the modules parse on Python 3.9+ (project still officially
 requires 3.11; this is purely defensive).</p>
-<p><strong>Smoke tests run (Section 4 piece, Section 5 piece in
-flight):</strong> - <code>qc_bead_counts</code> on the pilot data:
-matrix shape <code>(200, 96)</code>, 430 red cells, 856 yellow cells,
-1,286 problem rows. The three excluded bead regions consistently show 0
-beads across every well (consistent with their being added in
-error).</p>
+<p><strong>Bug fixes during smoke-test verification:</strong> -
+<strong>Plotly version skew</strong> — plotly Python 6.x emits JSON for
+plotly.js 3.x but the template was loading a hardcoded plotly.js 2.27
+CDN tag, so the three figures silently failed to render. Fixed by
+switching to <code>include_plotlyjs=True</code> on the first figure
+(embeds the matching v3.5.0 bundle inline) and <code>False</code> on the
+rest. Stale CDN <code>&lt;script&gt;</code> tag removed from
+<code>report.html</code>. Result is fully self-contained — no internet
+required, no version drift — at the cost of ~+4.6 MB per report. A
+<code>_reset_plotlyjs_embed_flag()</code> call at the top of
+<code>generate_report</code> ensures successive reports each get their
+own inline bundle. - <strong>Standard-curve perf</strong> —
+<code>_fit_one</code> already had a degenerate-input guard (max-MFI
+floor) but <code>_try_drop_one_outlier</code> was still called on every
+failed fit, running 10 extra scipy passes per analyte with no signal.
+Now retry is gated on <code>params is not None</code> (i.e., scipy
+converged but QC criteria failed). On the pilot data, the end-to-end
+wall clock should drop substantially from ~6:40. - <strong>4PL fit
+quality</strong> (user reported HCoV_OC43_NP with <code>d=0</code> and a
+visibly bad lower tail) — root cause was linear-residual fitting. The
+upper plateau (~10⁵ MFI) dominates absolute residuals, so the optimizer
+“ignored” tail points at MFI ~80 and landed at <code>d=0</code>.
+Switched <code>_fit_one</code> to fit on log10(MFI), matching standard
+immunoassay practice; R² and the retry path’s selection metric now use
+the same log-space objective. Also fixed misleading <code>a_init</code>
+/ <code>d_init</code> variable comments (the math was always right
+because both have the same <code>[0, ∞)</code> bounds, but the comments
+swapped what each represents). X-axis label clarified from
+<code>Dilution (1:x)</code> → <code>Dilution factor (1 : x)</code>.</p>
+<p><strong>Smoke tests run:</strong> - <code>qc_bead_counts</code> on
+the pilot data: matrix shape <code>(200, 96)</code>, 430 red cells, 856
+yellow cells, 1,286 problem rows. The three excluded bead regions
+consistently show 0 beads across every well (consistent with their being
+added in error). - <strong>Render-only end-to-end</strong>
+(<code>/tmp/uvira_smoke_render.py</code>): parse → layout merge →
+bead-QC → synthetic 4PL fits → range tables →
+<code>report.generate_report</code> → 6.3 MB self-contained HTML. All 13
+grep markers hit (UI sections present, excluded analyte rendered, Box
+xlsx + barcode + IN_RANGE/OUT_OF_RANGE language present, no residual
+MPXV / kit-control / NC-bead strings). Synthetic fits used to bypass
+<code>scipy.curve_fit</code> because the system Python 3.9 used in this
+dev env is far slower than the project’s pinned 3.11 + scipy ≥ 1.11.
+<strong>Full scipy-fit pass on the project’s 3.11 still to be done by
+the user</strong> — <code>uv run python -m src.main</code>, then upload
+the pilot CSV / inputfile / Box xlsx through the web UI. -
+<code>_fit_one</code> was given a <strong>degenerate-input
+guard</strong> (max-MFI floor + flat-response check) to keep
+<code>scipy.curve_fit</code> from thrashing on all-zero noise channels
+(the three excluded bead regions and any similar low-signal antigens).
+<code>maxfev</code> lowered 50,000 → 10,000. - <strong>Full real-scipy
+run</strong> on pilot data: 6:40 wall clock initially; after the perf
+gating above, much faster. Output: - HTML 11 MB (with embedded
+plotly.js) - <code>specimens_*.csv</code> 2.5 MB -
+<code>in_range_*.csv</code> 2.3 MB - <code>pct_in_range_*.csv</code> 8
+KB - <code>bead_problems_*.csv</code> 52 KB</p>
+<p>Real-fit <code>pct_in_range</code> distribution: median 86.9%, mean
+74.2%. 195/200 antigens have at least one specimen in range. The three
+excluded analytes all correctly show 0 IN_RANGE / 84 NO_FIT.</p>
 <p><strong>Known follow-ups (Section 6 / 7):</strong> - Section 6
 validation cross-check (a handful of patient IDs) still to do — the
 wiring is in place; just need to spot-check a few wells. - Section 7:

@@ -416,8 +416,10 @@ def create_app() -> Flask:
 
         # Well classification patterns
         pc_pats = request.form.get("pc_patterns", "")
+        bg_pats = request.form.get("background_patterns", "")
         nc_pats = request.form.get("nc_patterns", "")
         config["well_classification"]["pc_patterns"] = [p.strip() for p in pc_pats.split(",") if p.strip()]
+        config["well_classification"]["background_patterns"] = [p.strip() for p in bg_pats.split(",") if p.strip()]
         config["well_classification"]["nc_patterns"] = [p.strip() for p in nc_pats.split(",") if p.strip()]
 
         # Standard dilution series
@@ -439,14 +441,14 @@ def create_app() -> Flask:
 
         # QC thresholds
         qc = config["qc_thresholds"]
-        for key in ("bead_count_min", "bead_count_warn"):
+        for key in ("bead_count_min", "bead_count_warn", "bg_max_mfi"):
             try:
                 qc[key] = int(request.form.get(key, qc.get(key, 0)))
             except (ValueError, TypeError):
                 pass
-        for key in ("recovery_tolerance",):
+        for key in ("recovery_tolerance", "problem_fraction_threshold", "bg_cv_threshold"):
             try:
-                qc[key] = float(request.form.get(key, qc[key]))
+                qc[key] = float(request.form.get(key, qc.get(key, 0)))
             except (ValueError, TypeError):
                 pass
         # Outlier detection checkbox
