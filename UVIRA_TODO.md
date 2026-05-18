@@ -182,9 +182,13 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
       bead / replicate-CV sections. Plotly is loaded via CDN once.
 - [x] Bead-Count matrix + IN/OUT-of-Range matrix, both as Plotly
       heatmaps with discrete colour scales and per-cell hover.
-- [x] Standard-Curve Picker — Plotly figure with 200 traces and an
-      `updatemenus` dropdown that swaps the visible analyte. Title
-      updates with `fit_ok` and the four 4PL parameters.
+- [x] Standard-Curve Picker — Plotly subplot (curve | rug) driven by
+      an HTML5 `<input list>` typeahead. Title updates with `fit_ok`
+      and the four 4PL parameters. The original `updatemenus`
+      dropdown was removed in Session 8d (typeahead made it
+      redundant). Single-column rug for the current plate plus a
+      separate "Past" column; per-antigen status counts live in an
+      upper-right summary box on the curve panel.
 - [x] Per-antigen Standard-Curve Summary table (a, b, c=IC50, d, LLOQ
       / ULOQ dilutions, %-in-range, QC warnings, `fit_ok` badge).
       Excluded-analyte rows rendered muted.
@@ -195,11 +199,20 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
       (`specimens_*.csv`, `in_range_*.csv`, `pct_in_range_*.csv`).
 
 ### 6. Validation
-- [ ] End-to-end run on `Pilot_Uvira_XXL/`. Confirm report opens, all 200
-      antigens render, the 3 erroneous beads are flagged, bead-count matrix
-      and IN/OUT-of-range matrix populate correctly.
-- [ ] Cross-check a handful of patient IDs against
-      `RENAMED-Box1_Uvira_sera_2023.xlsx`.
+- [x] End-to-end run on `Pilot_Uvira_XXL/`. Report renders with all
+      200 antigens, the 3 excluded bead regions are visually muted
+      across every section, bead-count and range matrices populate
+      correctly. Smoke-tested repeatedly through Sessions 4–10 with
+      `~/uvira-luminex-qc-results/smoke/QC_PLATE_05112026_RUN000.html`
+      as the canonical output. Synthetic 2 / 3-plate scenarios also
+      exercised (`QC_3plate_*.html` in the same folder).
+- [x] Cross-check a handful of patient IDs against
+      `RENAMED-Box1_Uvira_sera_2023.xlsx`. 14/14 spot-checks
+      passed across box rows A–G, columns 1 + 12. Box row H
+      (12 samples) was intentionally omitted from the plate, which
+      explains the 96 → 84 specimen count exactly. Box-row → plate-
+      row shift confirmed: box A → plate B, … box G → plate H
+      (Standards occupy plate row A). Done Session 11.
 
 ### 8. Usability + cross-plate features (Session 6+)
 
@@ -239,6 +252,50 @@ report:
       `background_qc_<plate>.csv`. Settings:
       `bg_cv_threshold` (default 0.25 = 25%), `bg_max_mfi`
       (default 100). Done Session 6.
+- [x] **Curve Picker — typeahead + subplot.** HTML5 `<input list>`
+      autocomplete drives `Plotly.update` per antigen. Plotly's old
+      `updatemenus` dropdown removed. Figure split into a 2-column
+      subplot: standards + 4PL on the left, single rug column for
+      this plate (status-coloured stack) + separate Past column on
+      the right. Per-antigen status counts in an upper-right summary
+      box on the curve panel, swapped via `Plotly.relayout` on each
+      pick. Done Sessions 8c–8d.
+- [x] **Curve Picker — per-plate legend toggle.** Each past plate is
+      its own legend entry (one curve trace + one rug trace, both
+      hidden together via `legendgroup="plate:<plate_id>"`).
+      Click = hide / show; double-click = isolate. Plate labels
+      shortened in the legend to `MM/DD/YYYY · R<N> · Box<N>` (full
+      label kept in hovers and the figure title). Done Session 8d.
+- [x] **Negative Control QC history.** New
+      `nc_well_history.json` persisted per
+      `(plate_id, well, analyte)`. NC QC section renders a
+      cross-plate Purples heatmap when ≥ 1 prior plate is in
+      history. Done Session 7b.
+- [x] **Plate Layout overview.** 8 × 12 Plotly heatmap inserted at
+      the top of the Plate Overview section, cells colour-coded by
+      `well_type` (Standards / Background / NC / specimen) and
+      labelled with the sample name. Inline legend swatch above the
+      heatmap. Done Session 10.
+- [x] **Background MFI overview (all plates).** Cross-plate scatter
+      in the Background QC section: x = antigen (panel order from
+      the current plate's CSV header), y = mean Background MFI on a
+      log scale, one trace per plate, current plate accented and
+      suffixed `(current)` in the legend. Excluded analytes
+      italicised in the tick labels. Powered by a new
+      `background_history.json` (dedup key
+      `[plate_id, analyte]`). Static figure (no scroll), 6 pt tick
+      labels rotated -90°, horizontal legend along the top. Done
+      Session 10 (third mid-session iteration).
+- [x] **Specimen-MFI history → curve-picker rug.** New
+      `specimen_mfi_history.json` (dedup key
+      `[plate_id, well, analyte]`) feeds the Past column of the
+      curve picker's rug subplot. Done Session 8.
+- [x] **Plotly.js load-order fix.** `_plotly_html` embeds the
+      Plotly.js bundle on its first call; reorderered the
+      figure-build calls in `generate_report` to match the
+      template's section order so the bundle lands at DOM line
+      ~211, well ahead of any `newPlot` call. Done Session 10 (bug
+      fix).
 
 ### 7. Packaging & docs
 - [x] `README.md` rewritten end-to-end for the Uvira 200-plex /
@@ -275,6 +332,11 @@ report:
 | 8 | One **shared `problem_fraction_threshold`** (default 0.20) drives all the "≥X% problematic" summary counts. | 2026-05-18 |
 | 9 | Curve-picker historical overlays show **all** prior plates (no N-most-recent cap). | 2026-05-18 |
 | 10 | Background QC runs **mean + %CV + max-MFI flag** per antigen — all three legacy MPOX metrics, applied to Background wells when no NC is present. | 2026-05-18 |
+| 11 | Curve picker is a **two-panel subplot** (curve \| rug), not an overlaid rug. Single-column rug for the current plate (statuses stacked, colour-coded) + a separate "Past" column for historical specimens. Per-antigen status counts live in a single text box in the upper-right of the curve panel. | 2026-05-18 |
+| 12 | Past-plate overlays are **legend-toggleable per plate** (each past plate is its own legend entry; curve trace + rug trace share `legendgroup="plate:<plate_id>"`). | 2026-05-18 |
+| 13 | Plate-label short-form used for legend entries: `MM/DD/YYYY · R<N> · Box<N>`. Full `PLATE_<MMDDYYYY>_RUN<NNN> · Box<N>` stays on hovers + figure title. | 2026-05-18 |
+| 14 | Plate Overview includes a **plate-layout heatmap** (8 × 12, colour-coded by well_type) at the top, modelled after the legacy MPOX plate heatmap but showing the layout rather than median bead counts. | 2026-05-18 |
+| 15 | Background MFI overview uses **panel order** on the x-axis (not signal-magnitude sort) and is a **static, responsive figure** (no horizontal scroll). 6 pt rotated tick labels, horizontal legend along the top. | 2026-05-18 |
 
 ## Open questions for the user
 
@@ -284,6 +346,251 @@ Decisions log).
 ---
 
 ## Session History
+
+### Session 12 — 2026-05-18 (Accept `Control` as an NC label)
+
+User context: the new plate (re-run of the Box1 unknowns) has two
+**Control** wells in H11 / H12 instead of leaving those positions
+as Background. With the previous patterns those wells would have
+fallen through to `specimen`. Smallest possible fix: extend the
+default NC pattern list to accept `Control*`.
+
+**Files edited:**
+
+- `src/config.py` — `NC_PATTERNS` extended from `["^NC",
+  "^Negative"]` to `["^NC", "^Negative", "^Control"]`. Comment
+  refreshed to list the three accepted labels.
+- `src/classify.py` — docstring updated.
+- `src/qc_nc.py` — module docstring updated.
+- `templates/report.html` — Negative Control QC explainer now
+  reads "NC wells are identified by sample name matching `NC*`,
+  `Negative*`, or `Control*` (editable on the Settings page)".
+  The empty-state hint adds `Control` to the example label list.
+- `README.md` and `SPECIFICATION.md` — both mention all three
+  default patterns where they describe NC detection.
+
+**No data-layer code changes** — the regex list flows through
+`well_classification.nc_patterns` in the config and is read by
+`classify._classify_sample`. Settings-page edits already let users
+add their own patterns; this just bakes the common `Control` case
+into the default so the user doesn't have to.
+
+**Smoke tests:**
+
+- Unit-level: `classify_wells` on `{Standard1, Background, Control,
+  Control1, NC1, Negative_pool, FD22124871}` → `pc / background /
+  nc / nc / nc / nc / specimen` ✓.
+- Pilot end-to-end (`Pilot_Uvira_XXL/`): no `Control` wells on the
+  pilot, but the regenerated report shows the updated explainer
+  copy and the pipeline runs without regression.
+
+**Carry-over to Session 13+:** unchanged — actual macOS / Windows
+release builds when needed.
+
+### Session 11 — 2026-05-18 (Section 6 patient-ID spot-check)
+
+Closed the last open item in Section 6 — validating that the
+barcode → patient_id join in `parse_layout.build_layout` actually
+produces the right mapping on the pilot data.
+
+**Procedure:**
+1. Opened `RENAMED-Box1_Uvira_sera_2023.xlsx` directly (openpyxl).
+   97 rows including header; columns `Container Id`,
+   `Orientation Barcode`, `Row`, `Column`, `Barcode`,
+   `Scan Time`, `Filename`, `Automatic Export Directory`, `ID`.
+2. Picked 8 spread-out spot-checks (first / last column of box
+   rows A, C, E, H). Cross-checked against
+   `in_range_PLATE_05112026_RUN000.csv` from the smoke output.
+   6/8 matched perfectly; the 2 box-row-H entries weren't found.
+3. Reconciled with the Intelliflex `*_inputfile.csv`: 96 rows
+   defined the plate (Standards + Background + 84 specimens). The
+   84 specimens corresponded exactly to box rows A–G; box row H
+   (12 samples) was intentionally omitted. So the 2 "misses" were
+   correct — those barcodes were never on this plate.
+4. Re-ran with 14 spot-checks across box rows A–G, columns 1 + 12.
+   **14/14 passed** with the expected box-row → plate-row shift:
+   box A → plate B, box B → plate C, …, box G → plate H (because
+   plate row A holds Standards in A1–A10 and Background in A11–A12).
+
+**Files touched:** none — this was a verification pass, not a code
+change. The pipeline's existing `build_layout` join behaves
+correctly.
+
+**Carry-over to Session 12+:** only the actual macOS `.app` and
+Windows `.exe` builds with the renamed PyInstaller specs (still
+deferred until a release is needed). All other To-Do items
+(Sections 0–8) are now `[x]`.
+
+### Session 10 — 2026-05-18 (picker tightening + plate-layout + cross-plate Background overview)
+
+Four user-driven refinements after seeing the Section-7 / Session-8d
+report in the browser.
+
+**Files edited:**
+
+- `src/report.py::_make_curve_picker` — subplot tightened further:
+  `column_widths` 0.82/0.18 → **0.88/0.12**, `horizontal_spacing`
+  0.04 → **0.015**. Rug x-range tightened to `[-0.4, 1.4]` (with past
+  plates) or `[-0.5, 0.5]` (without). Status-summary annotation
+  anchor moved from `x=0.77` → `x=0.85` (paper) so it still pins to
+  the upper-right of the curve subplot after the column-width
+  change. Result: rug panel no longer has whitespace flanking its
+  two columns, and the gap between the curve and the rug is barely
+  perceptible.
+- `src/report.py::_make_plate_layout_overview` (**new**) — 8×12
+  Plotly heatmap of the plate, cells colour-coded by `well_type`
+  (PC = #3498db, Background = #95a5a6, NC = #e67e22, specimen =
+  #dff0e2). Sample name rendered in each cell (truncated to 12
+  chars), full sample + type on hover. Wired into `generate_report`
+  and surfaced in the Plate Overview section under a small
+  legend.  Replaces the legacy MPOX plate heatmap (the legacy
+  report had a per-well median-bead-count heatmap; this version
+  shows the *layout* itself, which is more useful for spotting
+  plate-setup errors).
+- `src/report.py::_make_background_overview_plot` (**new**) —
+  cross-plate scatter:
+    - x = antigen, sorted by **max mean Background MFI across
+      plates, descending**, so the consistently noisy antigens
+      cluster on the left;
+    - y = mean Background MFI, **log scale**;
+    - one trace per plate, CB-friendly Paul-Tol palette;
+    - current plate's markers slightly larger and fully opaque;
+      past plates rendered at 55 % opacity;
+    - excluded analytes pinned to the far right of the x-axis and
+      italicised so they don't dominate the leading edge.
+  Inserted into the Background QC section between the
+  "How Background QC works" banner and the per-antigen table.
+- `src/pipeline.py` — new `_build_background_history(metadata,
+  bg_levels)` helper. `run_pipeline` reads / appends / saves
+  `<history_dir>/background_history.json` (dedup key
+  `[plate_id, analyte]`) and passes `history_background` through to
+  `generate_report`. Empty plates are handled — the function
+  returns the existing history without writing.
+- `templates/report.html` —
+    - Plate Overview now includes a **"Plate layout"** subsection
+      with a colour-coded inline legend (Standards / Background /
+      NC / Specimen) followed by the `plate_layout_html` heatmap.
+    - Background QC section now has a **"Background MFI overview
+      (all plates)"** subsection between the explainer and the
+      table, gated on `bg_overview_present`. Short explanatory
+      paragraph notes the antigen ordering and how to read the
+      excluded-analyte cluster on the right.
+    - The per-antigen Background table moved under a new
+      `<h3>Per-antigen Background QC table</h3>` heading to make
+      the new structure obvious.
+
+**Smoke tests:**
+
+- Pilot run on `Pilot_Uvira_XXL/`:
+    - Plate-layout overview renders (`fig-plate-layout` div).
+    - Background MFI overview renders (`fig-bg-overview` div); only
+      one trace because no history yet.
+    - `background_history.json` written (63 KB, 200 rows).
+- Synthesised 3-plate test (`PLATE_01012026_RUN000`,
+  `PLATE_02152026_RUN000`, `PLATE_03102026_RUN000`, with
+  Background wells scaled ×1.0 / ×1.3 / ×0.85 respectively):
+    - `background_history.json` ends at 600 rows = 200 antigens × 3
+      plates. Dedup on `(plate_id, analyte)` working.
+    - Plate 3's report shows three named traces in the BG overview
+      legend: `PLATE_01012026_RUN000`, `PLATE_02152026_RUN000`, and
+      `PLATE_03102026_RUN000 (current)`. Sorting puts the
+      consistently noisy antigens on the left.
+
+**Bug fix mid-session — plate layout + Background overview
+weren't rendering in the browser.** Both figures emitted valid
+Plotly JSON, but their `<script>Plotly.newPlot(...)</script>`
+blocks sat at DOM lines ~4092 and ~4156 — earlier than the
+bead-count heatmap at line ~7009. The inline Plotly.js library
+bundle is embedded by `_plotly_html`'s first call (via
+`include_plotlyjs=True`), and that first call was the **bead
+heatmap**, putting the library bundle at line ~7009.  Result: the
+plate-layout and BG-overview `newPlot` calls ran before
+`window.Plotly` was defined and silently failed.
+
+Fix: reorder the figure-build calls in `generate_report` to match
+the template's section order (plate_layout → bg_overview →
+bead_heatmap → …). Now the **plate-layout** figure is the first
+`_plotly_html` call, so the Plotly.js bundle is embedded at line
+~211 — well before any `newPlot` call. Verified after regenerate:
+all three early figures render, library bundle at line ~211, every
+`fig-*` div has populated trace data.
+
+**Second mid-session iteration — Background MFI overview x-axis
+was too squished, legend ate too much width.**
+
+The 200 rotated antigen tick labels were unreadable even on the
+single-plate report, and the right-hand vertical legend ate 15–20 %
+of the plot width on the 3-plate report.
+
+- `src/report.py::_make_background_overview_plot`:
+  - Explicit figure `width = max(1400, n_antigens × 10)` (= 2000 px
+    for the Uvira 200-antigen panel), `autosize=False`,
+    `responsive=False`. Tick font 8 → 9 pt, height 440 → 520 px,
+    bottom margin 160 → 180 px to give the rotated labels more
+    room.
+  - Legend re-oriented horizontally (`orientation="h"`) at
+    `y=1.06, yanchor="bottom"` above the plot. Plates list left-to-
+    right; the title reads "Plate (click to toggle):". The main
+    panel now uses every pixel of width that the right-side
+    vertical legend was holding.
+  - Figure wrapped in `<div style="overflow-x:auto;">` so a 2000 px
+    figure scrolls horizontally inside the section's normal width
+    instead of overflowing on narrower screens.
+- `src/report.py::_plotly_html`: new `responsive: bool = True` kwarg.
+  All existing call sites still default to `True`; the BG-overview
+  helper passes `responsive=False` so the explicit `width=` sticks
+  (otherwise Plotly's responsive flag would shrink the figure back
+  to its container width and reintroduce the squished labels).
+
+Smoke-tested by regenerating both reports:
+`~/uvira-luminex-qc-results/smoke/QC_PLATE_05112026_RUN000.html`
+(pilot, single trace) and
+`~/uvira-luminex-qc-results/smoke/QC_3plate_bg_overview.html`
+(three traces side-by-side). Confirmed `"width":2000`,
+`"orientation":"h"`, and one `overflow-x:auto` wrapper per report.
+
+**Third mid-session iteration — drop the scroll behaviour and the
+signal-magnitude sort.**
+
+User pushback after the previous iteration: the page-wide horizontal
+scroll wrapper around the BG-overview was disruptive (whole page
+scrolled, not just the figure), and sorting antigens by max
+Background MFI obscured the panel layout the user expects to see.
+
+- `src/report.py::_make_background_overview_plot`:
+  - **Antigen ordering** is now the panel order from the current
+    plate's xPONENT CSV header (the order it appears in
+    `history_background` for `current_plate_id`). Falls back to
+    first-seen order in history when the current plate isn't in
+    the frame. Analytes that only show up on past plates are
+    appended in first-seen order. Excluded analytes stay in
+    panel position (no longer pinned to the right) but are still
+    italicised in the tick labels (Plotly accepts `<i>…</i>`
+    inside tick labels — confirmed in JSON as `<i>…`).
+  - **Static, responsive figure.** Dropped `width=2000`, dropped
+    `autosize=False`, dropped the `<div style="overflow-x:auto">`
+    wrapper. Tick font 9 → 6 pt; bottom margin 180 → 200 px;
+    height 520 → 560 px to keep the rotated labels from clipping.
+  - `_plotly_html(..., responsive=...)` call now uses the default
+    `True` again — no per-figure override needed.
+- `templates/report.html`: BG-overview caption rewritten — drops
+  the "sorted by max MFI" / "excluded pinned right" language and
+  notes that a given x-position now refers to the same bead region
+  across plates.
+
+Smoke-tested by regenerating both reports
+(`QC_PLATE_05112026_RUN000.html`, `QC_3plate_bg_overview.html`).
+Verified: no `"width":2000` in either, no `overflow-x:auto` in
+either, tick font size 6 present, first six antigens on the
+x-axis read `RES_Ade3, RES_Ade5_hexon, TOXO_TgAMA1,
+RES_Ade40_hexon, VPD_B_pertussis_FHA, HHV_CMV` (= panel order),
+and the three excluded analytes (`FLU_B_HA_Maryland_1959`,
+`FLU_B_NP_Brisbane_2008`, `VPD_Tet_tox`) render as
+`<i>…</i>`-wrapped tick labels.
+
+**Carry-over to Session 11:** unchanged from Session 9 — Section 6
+validation patient-ID spot-check and the actual macOS / Windows
+builds when a release is needed.
 
 ### Session 9 — 2026-05-18 (Section 7: docs + packaging)
 

@@ -1,7 +1,7 @@
 """Negative-control well monitoring.
 
 NC wells are an optional sample type — a known seronegative pool, named
-``NC*`` or ``Negative*`` on the plate.  Background wells (``^Background``)
+``NC*``, ``Negative*``, or ``Control*`` on the plate.  Background wells (``^Background``)
 are a separate concept and are not included here.
 
 The pilot plate has no NC wells, so this module returns an empty frame.

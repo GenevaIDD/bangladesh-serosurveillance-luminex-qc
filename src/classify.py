@@ -3,7 +3,7 @@
 Uvira / Intelliflex sample-name conventions:
     PC standards : 'Standard1' .. 'Standard10'  (one well each, no replicate)
     Background   : 'Background'                 (A11 / A12 plate blanks)
-    NC           : 'NC*' / 'Negative*'          (optional — known seronegative sample)
+    NC           : 'NC*' / 'Negative*' / 'Control*'   (optional — known seronegative sample)
     Specimen     : everything else              (typically 'FD########' barcodes)
 
 The pilot plate has only Background wells.  NC wells, when present on

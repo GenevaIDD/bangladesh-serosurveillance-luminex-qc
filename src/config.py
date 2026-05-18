@@ -135,11 +135,12 @@ SPECIMEN_DEFAULT_DILUTION = 100  # placeholder; specimens are run at a single di
 # non-specific signal and are reported alongside the curve.  Negative
 # controls are a separate concept: a known seronegative sample that
 # should read below LLOQ on every antigen.  The pilot plate has no NC
-# wells, but the patterns are kept here so future plates can add one
-# by naming the well `NC1`, `Negative_pool`, etc.
+# wells, but the patterns below accept the common labels used on later
+# plates (NC1, Negative_pool, Control, …) so the user can simply name
+# the well and not edit Settings.
 PC_PATTERNS = [r"^Standard\d+$"]
 BACKGROUND_PATTERNS = [r"^Background"]
-NC_PATTERNS = [r"^NC", r"^Negative"]
+NC_PATTERNS = [r"^NC", r"^Negative", r"^Control"]
 
 # --- Structured defaults dict for settings.py ---
 

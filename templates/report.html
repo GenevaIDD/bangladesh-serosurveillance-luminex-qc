@@ -198,6 +198,16 @@
     Soft-flagged: kept in every table and plot but visually muted.
   </div>
   {% endif %}
+
+  <h3 style="margin-top:18px;">Plate layout</h3>
+  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
+    Cells are coloured by well type and labelled with the sample name.
+    <span style="display:inline-block; width:10px; height:10px; background:#3498db; vertical-align:middle; border-radius:2px;"></span> Standards &nbsp;
+    <span style="display:inline-block; width:10px; height:10px; background:#95a5a6; vertical-align:middle; border-radius:2px;"></span> Background &nbsp;
+    <span style="display:inline-block; width:10px; height:10px; background:#e67e22; vertical-align:middle; border-radius:2px;"></span> NC &nbsp;
+    <span style="display:inline-block; width:10px; height:10px; background:#dff0e2; vertical-align:middle; border-radius:2px;"></span> Specimen
+  </p>
+  {{ plate_layout_html | safe }}
 </div>
 </details>
 
@@ -251,8 +261,22 @@
     control. Excluded analytes are still listed (muted) so they don't
     silently disappear from the QC trail.
   </div>
-  <p style="margin-top:14px; color:#7f8c8d; font-size:13px;">
-    One row per antigen below.  Sort or scroll to find specific flags.
+
+  {% if bg_overview_present %}
+  <h3 style="margin-top:18px;">Background MFI overview (all plates)</h3>
+  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
+    Mean Background MFI per antigen, one point per plate-run. Antigens
+    appear in panel order (the order they were exported in the xPONENT
+    CSV header) so a given x-position always refers to the same bead
+    region across plates. Click a plate in the legend to hide / show
+    it. Excluded analytes are italicised in the tick labels.
+  </p>
+  {{ bg_overview_html | safe }}
+  {% endif %}
+
+  <h3 style="margin-top:18px;">Per-antigen Background QC table</h3>
+  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
+    One row per antigen.  Sort or scroll to find specific flags.
   </p>
   <div class="scroll-tbl">
     <table>
@@ -543,29 +567,32 @@
 <div class="inner">
   <p style="margin-top:0; color:#7f8c8d; font-size:13px;">
     Pick an antigen by typing in the search box (autocomplete from the
-    full panel). The figure has two side-by-side panels:
-    <b style="color:#34495e;">left</b> — the standard curve with the
-    current 4PL fit (blue) and any past-plate fits in grey;
-    <b style="color:#34495e;">right</b> — a two-column rug panel:
-    <b>This plate</b> (all current-plate specimens stacked, coloured by
-    status: <span class="badge badge-r-below">BELOW</span>
-    <span class="badge badge-r-in">IN</span>
-    <span class="badge badge-r-above">ABOVE</span>
-    <span class="badge badge-r-nofit">NO FIT</span>)
-    and <b style="color:#7f8c8d;">Past</b> (all historical specimens
-    stacked in grey). The small <b>status-count box</b> in the
-    upper-right of the curve panel breaks down the four status counts
-    + percentages for the selected antigen; it refreshes when you
-    switch antigens. Click a past-plate name in the legend to hide /
-    show its overlay; double-click to isolate a single plate.
+    full panel).
   </p>
-  <p style="margin-top:8px; color:#7f8c8d; font-size:12px;">
-    Plate labels read <code>PLATE_&lt;date&gt;_RUN&lt;N&gt; · Box&lt;N&gt;</code>
-    when a Box xlsx is attached. History is per output directory: the
-    first plate processed has no grey overlay; each subsequent plate
-    accumulates as a toggleable legend entry. To start fresh, delete
-    <code>~/uvira-luminex-qc-results/&lt;your dir&gt;/history/</code>.
-  </p>
+  <ul style="margin: 6px 0 12px 18px; padding: 0; color:#7f8c8d; font-size:13px; line-height:1.55;">
+    <li>
+      <b style="color:#34495e;">Left panel</b> — the standard curve with
+      the current 4PL fit (blue) and any past-plate fits in grey.
+    </li>
+    <li>
+      <b style="color:#34495e;">Right panel</b> — a two-column rug.
+      <b>This plate</b> stacks all current-plate specimens, coloured by
+      status (<span class="badge badge-r-below">BELOW</span>
+      <span class="badge badge-r-in">IN</span>
+      <span class="badge badge-r-above">ABOVE</span>);
+      <b style="color:#7f8c8d;">Past</b> stacks all historical specimens
+      in grey.
+    </li>
+    <li>
+      The <b>status-count box</b> in the upper-right of the curve panel
+      breaks down the four counts + percentages for the selected
+      antigen and refreshes on every pick.
+    </li>
+    <li>
+      Click a past-plate name in the legend to hide / show its overlay;
+      double-click to isolate a single plate.
+    </li>
+  </ul>
   {{ curve_picker_html | safe }}
 </div>
 </details>
@@ -631,8 +658,8 @@
     a problem with the bead region itself.
     <ul style="margin:6px 0 0 18px; padding:0;">
       <li>NC wells are identified by sample name matching
-        <code>NC*</code> or <code>Negative*</code> (editable on the
-        Settings page).</li>
+        <code>NC*</code>, <code>Negative*</code>, or
+        <code>Control*</code> (editable on the Settings page).</li>
       <li>The heatmap below shows the MFI of every NC well × antigen
         pair. Darker purple = higher MFI. A clean NC reads uniformly
         pale; isolated dark cells are the antigens to investigate.</li>
@@ -656,6 +683,7 @@
     <b>No named negative-control wells on this plate.</b> The Background
     QC section above is the closest substitute. To track a true NC,
     name a future well <code>NC1</code> / <code>Negative_pool</code>
+    / <code>Control</code>
     and re-run.
   </div>
   {% endif %}

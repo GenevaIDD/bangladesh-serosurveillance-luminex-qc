@@ -67,6 +67,7 @@ def generate_report(
     history_nc: pd.DataFrame | None = None,
     history_fit: dict | pd.DataFrame | None = None,
     history_specimens: pd.DataFrame | None = None,
+    history_background: pd.DataFrame | None = None,
     output_path: Path | None = None,
     plate_order: list | None = None,
     config: dict | None = None,
@@ -94,6 +95,25 @@ def generate_report(
         else {}
     )
 
+    # IMPORTANT: build figures in the same order they appear in the
+    # rendered HTML.  ``_plotly_html`` embeds the Plotly.js library
+    # inline on the FIRST call (then references the loaded library on
+    # subsequent ones).  If a later-built figure ends up earlier in
+    # the DOM, the browser tries to call ``Plotly.newPlot`` before the
+    # library is defined and the figure silently fails to render.
+    # Template emits sections in this order:
+    #   1. Plate Overview    → plate_layout
+    #   2. Background QC     → bg_overview
+    #   3. Bead-Count Matrix → bead_heatmap
+    #   4. (Standard-Curve Summary — no Plotly figures)
+    #   5. All Curves Overview → curve_grid (matplotlib PNG)
+    #   6. Standard-Curve Picker → curve_picker
+    #   7. Range Matrix      → range_heatmap
+    #   8. NC QC             → nc_heatmap + nc_history
+    plate_layout_html = _make_plate_layout_overview(data)
+    bg_overview_html = _make_background_overview_plot(
+        history_background, current_plate_id=metadata.get("plate_id"), excluded=excluded
+    )
     bead_heatmap_html = _make_bead_heatmap(bead_qc, excluded, well_types=well_types_map)
     nc_history_html = _make_nc_history_plot(history_nc, current_plate_id=metadata.get("plate_id"))
     nc_history_present = bool(nc_history_html)
@@ -149,6 +169,7 @@ def generate_report(
             "yellow_below": bead_qc.get("yellow_threshold"),
         },
         bead_heatmap_html=bead_heatmap_html,
+        plate_layout_html=plate_layout_html,
         curve_grid_html=curve_grid_html,
         bead_problems=bead_problems,
         bead_problem_counts=_tier_counts(bead_qc.get("problems", pd.DataFrame())),
@@ -164,6 +185,8 @@ def generate_report(
         bead_summary=_format_bead_summary(bead_summary),
         range_summary=_format_range_summary(range_summary),
         bg_levels=_format_bg_levels(bg_levels),
+        bg_overview_html=bg_overview_html,
+        bg_overview_present=bool(bg_overview_html),
         problem_threshold_pct=int(round(problem_frac * 100)),
         bg_cv_pct=int(round(bg_cv_thr * 100)),
         bg_max_mfi=int(bg_max_thr),
@@ -186,13 +209,18 @@ def generate_report(
 _plotlyjs_embedded = False
 
 
-def _plotly_html(fig: go.Figure, div_id: str, height: int = 500) -> str:
+def _plotly_html(fig: go.Figure, div_id: str, height: int = 500, responsive: bool = True) -> str:
     """Render a Plotly figure to an HTML <div>.
 
     The first call per report embeds the matching plotly.js inline so the
     report is fully self-contained (no internet required, no version
     skew between the JSON we emit and the runtime library). Subsequent
     calls reference the already-loaded library.
+
+    ``responsive=False`` is the right choice for figures that pin an
+    explicit ``width`` (e.g. the Background MFI overview, which is
+    drawn ~2000 px wide and lives inside a horizontally-scrolling
+    container).
     """
     global _plotlyjs_embedded
     include = True if not _plotlyjs_embedded else False
@@ -203,7 +231,7 @@ def _plotly_html(fig: go.Figure, div_id: str, height: int = 500) -> str:
         full_html=False,
         default_height=f"{height}px",
         div_id=div_id,
-        config={"displaylogo": False, "responsive": True},
+        config={"displaylogo": False, "responsive": responsive},
     )
 
 
@@ -587,9 +615,9 @@ def _make_curve_picker(
     # ----- Subplot scaffold -----
     fig = make_subplots(
         rows=1, cols=2,
-        column_widths=[0.82, 0.18],
+        column_widths=[0.88, 0.12],
         shared_yaxes=True,
-        horizontal_spacing=0.04,
+        horizontal_spacing=0.015,
     )
 
     # Helper: build (a) a single multi-line status-summary annotation
@@ -617,11 +645,11 @@ def _make_curve_picker(
 
         anns: list[dict] = [dict(
             # Paper coords — pinned to the upper-right of the curve
-            # subplot (which ends around paper-x ~0.78 with the
+            # subplot (which ends around paper-x ~0.86 with the
             # current column_widths). xanchor="right" so the box
             # extends leftward into empty curve space without
             # crossing into the rug panel.
-            x=0.77, y=0.99, xref="paper", yref="paper",
+            x=0.85, y=0.99, xref="paper", yref="paper",
             xanchor="right", yanchor="top",
             text=summary_text,
             showarrow=False, align="left",
@@ -835,7 +863,9 @@ def _make_curve_picker(
     # Rug subplot's bottom x-axis is redundant with the per-column
     # header annotations above each tick. Hide it entirely; the
     # categorical positions still drive the trace x-values.
-    rug_x_range = [-0.5, 1.5] if P else [-0.7, 0.7]
+    # Tight x-range so the two rug columns hug the centre of the narrow
+    # subplot instead of leaving empty space on each side.
+    rug_x_range = [-0.4, 1.4] if P else [-0.5, 0.5]
     fig.update_xaxes(
         range=rug_x_range,
         showticklabels=False, showgrid=False, showline=False, zeroline=False,
@@ -1157,6 +1187,198 @@ def _problem_rows(df: pd.DataFrame, key: str, list_col: str,
             row[col] = getattr(r, col, "")
         out.append(row)
     return out
+
+
+def _make_background_overview_plot(
+    history_background: pd.DataFrame | None,
+    current_plate_id: str | None = None,
+    excluded: set[str] | None = None,
+) -> str:
+    """Scatter of mean Background MFI per antigen, coloured by plate.
+
+    Antigens on the x-axis (sorted by max mean MFI across plates,
+    descending — so the consistently-high antigens sit on the left).
+    One trace per plate; the current plate is rendered with larger,
+    fully opaque markers to draw the eye.
+
+    Empty string when history is empty; caller hides the section.
+    """
+    if (history_background is None
+            or not isinstance(history_background, pd.DataFrame)
+            or history_background.empty
+            or "mean_mfi" not in history_background.columns):
+        return ""
+
+    excluded = set(excluded or [])
+    df = history_background.dropna(subset=["mean_mfi"]).copy()
+    if df.empty:
+        return ""
+
+    # Antigen order = panel order from the most recently-processed
+    # plate's xPONENT CSV header. Preserves the layout the user sees
+    # on the instrument; no sorting by signal magnitude. Falls back to
+    # first-seen order in history if the current plate isn't in the
+    # frame yet.
+    if current_plate_id and (df["plate_id"] == current_plate_id).any():
+        ordered = df[df["plate_id"] == current_plate_id]["analyte"].drop_duplicates().tolist()
+    else:
+        ordered = df["analyte"].drop_duplicates().tolist()
+    # Append any analytes that only show up on past plates, in their
+    # first-seen order, so they still appear on the axis.
+    all_analytes = df["analyte"].drop_duplicates().tolist()
+    for a in all_analytes:
+        if a not in ordered:
+            ordered.append(a)
+    order_keys = ordered
+    an_index = {a: i for i, a in enumerate(order_keys)}
+
+    # Plate order: chronological by run_date when available.
+    if "run_date" in df.columns:
+        rd_by_plate = (
+            df.groupby("plate_id")["run_date"]
+            .agg(lambda s: s.dropna().iloc[0] if s.dropna().size else "")
+        )
+        plates = sorted(rd_by_plate.index, key=lambda p: (rd_by_plate.get(p, ""), p))
+    else:
+        plates = sorted(df["plate_id"].dropna().astype(str).unique())
+
+    fig = go.Figure()
+    # Colour palette — Plotly Set2-ish, CB-friendly.
+    palette = ["#4477AA", "#EE7733", "#44AA99", "#CCBB44",
+               "#AA3377", "#66CCEE", "#7f8c8d", "#228833"]
+    for i, plate in enumerate(plates):
+        sub = df[df["plate_id"] == plate]
+        if sub.empty:
+            continue
+        xs = [an_index[a] for a in sub["analyte"] if a in an_index]
+        ys = [m for a, m in zip(sub["analyte"], sub["mean_mfi"]) if a in an_index]
+        if not xs:
+            continue
+        is_current = (plate == current_plate_id)
+        color = palette[i % len(palette)]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers",
+            name=plate + (" (current)" if is_current else ""),
+            marker=dict(
+                size=6 if is_current else 5,
+                color=color,
+                opacity=0.95 if is_current else 0.55,
+                line=dict(width=0.5, color="#2c3e50") if is_current else dict(width=0),
+            ),
+            customdata=list(zip(sub["analyte"], [plate] * len(sub))),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Plate %{customdata[1]}<br>"
+                "Mean Background MFI: %{y:.1f}<extra></extra>"
+            ),
+        ))
+
+    n_an = len(order_keys)
+    # Static, responsive figure — no explicit width, no scrollable
+    # wrapper. With ~200 antigens the tick labels are tiny (6 pt)
+    # rotated -90°; some adjacent labels will still touch but skipping
+    # every Nth label hides information, so we accept it.
+    fig.update_layout(
+        margin=dict(l=60, r=30, t=80, b=200),
+        height=560,
+        xaxis=dict(
+            title="Antigen (panel order from xPONENT CSV header)",
+            tickmode="array",
+            tickvals=list(range(n_an)),
+            ticktext=[
+                (f"<i>{a}</i>" if a in excluded else a) for a in order_keys
+            ],
+            tickangle=-90, tickfont=dict(size=6),
+            showgrid=False,
+            automargin=False,
+        ),
+        yaxis=dict(
+            title="Mean Background MFI (log scale)",
+            type="log",
+            gridcolor="#eef1f4",
+        ),
+        # Horizontal legend along the top — keeps every pixel of the
+        # main panel for the antigen ticks. Plates listed left → right.
+        legend=dict(
+            title=dict(text="Plate (click to toggle):",
+                       font=dict(size=10, color="#7f8c8d")),
+            orientation="h",
+            x=0, xanchor="left", y=1.06, yanchor="bottom",
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="#d0d7de", borderwidth=1,
+            font=dict(size=10),
+        ),
+    )
+    return _plotly_html(fig, "fig-bg-overview", height=580)
+
+
+def _make_plate_layout_overview(data: pd.DataFrame) -> str:
+    """8×12 plate-map heatmap colour-coded by well_type.
+
+    Cells are labelled with the sample name (truncated) and hover
+    shows the full well_type + sample. Mirrors the plate-shape
+    overview the legacy MPOX MagPix report had as a quick visual.
+    """
+    if data is None or data.empty or "well" not in data.columns:
+        return "<p style='color:#999;'>No plate layout to display.</p>"
+
+    wells = data.drop_duplicates("well")[["well", "sample_name", "well_type"]].copy()
+    wells["row"] = wells["well"].str[0]
+    wells["col"] = pd.to_numeric(wells["well"].str[1:], errors="coerce")
+    wells = wells.dropna(subset=["col"])
+    wells["col"] = wells["col"].astype(int)
+
+    rows = list("ABCDEFGH")
+    cols = list(range(1, 13))
+
+    type_to_int = {"pc": 0, "background": 1, "nc": 2, "specimen": 3}
+    type_to_color = {
+        "pc":         "#3498db",  # blue (matches "current 4PL" colour)
+        "background": "#95a5a6",  # neutral grey
+        "nc":         "#e67e22",  # orange — flags presence of a real NC sample
+        "specimen":   "#dff0e2",  # very pale green
+    }
+    # Build matrices for z (type), text (sample), and hover.
+    z = np.full((len(rows), len(cols)), np.nan)
+    text = np.empty((len(rows), len(cols)), dtype=object)
+    hover = np.empty((len(rows), len(cols)), dtype=object)
+    text.fill(""); hover.fill("")
+    for r in wells.itertuples(index=False):
+        if r.row not in rows or r.col not in cols:
+            continue
+        ri, ci = rows.index(r.row), cols.index(r.col)
+        wtype = (r.well_type or "specimen").lower()
+        z[ri, ci] = type_to_int.get(wtype, 3)
+        sample = (r.sample_name or "").strip()
+        # Truncate long sample names to fit the cell.
+        text[ri, ci] = sample if len(sample) <= 12 else sample[:11] + "…"
+        hover[ri, ci] = (
+            f"<b>{r.well}</b><br>{wtype.upper()}<br>{sample}"
+        )
+
+    # 4-stop discrete colorscale (one per well_type).
+    colorscale = [
+        [0.000, type_to_color["pc"]],         [0.250, type_to_color["pc"]],
+        [0.250, type_to_color["background"]], [0.500, type_to_color["background"]],
+        [0.500, type_to_color["nc"]],         [0.750, type_to_color["nc"]],
+        [0.750, type_to_color["specimen"]],   [1.000, type_to_color["specimen"]],
+    ]
+
+    fig = go.Figure(go.Heatmap(
+        z=z, x=[str(c) for c in cols], y=rows,
+        text=text, texttemplate="%{text}",
+        hovertext=hover, hoverinfo="text",
+        colorscale=colorscale, zmin=0, zmax=3,
+        showscale=False, xgap=2, ygap=2,
+    ))
+    fig.update_layout(
+        margin=dict(l=30, r=30, t=10, b=20),
+        height=240,
+        xaxis=dict(side="top", tickfont=dict(size=11), title=""),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=11), title=""),
+    )
+    fig.update_traces(textfont=dict(size=9, color="#2c3e50"))
+    return _plotly_html(fig, "fig-plate-layout", height=260)
 
 
 def _make_nc_history_plot(history_nc, current_plate_id: str | None = None) -> str:

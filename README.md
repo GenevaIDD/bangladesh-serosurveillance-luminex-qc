@@ -126,7 +126,7 @@ The bead-count and range summaries flag antigens / specimens that exceed a **pro
 - **Bead counts** — `bead_count_min` (red below) and `bead_count_warn` (yellow below) thresholds.
 - **Excluded analytes** — soft-flag list editable on the Settings page (defaults to `FLU_B_HA_Maryland_1959`, `FLU_B_NP_Brisbane_2008`, `VPD_Tet_tox`).
 - **Background QC** — per-antigen mean / SD / %CV / max-MFI across the Row-A Background wells. Antigens with %CV > 25 % (`bg_cv_threshold`) or max-MFI > 100 (`bg_max_mfi`) are flagged.
-- **NC QC** — when a future plate adds a sample named `NC*` / `Negative*`, its MFI is rendered as a heatmap and persisted to a cross-plate history JSON.
+- **NC QC** — when a future plate adds a sample named `NC*`, `Negative*`, or `Control*`, its MFI is rendered as a heatmap and persisted to a cross-plate history JSON.
 
 ## Output
 

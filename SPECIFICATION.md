@@ -30,7 +30,7 @@ Standard 96-well plate, Intelliflex convention used in the Uvira pilot:
 Variations handled:
 
 - Missing Background wells (Background QC section renders an empty-state banner).
-- Plates that include named NC samples (`NC*` / `Negative*` patterns, editable on the Settings page) — they are classified as a separate well type and reported in a dedicated NC QC section, distinct from Background.
+- Plates that include named NC samples (`NC*`, `Negative*`, or `Control*` — patterns editable on the Settings page) — they are classified as a separate well type and reported in a dedicated NC QC section, distinct from Background.
 
 Pool-based standard curves (the MagPix-era `ITM PC` / `ITM PC2` concept) are not used; a single `PC` pool is fit per plate. The per-pool dict structure is preserved internally for forward-compat.
 
@@ -127,13 +127,13 @@ The section renders three summary cards (CV-flagged count, max-flagged count, an
 
 ### 5. Negative Control QC (when present)
 
-NC wells are identified by `well_type == "nc"` after sample-name pattern matching (`^NC` / `^Negative`, editable on the Settings page; distinct from Background). When present:
+NC wells are identified by `well_type == "nc"` after sample-name pattern matching (`^NC`, `^Negative`, or `^Control` — editable on the Settings page; distinct from Background). When present:
 
 - **Per-plate NC heatmap** — MFI per (NC well × antigen) on a Purples ramp.
 - **Cross-plate NC history heatmap** — mean NC MFI per antigen, one row per plate, with the current plate suffixed `(current)`. Populated from `nc_well_history.json` which accumulates per-(plate, well, analyte) rows on every run.
 - Exported as `nc_levels_<plate>.csv`.
 
-The Uvira pilot plate has only Background wells and no NC samples, so the heatmap renders an empty-state banner and a "to track NCs name a future well `NC1` / `Negative_pool`" hint.
+The Uvira pilot plate has only Background wells and no NC samples, so the heatmap renders an empty-state banner and a "to track NCs name a future well `NC1` / `Negative_pool` / `Control`" hint.
 
 ## Computed Outputs
 

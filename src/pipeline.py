@@ -172,6 +172,21 @@ def run_pipeline(
             h = append_history(h, new_fit, ["plate_id", "analyte"])
             save_history(h, fit_path)
         history_fit[pool_name] = h
+    # Background-level history: one row per (plate × antigen) with the
+    # current plate's Background mean / SD / CV / max MFI. Powers the
+    # cross-plate Background overview scatter (x = antigen,
+    # y = mean MFI, colour = plate).
+    bg_history_path = Path(history_dir) / "background_history.json"
+    bg_history_existing = load_history(bg_history_path)
+    new_bg = _build_background_history(metadata, bg_levels)
+    if not new_bg.empty:
+        history_background = append_history(
+            bg_history_existing, new_bg, ["plate_id", "analyte"]
+        )
+        save_history(history_background, bg_history_path)
+    else:
+        history_background = bg_history_existing
+
     # Specimen-MFI history: one row per (plate × specimen well × antigen)
     # with the IN_RANGE / BELOW_RANGE / ABOVE_RANGE / NO_FIT status from
     # the current run. Used by the curve picker to render a per-antigen
@@ -220,6 +235,7 @@ def run_pipeline(
         history_nc=history_nc,
         history_fit=history_fit,
         history_specimens=history_specimens,
+        history_background=history_background,
         output_path=report_path,
         plate_order=plate_order,
         config=config,
@@ -343,6 +359,20 @@ def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> 
                 row["pool"] = pool_name
             rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _build_background_history(metadata: dict, bg_levels: pd.DataFrame) -> pd.DataFrame:
+    """Per-(plate × antigen) Background QC rows for the cross-plate
+    overview scatter. Empty when the plate has no Background wells."""
+    if bg_levels is None or bg_levels.empty:
+        return pd.DataFrame()
+    keep = [c for c in ("analyte", "n_wells", "mean_mfi", "sd_mfi", "cv",
+                        "max_mfi", "cv_flag", "max_flag", "excluded")
+            if c in bg_levels.columns]
+    sub = bg_levels[keep].copy()
+    sub["plate_id"] = metadata["plate_id"]
+    sub["run_date"] = metadata.get("run_date", "")
+    return sub[["plate_id", "run_date"] + keep]
 
 
 def _build_specimen_mfi_history(metadata: dict, in_range: pd.DataFrame) -> pd.DataFrame:
