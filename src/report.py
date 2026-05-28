@@ -128,6 +128,13 @@ def generate_report(
         current_plate_id=metadata.get("plate_id"),
         current_box_ids=current_box_ids,
     )
+    cross_run_html = _make_cross_run_scatter(
+        pool_fits, excluded,
+        in_range=in_range,
+        history_specimens=history_specimens,
+        current_plate_id=metadata.get("plate_id"),
+        current_box_ids=current_box_ids,
+    )
     range_heatmap_html = _make_in_range_heatmap(in_range, excluded)
     nc_heatmap_html = _make_nc_heatmap(nc_levels, excluded)
 
@@ -175,6 +182,8 @@ def generate_report(
         bead_problem_counts=_tier_counts(bead_qc.get("problems", pd.DataFrame())),
         curve_summary=curve_summary,
         curve_picker_html=curve_picker_html,
+        cross_run_html=cross_run_html,
+        cross_run_present=bool(cross_run_html),
         range_heatmap_html=range_heatmap_html,
         range_problems=range_problems,
         nc_heatmap_html=nc_heatmap_html,
@@ -549,11 +558,12 @@ def _make_curve_picker(
         "NO_FIT":      "#CCBB44",
     }
     HIST_GREY = "#b0b6bd"
-    # Rug x-positions in the second subplot. All current-plate
-    # specimens stack in a single column (x=0) and are colour-coded by
-    # status; past-plate specimens sit in their own column (x=1).
-    RUG_X = {"BELOW_RANGE": 0, "IN_RANGE": 0, "ABOVE_RANGE": 0, "NO_FIT": 0,
-             "HIST": 1}
+    # Rug x-positions in the second subplot. Current-plate specimens
+    # stack in a single column at x=0 (colour-coded by status). Each
+    # past plate gets its own column at x=1, 2, …, P so the user can
+    # scan horizontally across "This run" vs every past run and read
+    # any sample's MFI in context.
+    RUG_X = {"BELOW_RANGE": 0, "IN_RANGE": 0, "ABOVE_RANGE": 0, "NO_FIT": 0}
 
     analytes = list(pool_fits.keys())
     current_label = _plate_label(current_plate_id, current_box_ids)
@@ -613,9 +623,16 @@ def _make_curve_picker(
             hist_fit_lookup[(str(r["plate_id"]), an)] = r["params"]
 
     # ----- Subplot scaffold -----
+    # Rug subplot width scales with the number of plate columns (one
+    # for "This run" + one per past plate). 0.08 of figure width per
+    # column, capped at 0.42 so the curve panel never collapses
+    # below ~58% of the figure even with a long plate history.
+    n_rug_cols = 1 + P
+    rug_width = min(0.08 * n_rug_cols + 0.04, 0.42)
+    curve_width = 1.0 - rug_width
     fig = make_subplots(
         rows=1, cols=2,
-        column_widths=[0.88, 0.12],
+        column_widths=[curve_width, rug_width],
         shared_yaxes=True,
         horizontal_spacing=0.015,
     )
@@ -645,11 +662,11 @@ def _make_curve_picker(
 
         anns: list[dict] = [dict(
             # Paper coords — pinned to the upper-right of the curve
-            # subplot (which ends around paper-x ~0.86 with the
-            # current column_widths). xanchor="right" so the box
-            # extends leftward into empty curve space without
-            # crossing into the rug panel.
-            x=0.85, y=0.99, xref="paper", yref="paper",
+            # subplot. xanchor="right" anchors the box's right edge
+            # just inside the curve subplot's right boundary; the box
+            # extends leftward into empty curve space without crossing
+            # into the rug panel.
+            x=curve_width - 0.01, y=0.99, xref="paper", yref="paper",
             xanchor="right", yanchor="top",
             text=summary_text,
             showarrow=False, align="left",
@@ -659,21 +676,22 @@ def _make_curve_picker(
             borderpad=6,
         )]
 
-        # Rug column headers (above each rug column in x2 coords).
+        # Rug column headers — one per column (This run + each past plate).
         anns.append(dict(
-            x=RUG_X["IN_RANGE"], y=1.03, xref="x2", yref="paper",
+            x=0, y=1.03, xref="x2", yref="paper",
             xanchor="center", yanchor="bottom",
-            text="<b>This plate</b>", showarrow=False,
-            font=dict(size=11),
+            text="<b>This run</b>", showarrow=False,
+            font=dict(size=10),
         ))
-        if P:
+        for plate_idx, plate in enumerate(past_plates):
+            ps = _short_plate_label(plate, box_by_plate.get(plate, ""))
+            # Date only (left half of the short label) keeps headers tight.
+            short_head = ps.split(" · ")[0] if " · " in ps else ps
             anns.append(dict(
-                x=RUG_X["HIST"], y=1.03, xref="x2", yref="paper",
+                x=1 + plate_idx, y=1.03, xref="x2", yref="paper",
                 xanchor="center", yanchor="bottom",
-                text=(f"<b>Past</b>"
-                      f"<br><span style='font-size:10px; color:#7f8c8d;'>"
-                      f"{P} plate{'s' if P != 1 else ''}</span>"),
-                showarrow=False, font=dict(size=11),
+                text=(f"<span style='color:#7f8c8d;'>{short_head}</span>"),
+                showarrow=False, font=dict(size=9),
             ))
         return anns
 
@@ -687,9 +705,15 @@ def _make_curve_picker(
         vis = (ai == 0)
 
         # --- col 1, back layer: historical curves ---
+        # NB: showlegend=False on every per-antigen trace. The per-plate
+        # legend entries are anchored to dedicated "legend-anchor"
+        # traces added AFTER the per-antigen loop. This makes the
+        # legend entries persist across antigen switches; without the
+        # anchor, the legend traces were tied to the first antigen's
+        # copy and would vanish (or do nothing on click) when the user
+        # typeaheaded to a different antigen.
         for plate in past_plates:
             plate_full = _plate_label(plate, box_by_plate.get(plate, ""))
-            plate_short = _short_plate_label(plate, box_by_plate.get(plate, ""))
             params_hist = hist_fit_lookup.get((plate, an))
             if params_hist is not None:
                 hxs = np.geomspace(x_min, x_max, 60)
@@ -697,8 +721,8 @@ def _make_curve_picker(
                 fig.add_trace(go.Scatter(
                     x=hxs, y=hys, mode="lines",
                     line=dict(color=HIST_GREY, width=1.2, dash="dot"),
-                    name=plate_short, legendgroup=f"plate:{plate}",
-                    showlegend=(ai == 0),
+                    name="", legendgroup=f"plate:{plate}",
+                    showlegend=False,
                     hovertemplate=(
                         f"<b>{plate_full}</b><br>"
                         "Dilution 1:%{x:.0f}<br>MFI %{y:.0f}<extra></extra>"
@@ -709,29 +733,38 @@ def _make_curve_picker(
                 fig.add_trace(go.Scatter(
                     x=[], y=[], mode="lines",
                     line=dict(color=HIST_GREY, width=1.2, dash="dot"),
-                    name=plate_short, legendgroup=f"plate:{plate}",
-                    showlegend=(ai == 0), visible=vis,
+                    name="", legendgroup=f"plate:{plate}",
+                    showlegend=False, visible=vis,
                 ), row=1, col=1)
 
-        # --- col 2, back layer: historical specimen rugs ---
-        for plate in past_plates:
+        # --- col 2, back layer: historical specimen rugs (one column per past plate) ---
+        for plate_idx, plate in enumerate(past_plates):
             plate_full = _plate_label(plate, box_by_plate.get(plate, ""))
-            plate_short = _short_plate_label(plate, box_by_plate.get(plate, ""))
+            x_pos = 1 + plate_idx  # past plates start at x=1 (this plate is x=0)
             sub = hist_specs_lookup.get((plate, an))
             if sub is not None and not sub.empty:
-                sample_lbl = sub.get("sample_name", pd.Series([""] * len(sub))).fillna("")
-                customdata = list(zip([plate_full] * len(sub), sample_lbl))
+                # Hover fields: sample_name (barcode for specimens),
+                # patient_id (when known), well, MFI, plus the plate label.
+                sample_lbl  = sub.get("sample_name", pd.Series([""] * len(sub))).fillna("").astype(str)
+                well_lbl    = sub.get("well", pd.Series([""] * len(sub))).fillna("").astype(str)
+                patient_lbl = sub.get("patient_id", pd.Series([""] * len(sub))).fillna("").astype(str)
+                customdata = list(zip(
+                    [plate_full] * len(sub), sample_lbl, well_lbl, patient_lbl,
+                ))
                 fig.add_trace(go.Scatter(
-                    x=[RUG_X["HIST"]] * len(sub), y=sub["mfi"],
+                    x=[x_pos] * len(sub), y=sub["mfi"],
                     mode="markers",
                     marker=dict(symbol="line-ew-open", size=12, color=HIST_GREY,
                                 line=dict(width=2, color=HIST_GREY)),
-                    name=plate_short, legendgroup=f"plate:{plate}",
+                    name="", legendgroup=f"plate:{plate}",
                     showlegend=False,
                     customdata=customdata,
                     hovertemplate=(
                         "<b>%{customdata[0]}</b><br>"
-                        "%{customdata[1]}<br>MFI %{y:.0f}<extra></extra>"
+                        "Sample: %{customdata[1]}"
+                        "  (well %{customdata[2]})<br>"
+                        "Patient ID: %{customdata[3]}<br>"
+                        "MFI %{y:.0f}<extra></extra>"
                     ),
                     visible=vis,
                 ), row=1, col=2)
@@ -739,16 +772,19 @@ def _make_curve_picker(
                 fig.add_trace(go.Scatter(
                     x=[], y=[], mode="markers",
                     marker=dict(symbol="line-ew-open", size=12, color=HIST_GREY),
-                    name=plate_short, legendgroup=f"plate:{plate}",
+                    name="", legendgroup=f"plate:{plate}",
                     showlegend=False, visible=vis,
                 ), row=1, col=2)
 
         # --- col 1, front layer: current standards ---
+        # showlegend=False on every per-antigen copy; the legend
+        # entries for "Standards" and "This plate (…)" are anchored on
+        # dedicated always-visible traces appended after the loop.
         if std is not None and not std.empty:
             fig.add_trace(go.Scatter(
                 x=std["dilution"], y=std["mfi"], mode="markers",
-                name="Standards", legendgroup="current",
-                showlegend=(ai == 0),
+                name="", legendgroup="current",
+                showlegend=False,
                 marker=dict(size=10, color="#2c3e50"),
                 hovertemplate="Dilution 1:%{x:.0f}<br>MFI %{y:.0f}<extra></extra>",
                 visible=vis,
@@ -756,19 +792,18 @@ def _make_curve_picker(
         else:
             fig.add_trace(go.Scatter(
                 x=[], y=[], mode="markers",
-                name="Standards", legendgroup="current",
-                showlegend=(ai == 0), visible=vis,
+                name="", legendgroup="current",
+                showlegend=False, visible=vis,
             ), row=1, col=1)
 
         # --- col 1, front layer: current 4PL fit ---
-        cur_legend_name = f"This plate ({current_short})" if current_short else "This plate"
         if params is not None and std is not None and not std.empty:
             xs = np.geomspace(x_min, x_max, 80)
             ys = four_pl(xs, *params)
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="lines",
-                name=cur_legend_name, legendgroup="current",
-                showlegend=(ai == 0),
+                name="", legendgroup="current",
+                showlegend=False,
                 line=dict(color="#3498db", width=2),
                 hovertemplate="Dilution 1:%{x:.0f}<br>MFI %{y:.0f}<extra></extra>",
                 visible=vis,
@@ -776,8 +811,8 @@ def _make_curve_picker(
         else:
             fig.add_trace(go.Scatter(
                 x=[], y=[], mode="lines",
-                name=cur_legend_name, legendgroup="current",
-                showlegend=(ai == 0),
+                name="", legendgroup="current",
+                showlegend=False,
                 line=dict(color="#3498db", width=2), visible=vis,
             ), row=1, col=1)
 
@@ -789,9 +824,10 @@ def _make_curve_picker(
             if cur is not None and not cur.empty:
                 sub = cur[cur["status"] == status]
                 if not sub.empty:
-                    sample_lbl = sub.get("sample_name", pd.Series([""] * len(sub))).fillna("")
-                    well_lbl = sub.get("well", pd.Series([""] * len(sub))).fillna("")
-                    customdata = list(zip(sample_lbl, well_lbl))
+                    sample_lbl  = sub.get("sample_name", pd.Series([""] * len(sub))).fillna("").astype(str)
+                    well_lbl    = sub.get("well", pd.Series([""] * len(sub))).fillna("").astype(str)
+                    patient_lbl = sub.get("patient_id", pd.Series([""] * len(sub))).fillna("").astype(str)
+                    customdata = list(zip(sample_lbl, well_lbl, patient_lbl))
                     fig.add_trace(go.Scatter(
                         x=[x_pos] * len(sub), y=sub["mfi"],
                         mode="markers",
@@ -803,8 +839,10 @@ def _make_curve_picker(
                         customdata=customdata,
                         hovertemplate=(
                             f"<b>{STATUS_LABEL[status]}</b><br>"
-                            "%{customdata[0]} (%{customdata[1]})"
-                            "<br>MFI %{y:.0f}<extra></extra>"
+                            "Sample: %{customdata[0]}"
+                            "  (well %{customdata[1]})<br>"
+                            "Patient ID: %{customdata[2]}<br>"
+                            "MFI %{y:.0f}<extra></extra>"
                         ),
                         visible=vis,
                     ), row=1, col=2)
@@ -817,9 +855,76 @@ def _make_curve_picker(
                 visible=vis,
             ), row=1, col=2)
 
+    # ----- Legend-anchor traces -----
+    # Always-visible, no-data placeholder traces that host the legend
+    # entries. They live OUTSIDE the per-antigen slot scheme so the
+    # legend stays the same regardless of which antigen the user has
+    # typeaheaded to. Two current-plate anchors (Standards + 4PL fit)
+    # plus one per past plate.
+    #
+    # Past-plate clicks are intercepted by the JS shim below which
+    # manages a hiddenPlates set and overrides Plotly's default toggle
+    # behaviour. Current-plate anchors use legendgroup="current" so
+    # toggling them hides all per-antigen Standards / 4PL / rug traces
+    # via Plotly's default behaviour (no special handling needed; users
+    # rarely toggle these but the entries make sense to display).
+
+    # Current-plate anchors
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="markers",
+        name="Standards", legendgroup="current",
+        showlegend=True, visible=True,
+        marker=dict(size=10, color="#2c3e50"),
+        hoverinfo="skip",
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="lines",
+        name=f"This plate ({current_short})" if current_short else "This plate",
+        legendgroup="current",
+        showlegend=True, visible=True,
+        line=dict(color="#3498db", width=2),
+        hoverinfo="skip",
+    ), row=1, col=1)
+
+    # Past-plate anchors
+    for plate in past_plates:
+        plate_short = _short_plate_label(plate, box_by_plate.get(plate, ""))
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="lines",
+            line=dict(color=HIST_GREY, width=1.2, dash="dot"),
+            name=plate_short,
+            legendgroup=f"plate:{plate}",
+            showlegend=True, visible=True,
+            hoverinfo="skip",
+        ), row=1, col=1)
+
     # ----- Layout -----
     n_per_analyte = 2 * P + 6
     n_traces = len(analytes) * n_per_analyte
+    # +2 for the current-plate anchors (Standards, 4PL fit), +P for past plates.
+    n_anchor_current = 2
+    n_total_traces = n_traces + n_anchor_current + P
+
+    # Per-trace plate map. ``null`` for current-plate traces (legend toggle
+    # not handled per-plate); plate_id string for traces whose
+    # visibility should be controlled by the per-plate legend toggle
+    # (i.e. past-plate curves + rugs + their anchors).
+    trace_plate_map: list[str | None] = []
+    for ai in range(len(analytes)):
+        for slot in range(n_per_analyte):
+            if slot < P:
+                trace_plate_map.append(past_plates[slot])
+            elif slot < 2 * P:
+                trace_plate_map.append(past_plates[slot - P])
+            else:
+                trace_plate_map.append(None)
+    # current-plate anchors
+    trace_plate_map.append(None)  # Standards anchor
+    trace_plate_map.append(None)  # 4PL fit anchor
+    # past-plate anchors
+    for plate in past_plates:
+        trace_plate_map.append(plate)
+    assert len(trace_plate_map) == n_total_traces
 
     # X-range for curve (col 1) — pad lightly so the leftmost / rightmost
     # standard points aren't flush against the axis.
@@ -862,41 +967,57 @@ def _make_curve_picker(
                      range=[pad_lo, pad_hi], row=1, col=1)
     # Rug subplot's bottom x-axis is redundant with the per-column
     # header annotations above each tick. Hide it entirely; the
-    # categorical positions still drive the trace x-values.
-    # Tight x-range so the two rug columns hug the centre of the narrow
-    # subplot instead of leaving empty space on each side.
-    rug_x_range = [-0.4, 1.4] if P else [-0.5, 0.5]
+    # categorical positions still drive the trace x-values. One
+    # column for "This run" at x=0 and one column per past plate at
+    # x=1..P. Tight half-step padding on either side.
+    rug_x_range = [-0.5, 0.5 + P]
     fig.update_xaxes(
         range=rug_x_range,
         showticklabels=False, showgrid=False, showline=False, zeroline=False,
         ticks="", title="", row=1, col=2,
     )
+    # Both y-axes must be ``log`` so MFI values land at the same visual
+    # position in the curve panel and in the rug panel. ``matches='y'``
+    # (set by ``shared_yaxes=True``) propagates the *range* between the
+    # two axes but Plotly does not reliably propagate the scale type;
+    # if one is log and the other linear, the rug ticks sit at
+    # different visual positions than the same MFI value on the curve.
     fig.update_yaxes(type="log", title="MFI", row=1, col=1)
-    fig.update_yaxes(showgrid=True, row=1, col=2)
+    fig.update_yaxes(type="log", showgrid=True, row=1, col=2)
 
-    # Vertical separator between "This plate" (x=0) and the "Past"
-    # column (x=1), drawn as a paper-y dotted shape inside the rug
-    # subplot. Skipped when there are no past plates.
-    if P:
+    # Vertical separators between adjacent rug columns: one between
+    # "This run" and the first past plate (heavier line so the
+    # current vs past distinction reads at a glance), then one between
+    # each pair of past plates.
+    for col_boundary in range(P):
+        is_first = col_boundary == 0
         fig.add_shape(
             type="line", xref="x2", yref="paper",
-            x0=0.5, x1=0.5, y0=0, y1=1.05,
-            line=dict(color="#d0d7de", width=1, dash="dot"),
-            opacity=0.9, layer="above",
+            x0=0.5 + col_boundary, x1=0.5 + col_boundary, y0=0, y1=1.05,
+            line=dict(color="#d0d7de", width=1.6 if is_first else 0.8,
+                      dash="dot" if is_first else "dot"),
+            opacity=0.95 if is_first else 0.6,
+            layer="above",
         )
 
     fig_html = _plotly_html(fig, "fig-curve-picker", height=600)
 
     # ----- Typeahead lookup (visibility + title + annotations) -----
-    # ``annotations`` is replaced wholesale by ``Plotly.relayout``, so
-    # each antigen's entry carries the full list (only the four
-    # rug-status headers, plus optional Past header).
+    # Each antigen's ``vis`` array has length n_total_traces. Per-antigen
+    # slots (the first n_traces entries) flip on/off based on which
+    # antigen is selected. The anchor traces (last 2+P entries) are
+    # always ``True`` here — the JS shim below will downgrade them to
+    # ``"legendonly"`` for any plate the user has hidden via legend
+    # click.
     lookup: dict[str, dict] = {}
     for ai, an in enumerate(analytes):
-        vis = [False] * n_traces
+        vis: list = [False] * n_total_traces
         base = ai * n_per_analyte
         for k in range(n_per_analyte):
             vis[base + k] = True
+        # Anchors at the tail — always visible by default.
+        for idx in range(n_traces, n_total_traces):
+            vis[idx] = True
         label = f"⚠ {an} (excluded)" if an in excluded else an
         fit = pool_fits[an]
         title = (
@@ -907,7 +1028,10 @@ def _make_curve_picker(
         lookup[an] = {"vis": vis, "title": title, "annotations": _rug_annotations(an)}
 
     lookup_js = json.dumps(lookup).replace("</", "<\\/")
+    trace_plate_map_js = json.dumps(trace_plate_map).replace("</", "<\\/")
+    past_plates_js = json.dumps(past_plates).replace("</", "<\\/")
     options_html = "\n".join(f'<option value="{html.escape(a)}">' for a in analytes)
+    first_antigen_js = json.dumps(analytes[0])
     typeahead_html = f"""
 <div style="display:flex; gap:10px; align-items:center; margin: 0 0 8px;">
   <label for="curve-picker-input" style="font-size:13px; color:#34495e; font-weight:600;">
@@ -925,10 +1049,71 @@ def _make_curve_picker(
 </div>
 <script>
 (function () {{
+  var DIV = "fig-curve-picker";
   var lookup = {lookup_js};
-  var input = document.getElementById("curve-picker-input");
+  var tracePlateMap = {trace_plate_map_js};
+  var pastPlates = {past_plates_js};
+  var input  = document.getElementById("curve-picker-input");
   var status = document.getElementById("curve-picker-status");
   if (!input) return;
+
+  // State: which past plates has the user hidden via legend click?
+  // Persists across antigen typeahead switches so the user's choice
+  // sticks when they navigate to a different antigen.
+  var hiddenPlates = {{}};   // {{ plateId: true }} — using object as a Set
+  var currentEntry = lookup[{first_antigen_js}];
+
+  // Merge per-antigen visibility with hidden-plates state and push
+  // to Plotly via restyle. Visible traces belonging to a hidden
+  // plate become "legendonly" so the legend entry stays visible (and
+  // greyed) but the data is hidden from the plot.
+  function applyVisibility(entry) {{
+    if (!entry) return;
+    var vis = entry.vis.slice();
+    for (var i = 0; i < vis.length; i++) {{
+      var plate = tracePlateMap[i];
+      if (plate && hiddenPlates[plate]) {{
+        vis[i] = "legendonly";
+      }}
+    }}
+    Plotly.restyle(DIV, {{visible: vis}});
+  }}
+
+  // Legend click — intercept Plotly's default toggle. We toggle our
+  // own hiddenPlates state and re-apply the merged visibility. Only
+  // applies to past-plate legend entries (the "current" group click
+  // falls through to Plotly's default behaviour, which is fine).
+  function wireLegend() {{
+    var graphDiv = document.getElementById(DIV);
+    if (!graphDiv || !graphDiv.on) return;
+    graphDiv.on('plotly_legendclick', function (eventData) {{
+      var traceIdx = eventData.curveNumber;
+      var plate = tracePlateMap[traceIdx];
+      if (!plate) return true;  // "current" legendgroup — let Plotly handle.
+      if (hiddenPlates[plate]) delete hiddenPlates[plate];
+      else hiddenPlates[plate] = true;
+      applyVisibility(currentEntry);
+      return false;  // prevent default toggle
+    }});
+    graphDiv.on('plotly_legenddoubleclick', function (eventData) {{
+      var traceIdx = eventData.curveNumber;
+      var plate = tracePlateMap[traceIdx];
+      if (!plate) return true;
+      // Toggle isolate: if only this plate is shown, restore all;
+      // otherwise hide all others.
+      var allOthers = pastPlates.filter(function (p) {{ return p !== plate; }});
+      var allHidden = allOthers.every(function (p) {{ return hiddenPlates[p]; }});
+      if (allHidden && !hiddenPlates[plate]) {{
+        hiddenPlates = {{}};
+      }} else {{
+        hiddenPlates = {{}};
+        allOthers.forEach(function (p) {{ hiddenPlates[p] = true; }});
+      }}
+      applyVisibility(currentEntry);
+      return false;
+    }});
+  }}
+
   function pick(name) {{
     var entry = lookup[name];
     if (!entry) {{
@@ -936,19 +1121,354 @@ def _make_curve_picker(
       return;
     }}
     status.textContent = "";
-    // 1) per-trace visibility (data update).
-    Plotly.restyle("fig-curve-picker", {{visible: entry.vis}});
-    // 2) layout updates. Use the 3-arg relayout form for annotations
-    //    so Plotly *replaces* the array instead of trying to merge
-    //    keys — that's what makes the summary text refresh per
-    //    antigen.
-    Plotly.relayout("fig-curve-picker", "title.text", entry.title);
-    Plotly.relayout("fig-curve-picker", "annotations", entry.annotations);
+    currentEntry = entry;
+    applyVisibility(entry);
+    // 3-arg relayout — Plotly replaces the array wholesale, which is
+    // what makes the per-antigen summary text refresh on every pick.
+    Plotly.relayout(DIV, "title.text", entry.title);
+    Plotly.relayout(DIV, "annotations", entry.annotations);
   }}
+
   input.addEventListener("change", function () {{ pick(input.value.trim()); }});
-  input.addEventListener("input", function () {{
+  input.addEventListener("input",  function () {{
     if (lookup[input.value.trim()]) pick(input.value.trim());
   }});
+
+  // The Plotly chart may not be drawn yet when this script runs —
+  // wait for it before wiring the legend handler.
+  if (document.getElementById(DIV)) wireLegend();
+  else window.addEventListener("load", wireLegend);
+}})();
+</script>
+"""
+    return typeahead_html + fig_html
+
+
+def _make_cross_run_scatter(
+    pool_fits: dict,
+    excluded: set[str],
+    in_range: pd.DataFrame | None,
+    history_specimens: pd.DataFrame | None,
+    current_plate_id: str | None,
+    current_box_ids: list[str] | None,
+) -> str:
+    """Antigen-switching scatter comparing this run's specimen MFI to
+    each past run's MFI for the same sample.
+
+    For the selected antigen, every sample that appears on the current
+    plate **and** a past plate produces one point at
+    ``(current_mfi, past_mfi)``. Samples are joined preferentially on
+    ``patient_id`` and fall back to ``barcode`` / ``sample_name`` when
+    no patient ID is known. One trace per past plate (legend-toggleable);
+    a faint y=x reference line shows where perfect agreement would land.
+
+    Returns the HTML for a self-contained figure + typeahead lookup
+    that drives `Plotly.update` on antigen change. Returns an empty
+    string when there are no past plates or no joinable samples.
+    """
+    if not pool_fits or in_range is None or in_range.empty:
+        return ""
+    if history_specimens is None or not isinstance(history_specimens, pd.DataFrame) or history_specimens.empty:
+        return ""
+
+    # Filter history to past plates only.
+    hist = history_specimens
+    if current_plate_id and "plate_id" in hist.columns:
+        hist = hist[hist["plate_id"] != current_plate_id]
+    if hist.empty:
+        return ""
+
+    # Plate roster (chronological where run_date is known).
+    if "run_date" in hist.columns:
+        rd_by_plate = (
+            hist.groupby("plate_id")["run_date"]
+            .agg(lambda s: s.dropna().iloc[0] if s.dropna().size else "")
+        )
+        past_plates = sorted(rd_by_plate.index, key=lambda p: (rd_by_plate.get(p, ""), p))
+    else:
+        past_plates = sorted(hist["plate_id"].dropna().astype(str).unique())
+    if not past_plates:
+        return ""
+
+    box_by_plate: dict[str, str] = {}
+    if "box_id" in hist.columns:
+        for p, g in hist.groupby("plate_id"):
+            boxes = sorted({str(b) for b in g["box_id"].dropna().unique() if str(b).strip()})
+            if boxes:
+                box_by_plate[str(p)] = ",".join(boxes)
+
+    analytes = list(pool_fits.keys())
+
+    # Build a per-(analyte, plate) lookup of joined samples.
+    # Sample identity preference: patient_id > barcode > sample_name.
+    def _sample_key(row) -> str:
+        for col in ("patient_id", "barcode", "sample_name"):
+            v = row.get(col, "")
+            if isinstance(v, str) and v.strip():
+                return v
+            if v not in (None, "") and not pd.isna(v):
+                return str(v)
+        return ""
+
+    cur_by_an: dict[str, dict[str, dict]] = {}
+    for an, g in in_range.groupby("analyte", sort=False):
+        cur_by_an[an] = {}
+        for r in g.to_dict(orient="records"):
+            k = _sample_key(r)
+            if k:
+                cur_by_an[an][k] = r
+
+    hist_by_an_plate: dict[tuple[str, str], dict[str, dict]] = {}
+    for (plate, an), g in hist.groupby(["plate_id", "analyte"], sort=False):
+        d: dict[str, dict] = {}
+        for r in g.to_dict(orient="records"):
+            k = _sample_key(r)
+            if k:
+                d[k] = r
+        hist_by_an_plate[(str(plate), an)] = d
+
+    # CB-safe palette (matches the picker).
+    palette = ["#4477AA", "#EE7733", "#44AA99", "#CCBB44",
+               "#AA3377", "#66CCEE", "#7f8c8d", "#228833"]
+
+    # Trace counts are computed after the build loop (see below) — we
+    # need to know how many anchor traces get appended.
+    fig = go.Figure()
+
+    # Reference line (added first so it sits behind the scatter).
+    # Spans the entire log-MFI range we'll likely use; clipped to axis.
+    fig.add_trace(go.Scatter(
+        x=[1, 1e6], y=[1, 1e6], mode="lines",
+        line=dict(color="#bdc3c7", width=1, dash="dot"),
+        name="y = x (perfect agreement)",
+        hoverinfo="skip", showlegend=True, visible=True,
+    ))
+
+    # One trace per (antigen, past_plate). Only antigen-0's traces are
+    # visible initially; typeahead lookup toggles which antigen is shown.
+    cur_label_full = _plate_label(current_plate_id, current_box_ids) or "this run"
+    for ai, an in enumerate(analytes):
+        for pi, plate in enumerate(past_plates):
+            plate_full  = _plate_label(plate, box_by_plate.get(plate, ""))
+            plate_short = _short_plate_label(plate, box_by_plate.get(plate, ""))
+            cur_d  = cur_by_an.get(an, {})
+            hist_d = hist_by_an_plate.get((plate, an), {})
+            xs, ys, cust = [], [], []
+            for k in cur_d.keys() & hist_d.keys():
+                cr, hr = cur_d[k], hist_d[k]
+                cx, cy = cr.get("mfi"), hr.get("mfi")
+                if cx is None or cy is None: continue
+                try:
+                    fx, fy = float(cx), float(cy)
+                except (TypeError, ValueError):
+                    continue
+                if not (fx > 0 and fy > 0): continue  # log axes
+                xs.append(fx); ys.append(fy)
+                cust.append([
+                    plate_full,                       # 0
+                    str(cr.get("sample_name") or ""), # 1 — current sample/barcode
+                    str(cr.get("well") or ""),        # 2 — current well
+                    str(cr.get("patient_id") or ""),  # 3 — patient id
+                    str(hr.get("well") or ""),        # 4 — past well
+                ])
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="markers",
+                marker=dict(size=7, color=palette[pi % len(palette)],
+                            opacity=0.75, line=dict(width=0)),
+                name="",
+                legendgroup=f"plate:{plate}",
+                # showlegend=False on every per-antigen trace; the
+                # legend entries are anchored on always-visible traces
+                # appended after the per-antigen loop (see below). This
+                # makes the legend persist across antigen typeahead
+                # switches; without anchors the legend would only show
+                # the first antigen's traces and toggling them would
+                # have no visible effect on subsequent antigens.
+                showlegend=False,
+                customdata=cust,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Sample: %{customdata[1]}<br>"
+                    "Patient ID: %{customdata[3]}<br>"
+                    "Well — this run: %{customdata[2]} · past run: %{customdata[4]}<br>"
+                    f"<b>{cur_label_full}</b> MFI: %{{x:.0f}}<br>"
+                    f"<b>%{{customdata[0]}}</b> MFI: %{{y:.0f}}"
+                    "<extra></extra>"
+                ),
+                visible=(ai == 0),
+            ))
+
+    # ----- Legend-anchor traces (one per past plate) -----
+    # Always-visible placeholder traces that host the per-plate legend
+    # entries. Live OUTSIDE the per-antigen scheme so the legend stays
+    # populated regardless of which antigen is selected. Click is
+    # intercepted by the JS shim which manages a hiddenPlates set and
+    # overrides Plotly's default toggle behaviour.
+    for pi, plate in enumerate(past_plates):
+        plate_short = _short_plate_label(plate, box_by_plate.get(plate, ""))
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(size=7, color=palette[pi % len(palette)],
+                        opacity=0.85, line=dict(width=0)),
+            name=plate_short,
+            legendgroup=f"plate:{plate}",
+            showlegend=True, visible=True,
+            hoverinfo="skip",
+        ))
+
+    # Layout
+    fig.update_layout(
+        margin=dict(l=70, r=160, t=70, b=60),
+        height=460,
+        title=dict(text=(
+            f"<b>{('⚠ ' if analytes[0] in excluded else '') + analytes[0]}</b>"
+            " &nbsp;·&nbsp; current-run MFI vs past-run MFI"
+        )),
+        xaxis=dict(
+            type="log",
+            title=f"This run ({_short_plate_label(current_plate_id, current_box_ids)}) — MFI",
+            gridcolor="#eef1f4",
+        ),
+        yaxis=dict(
+            type="log",
+            title="Past run — MFI",
+            gridcolor="#eef1f4",
+        ),
+        showlegend=True,
+        legend=dict(
+            title=dict(text="Past run · click to toggle",
+                       font=dict(size=10, color="#7f8c8d")),
+            orientation="v",
+            x=1.01, xanchor="left", y=1.0, yanchor="top",
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="#d0d7de", borderwidth=1,
+            font=dict(size=10),
+        ),
+    )
+    fig_html = _plotly_html(fig, "fig-cross-run", height=480)
+
+    # ----- Trace layout -----
+    # Index 0:                  y=x reference line (always visible)
+    # Indices 1 .. n_per_analyte:  one trace per past plate, per antigen
+    #                              (only the active antigen's are visible)
+    # Tail indices:             P anchor traces (always visible, host the
+    #                              legend entries — see comment above)
+    n_past = len(past_plates)
+    n_per_analyte = n_past
+    n_total = 1 + len(analytes) * n_per_analyte + n_past
+
+    # ``trace_plate_map``: plate_id for every trace whose visibility is
+    # controlled by the per-plate legend toggle; null otherwise.
+    trace_plate_map: list[str | None] = [None]  # trace 0 = ref line
+    for _ai in range(len(analytes)):
+        for plate in past_plates:
+            trace_plate_map.append(plate)
+    for plate in past_plates:
+        trace_plate_map.append(plate)
+    assert len(trace_plate_map) == n_total
+
+    # Typeahead lookup: per-antigen visibility array (length n_total).
+    lookup: dict[str, dict] = {}
+    for ai, an in enumerate(analytes):
+        vis: list = [False] * n_total
+        vis[0] = True  # reference line
+        for k in range(n_past):
+            vis[1 + ai * n_per_analyte + k] = True
+        # Anchor traces (tail) — always visible by default; the JS
+        # shim downgrades to "legendonly" for any plate the user hid.
+        for idx in range(1 + len(analytes) * n_per_analyte, n_total):
+            vis[idx] = True
+        label = f"⚠ {an} (excluded)" if an in excluded else an
+        title = (
+            f"<b>{label}</b> &nbsp;·&nbsp; "
+            "current-run MFI vs past-run MFI"
+        )
+        lookup[an] = {"vis": vis, "title": title}
+
+    lookup_js = json.dumps(lookup).replace("</", "<\\/")
+    trace_plate_map_js = json.dumps(trace_plate_map).replace("</", "<\\/")
+    past_plates_js = json.dumps(past_plates).replace("</", "<\\/")
+    first_antigen_js = json.dumps(analytes[0])
+    options_html = "\n".join(f'<option value="{html.escape(a)}">' for a in analytes)
+    typeahead_html = f"""
+<div style="display:flex; gap:10px; align-items:center; margin: 4px 0 8px;">
+  <label for="cross-run-input" style="font-size:13px; color:#34495e; font-weight:600;">
+    Search antigen:
+  </label>
+  <input id="cross-run-input" list="cross-run-list"
+         placeholder="start typing… e.g. RES_Ade3"
+         autocomplete="off"
+         style="flex:1; max-width:340px; padding:6px 10px; font-size:13px;
+                border:1px solid #d0d7de; border-radius:4px;">
+  <datalist id="cross-run-list">
+    {options_html}
+  </datalist>
+  <span id="cross-run-status" style="font-size:12px; color:#7f8c8d;"></span>
+</div>
+<script>
+(function () {{
+  var DIV = "fig-cross-run";
+  var lookup = {lookup_js};
+  var tracePlateMap = {trace_plate_map_js};
+  var pastPlates = {past_plates_js};
+  var input  = document.getElementById("cross-run-input");
+  var status = document.getElementById("cross-run-status");
+  if (!input) return;
+  var hiddenPlates = {{}};
+  var currentEntry = lookup[{first_antigen_js}];
+
+  function applyVisibility(entry) {{
+    if (!entry) return;
+    var vis = entry.vis.slice();
+    for (var i = 0; i < vis.length; i++) {{
+      var plate = tracePlateMap[i];
+      if (plate && hiddenPlates[plate]) vis[i] = "legendonly";
+    }}
+    Plotly.restyle(DIV, {{visible: vis}});
+  }}
+
+  function wireLegend() {{
+    var gd = document.getElementById(DIV);
+    if (!gd || !gd.on) return;
+    gd.on('plotly_legendclick', function (eventData) {{
+      var plate = tracePlateMap[eventData.curveNumber];
+      if (!plate) return true;  // y=x reference line — let Plotly handle.
+      if (hiddenPlates[plate]) delete hiddenPlates[plate];
+      else hiddenPlates[plate] = true;
+      applyVisibility(currentEntry);
+      return false;
+    }});
+    gd.on('plotly_legenddoubleclick', function (eventData) {{
+      var plate = tracePlateMap[eventData.curveNumber];
+      if (!plate) return true;
+      var others = pastPlates.filter(function (p) {{ return p !== plate; }});
+      var allHidden = others.every(function (p) {{ return hiddenPlates[p]; }});
+      if (allHidden && !hiddenPlates[plate]) {{
+        hiddenPlates = {{}};
+      }} else {{
+        hiddenPlates = {{}};
+        others.forEach(function (p) {{ hiddenPlates[p] = true; }});
+      }}
+      applyVisibility(currentEntry);
+      return false;
+    }});
+  }}
+
+  function pick(name) {{
+    var entry = lookup[name];
+    if (!entry) {{ status.textContent = name ? "no match" : ""; return; }}
+    status.textContent = "";
+    currentEntry = entry;
+    applyVisibility(entry);
+    Plotly.relayout(DIV, "title.text", entry.title);
+  }}
+
+  input.addEventListener("change", function () {{ pick(input.value.trim()); }});
+  input.addEventListener("input",  function () {{
+    if (lookup[input.value.trim()]) pick(input.value.trim());
+  }});
+  if (document.getElementById(DIV)) wireLegend();
+  else window.addEventListener("load", wireLegend);
 }})();
 </script>
 """

@@ -1,17 +1,38 @@
-"""Classify wells as PC standard, background, NC, or specimen from sample names.
+"""Classify wells as PC standard, background, NC, or specimen.
 
-Uvira / Intelliflex sample-name conventions:
-    PC standards : 'Standard1' .. 'Standard10'  (one well each, no replicate)
-    Background   : 'Background'                 (A11 / A12 plate blanks)
-    NC           : 'NC*' / 'Negative*' / 'Control*'   (optional — known seronegative sample)
-    Specimen     : everything else              (typically 'FD########' barcodes)
+Classification priority:
 
-The pilot plate has only Background wells.  NC wells, when present on
-future plates, are the named negative control sample and get a
-dedicated section in the QC report.
+1. **Authoritative — input file Type column.** When the Intelliflex
+   ``*_inputfile.csv`` is uploaded, its ``Type`` field for each well is
+   carried into a ``plate_well_type`` column by
+   ``parse_layout.build_layout`` (lower-cased). When present it is the
+   primary signal and maps as:
+
+       Type=Standard    → well_type = pc
+       Type=Background  → well_type = background
+       Type=Control     → well_type = nc
+       Type=Unknown     → well_type = specimen
+
+   This lets operators name a Control well anything (e.g. ``NI7``,
+   ``Pool_B``) and still have it classified correctly.
+
+2. **Fallback — sample-name regex.** When the input file is absent,
+   or for any well whose ``plate_well_type`` is missing / unrecognised,
+   the per-well ``sample_name`` is matched against the configured
+   regex patterns:
+
+       PC          : '^Standard\\d+$'
+       Background  : '^Background'
+       NC          : '^NC' / '^Negative' / '^Control'
+       Specimen    : everything else (typically 'FD########' barcodes)
+
+   Patterns are editable on the Settings page.
 
 Dilution for PC wells is looked up by the trailing integer of the
-'Standard{N}' name into config['standard']['dilutions'].
+``Standard{N}`` name into ``config['standard']['dilutions']``. This is
+the same in both classification paths because Intelliflex auto-generates
+``Standard1`` .. ``Standard10`` as the sample name for Standard-type
+wells even when the operator left ``Description`` blank.
 """
 
 from __future__ import annotations
@@ -28,8 +49,24 @@ from .config import (
 )
 
 
+# Authoritative mapping from the Intelliflex input file's `Type`
+# column (lower-cased) to our internal well_type enum. Anything not
+# in this map falls back to sample-name regex classification.
+_PWT_TO_WELL_TYPE: dict[str, str] = {
+    "standard":   "pc",
+    "background": "background",
+    "control":    "nc",
+    "unknown":    "specimen",
+}
+
+
 def classify_wells(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
-    """Add well_type and dilution columns based on sample_name."""
+    """Add ``well_type`` and ``dilution`` columns.
+
+    See module docstring for the classification priority (input-file
+    ``plate_well_type`` column wins; sample-name regex is the
+    fallback).
+    """
     pc_pats = PC_PATTERNS
     bg_pats = BACKGROUND_PATTERNS
     nc_pats = NC_PATTERNS
@@ -44,9 +81,24 @@ def classify_wells(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame
             dilution_series = [float(d) for d in std_dils]
 
     df = df.copy()
+
+    # Start with the regex-derived classification. This always runs —
+    # it's the source of truth when no input file was uploaded, and
+    # the fallback for any plate_well_type the input file leaves
+    # blank or labels with an unrecognised value.
     df["well_type"] = df["sample_name"].apply(
         lambda n: _classify_sample(n, pc_pats, bg_pats, nc_pats)
     )
+
+    # When the input file is present, ``plate_well_type`` is the
+    # authoritative signal — override the regex result for every row
+    # whose plate_well_type maps to a known well_type.
+    if "plate_well_type" in df.columns:
+        pwt = df["plate_well_type"].astype(str).str.strip().str.lower()
+        mapped = pwt.map(_PWT_TO_WELL_TYPE)
+        override_mask = mapped.notna()
+        df.loc[override_mask, "well_type"] = mapped[override_mask]
+
     df["dilution"] = df["sample_name"].apply(lambda n: _dilution_for_pc(n, dilution_series))
 
     if config is not None:

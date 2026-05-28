@@ -70,6 +70,12 @@ def _parse_metadata(rows: list[list[str]]) -> dict:
         "BatchStopTime": "batch_stop_time",
         "PanelName": "panel_name",
         "BatchDescription": "batch_description",
+        # The instrument's PMT operating mode — e.g.
+        # "FLEXMAP 3D® High PMT" vs "Luminex® 200™ Low PMT". Critical
+        # because the same plate read on Low PMT will report MFI ~10×
+        # lower than on High PMT, which makes Background levels and
+        # standards curves look very different cross-plate.
+        "ProtocolOperatingMode": "operating_mode",
     }
     for row in rows:
         if not row or not row[0].strip('"'):

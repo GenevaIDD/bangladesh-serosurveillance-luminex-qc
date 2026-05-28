@@ -183,6 +183,16 @@
     <div><b>Panel:</b> {{ metadata.panel_name or "—" }}</div>
     <div><b>Instrument SN:</b> {{ metadata.instrument_sn or "—" }}</div>
     <div><b>Operator:</b> {{ metadata.operator or "—" }}</div>
+    <div>
+      <b>Operating mode:</b>
+      {% if metadata.operating_mode %}
+        {% set is_low = 'Low PMT' in metadata.operating_mode %}
+        <span style="font-weight:600; color:{{ '#b8860b' if is_low else '#27ae60' }};">
+          {{ metadata.operating_mode }}
+        </span>
+        {% if is_low %}<span class="badge badge-yellow" style="margin-left:6px;" title="Low PMT mode produces ~10x lower MFI than High PMT — confirm this was intentional before comparing to other plates">⚠ Low PMT</span>{% endif %}
+      {% else %}—{% endif %}
+    </div>
     <div><b>Antigens analysed:</b> {{ n_antigens }}</div>
     <div><b>Specimens:</b> {{ n_specimens }}</div>
     {% if layout_info.box_ids %}<div><b>Box(es) loaded:</b> {{ layout_info.box_ids | join(", ") }}</div>{% endif %}
@@ -594,6 +604,19 @@
     </li>
   </ul>
   {{ curve_picker_html | safe }}
+
+  {% if cross_run_present %}
+  <h3 style="margin-top:28px;">Cross-run MFI comparison</h3>
+  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
+    For the selected antigen, every sample that appears on this plate
+    <em>and</em> on a past plate is plotted at
+    (<b>this run's MFI</b>, <b>past run's MFI</b>). One series per
+    past plate — click in the legend to hide / show. Points on the
+    dotted y=x line agree perfectly; points well above the line read
+    higher on the past run, points below read lower.
+  </p>
+  {{ cross_run_html | safe }}
+  {% endif %}
 </div>
 </details>
 

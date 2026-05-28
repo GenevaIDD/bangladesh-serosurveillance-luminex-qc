@@ -63,13 +63,15 @@ def run_pipeline(
     metadata = parsed["metadata"]
     data = parsed["data"]
 
-    # 2. Classify wells (using config patterns)
-    data = classify_wells(data, config=config)
-
-    # 3. Optional layout enrichment.
-    # New (Uvira) path: inputfile CSV (well → plate_well_type, barcode) +
-    # optional Box xlsx (barcode → patient_id), merged via build_layout.
-    # Legacy path: a Sample-list xlsx via read_plate_layout(layout_path).
+    # 2. Optional layout enrichment — run BEFORE classify so the
+    # input file's authoritative `Type` column (carried into
+    # ``plate_well_type``) can override sample-name regex
+    # classification (e.g. a `Type=Control` well that the operator
+    # labelled `NI7`).
+    # New (Uvira) path: inputfile CSV (well → plate_well_type, barcode)
+    # + optional Box xlsx (barcode → patient_id), merged via
+    # build_layout. Legacy path: a Sample-list xlsx via
+    # read_plate_layout(layout_path).
     if inputfile_path:
         layout = build_layout(inputfile_path, box_xlsx_path=layout_path)
         if layout is not None and not layout.empty:
@@ -79,19 +81,35 @@ def run_pipeline(
                 layout["patient_id"].astype(str).str.len() > 0,
                 layout["barcode"],
             )
-            keep_cols = [c for c in ("well", "sample_id", "barcode", "patient_id", "box_id") if c in layout.columns]
+            keep_cols = [c for c in (
+                "well", "plate_well_type", "sample_id", "barcode",
+                "patient_id", "box_id",
+            ) if c in layout.columns]
             data = data.merge(layout[keep_cols], on="well", how="left")
     elif layout_path:
         layout = read_plate_layout(layout_path)
         if layout is not None and any(c in layout.columns for c in ("sample_id", "visit_date", "dilution")):
-            data = data.merge(layout, on="well", how="left", suffixes=("", "_layout"))
-            # Apply per-well dilution overrides from layout where provided
-            if "dilution_layout" in data.columns:
-                mask = data["dilution_layout"].notna()
-                data.loc[mask, "dilution"] = pd.to_numeric(
-                    data.loc[mask, "dilution_layout"], errors="coerce"
-                )
-                data = data.drop(columns=["dilution_layout"])
+            # Rename the layout's `dilution` column so it survives the
+            # merge intact and can override classify_wells' regex-
+            # derived dilution after step 3 below.
+            if "dilution" in layout.columns:
+                layout = layout.rename(columns={"dilution": "dilution_layout"})
+            data = data.merge(layout, on="well", how="left")
+
+    # 3. Classify wells. When ``plate_well_type`` is present (the
+    # input file was uploaded), classify_wells uses it as the
+    # primary signal; otherwise it falls back to sample-name regex
+    # matching against the configured patterns.
+    data = classify_wells(data, config=config)
+
+    # 4. Legacy-path per-well dilution override — runs after classify
+    # so it overrides the regex-derived Standard{N} dilution mapping.
+    if "dilution_layout" in data.columns:
+        mask = data["dilution_layout"].notna()
+        data.loc[mask, "dilution"] = pd.to_numeric(
+            data.loc[mask, "dilution_layout"], errors="coerce"
+        )
+        data = data.drop(columns=["dilution_layout"])
 
     # 4. QC: bead counts
     bead_qc = qc_bead_counts(data, config=config)
@@ -384,7 +402,11 @@ def _build_specimen_mfi_history(metadata: dict, in_range: pd.DataFrame) -> pd.Da
     """
     if in_range is None or in_range.empty:
         return pd.DataFrame()
-    keep = [c for c in ("well", "sample_name", "analyte", "mfi", "status", "box_id") if c in in_range.columns]
+    # ``patient_id`` and ``barcode`` are also persisted so past-plate
+    # rug hovers and the cross-run MFI scatter can show them.
+    keep = [c for c in ("well", "sample_name", "analyte", "mfi", "status",
+                        "box_id", "barcode", "patient_id")
+            if c in in_range.columns]
     sub = in_range[keep].copy()
     sub["plate_id"] = metadata["plate_id"]
     sub["run_date"] = metadata.get("run_date", "")

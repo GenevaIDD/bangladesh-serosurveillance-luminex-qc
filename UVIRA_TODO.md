@@ -67,16 +67,13 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - [x] Decision: **single-mode app** — Uvira 200-plex Intelliflex only. The
       existing MPXV 12-plex MagPix code path will be removed. No assay
       selector; the pipeline replaces (not augments) the current one.
-- [~] Strip MPXV-specific code. Done in Session 2: `MPXV_ANTIGENS` and
-      `MPXV_KIT_CONTROLS` are now deprecated aliases for `ANTIGENS` / `[]`
-      in `config.py` (kept as a shim so legacy `qc_*` / `report.py`
-      modules still import cleanly until Sections 3–5). README, SPEC,
-      `app.py`, `main.py`, and the three HTML templates rebranded.
-      Outstanding: remove `qc_kit_controls.py` / `qc_nc.py` /
-      `qc_replicates.py` entirely (Section 5), strip remaining MPXV
-      copy from `report.py` and `templates/report.html` (Section 5),
-      and update the legacy descriptive sections of README/SPEC
-      (Section 7).
+- [x] Strip MPXV-specific code. `MPXV_ANTIGENS` / `MPXV_KIT_CONTROLS`
+      shims were removed in Session 4. `qc_kit_controls.py` and
+      `qc_replicates.py` were deleted in Session 4; `qc_nc.py` was
+      rewritten in Session 5 for the new NC concept (not the
+      MagPix kit-bead). `report.py` and `templates/report.html`
+      were rewritten end-to-end in Sessions 4–10. Legacy descriptive
+      copy in README / SPEC rewritten in Session 9.
 - [x] Rename app branding (window title, report title, settings page,
       results-dir name, download filenames, README/SPEC headers) from
       "MPXV Luminex QC" to "Uvira Luminex QC". Package import path
@@ -112,15 +109,14 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
       `inputfile_path`; when provided it routes through `build_layout`
       and writes `sample_id` (patient_id if known, else barcode),
       `barcode`, `patient_id`, `box_id` onto each row.
-- [ ] **Soft-flag** the three erroneous bead regions
+- [x] **Soft-flag** the three erroneous bead regions
       (`FLU_B_HA_Maryland_1959`, `FLU_B_NP_Brisbane_2008`, `VPD_Tet_tox`):
-      keep them in all tables/plots but render them visually muted (grey
-      row, italic label, "(excluded)" suffix) and surface the list in a
-      report banner. Do **not** drop them from the data. **Data side
-      done** — `EXCLUDED_ANALYTES` and `panel.excluded_analytes` are in
-      `config.py` and exposed via `get_excluded_analytes()` in
-      `settings.py`. **Render side pending** until Section 5
-      (report.py rewrite).
+      data side done in Section 2 (`EXCLUDED_ANALYTES` /
+      `panel.excluded_analytes` in `config.py`, surfaced via
+      `get_excluded_analytes()` in `settings.py`). Render side
+      shipped in Sessions 4–5: excluded rows are visually muted in
+      every table, italicised in axis tick labels, and listed in the
+      Plate Overview banner.
 
 ### 2. Config & panel definition
 - [x] Replaced `MPXV_ANTIGENS` / `MPXV_KIT_CONTROLS` with the 200 Uvira
@@ -296,6 +292,19 @@ report:
       template's section order so the bundle lands at DOM line
       ~211, well ahead of any `newPlot` call. Done Session 10 (bug
       fix).
+- [x] **Accept `Control` as an NC label.** `^Control` added to
+      `NC_PATTERNS` default. Done Session 12.
+- [x] **Input file's `Type` column is now the primary
+      classification signal** (option 3 from Session 13's design
+      review). `classify.py::classify_wells` reads
+      `plate_well_type` (added to `data` by `build_layout` *before*
+      the classify step) and maps `standard → pc`, `background →
+      background`, `control → nc`, `unknown → specimen`; sample-name
+      regex stays as the fallback for runs without an input file
+      and for rows whose `plate_well_type` is missing / unrecognised.
+      Pipeline reordered so the layout merge runs before classify.
+      Lets operators name a Control well anything (e.g. `NI7`,
+      `Pool_B`) without editing Settings. Done Session 13.
 
 ### 7. Packaging & docs
 - [x] `README.md` rewritten end-to-end for the Uvira 200-plex /
@@ -315,6 +324,43 @@ report:
       Windows machine) with the renamed specs; sign the macOS bundle
       with `codesign --force --deep --sign -`. Defer until a real
       release is needed.
+
+### 9. Potential future work (not yet scoped)
+
+Captured during interpretation of the three pilot runs — design
+decisions still TBD.
+
+- [ ] **Respect `fit_ok` in the range matrix** (option A from the
+      Session 14 review). When the 4PL fit fails QC (R² ≥ 0.95 on
+      log10, IC50 in tested range, Hill slope 0.3–5.0, dynamic range
+      ≥ 3×), force every specimen on that antigen to `NO_FIT`
+      regardless of where its MFI falls. Motivation: on plate 2
+      (`PLATE_05182026_RUN000`) ~5,400 specimen-antigen cells got an
+      `IN_RANGE` verdict against bounds derived from a broken curve
+      (LLOQ-MFI ≈ noise floor, ULOQ-MFI ≈ S1). The "in range" verdict
+      is mathematically correct but clinically meaningless because
+      the bounds themselves are bogus. Strict gating on `fit_ok`
+      removes the false-positive IN_RANGE count without any new
+      tuning parameters; the Standard-Curve Summary already
+      advertises FAIL on those antigens. See
+      [`PLATE_RUN_FINDINGS.md`](PLATE_RUN_FINDINGS.md) for the data.
+      Alternative considered: a dynamic-range / Background-floor
+      sanity check on the bounds themselves; rejected as
+      over-engineered for the same outcome.
+- [ ] **Specimens-on-curve scatter in the picker** (option B from
+      Session 14). Move the right-edge rug points into the curve
+      subplot as scatter markers at
+      `(invert_4pl(specimen_mfi), specimen_mfi)` — so each specimen
+      lands *on the 4PL line* at its interpolated dilution, coloured
+      by `status` (BELOW / IN / ABOVE / NO_FIT). User would see at a
+      glance which specimens cluster on the upper plateau vs the
+      inflection vs the lower asymptote. Trade-off: with 82+
+      specimens overlaid on a single curve, the inflection area can
+      get crowded — would need light transparency + small markers.
+      The separate rug panel could be removed or kept as a count
+      summary. Decision deferred until the standards problem is
+      resolved on a future plate (otherwise the back-calculated
+      x-positions would be against a broken curve).
 
 ---
 
@@ -337,6 +383,7 @@ report:
 | 13 | Plate-label short-form used for legend entries: `MM/DD/YYYY · R<N> · Box<N>`. Full `PLATE_<MMDDYYYY>_RUN<NNN> · Box<N>` stays on hovers + figure title. | 2026-05-18 |
 | 14 | Plate Overview includes a **plate-layout heatmap** (8 × 12, colour-coded by well_type) at the top, modelled after the legacy MPOX plate heatmap but showing the layout rather than median bead counts. | 2026-05-18 |
 | 15 | Background MFI overview uses **panel order** on the x-axis (not signal-magnitude sort) and is a **static, responsive figure** (no horizontal scroll). 6 pt rotated tick labels, horizontal legend along the top. | 2026-05-18 |
+| 16 | The Intelliflex input file's `Type` column is the **primary signal** for well classification (Standard / Background / Control / Unknown → pc / background / nc / specimen). Sample-name regex stays as the fallback for wells without `plate_well_type` and for runs where no input file is uploaded. Lets operators name a Control well anything (e.g. `NI7`, `Pool_B`) without editing Settings. | 2026-05-18 |
 
 ## Open questions for the user
 
@@ -346,6 +393,519 @@ Decisions log).
 ---
 
 ## Session History
+
+### Session 19 — 2026-05-28 (Cross-run scatter legend toggle fix)
+
+Same `showlegend=(ai == 0)` bug that bit the curve picker in
+Session 16 also affected the cross-run scatter introduced in
+Session 18. Symptom was identical: clicking a past-plate legend
+entry only worked when the first antigen was selected; after
+typeaheading to a different antigen the legend either disappeared
+or did nothing.
+
+**Fix** (mirrors Session 16):
+
+- `src/report.py::_make_cross_run_scatter`:
+  - Per-antigen scatter traces now have `showlegend=False, name=""`.
+  - One **anchor trace per past plate** appended after the per-antigen
+    build loop. Each anchor carries `x=[None], y=[None],
+    hoverinfo="skip", showlegend=True, visible=True, legendgroup=
+    "plate:<plate_id>"`. The marker style matches its data trace
+    series so the legend entry's icon is visually consistent.
+  - New `trace_plate_map` array (`null` for the y=x reference line,
+    `plate_id` for every per-antigen and anchor trace).
+  - Per-antigen `vis` arrays in the typeahead lookup now have length
+    `n_total = 1 + len(analytes) × P + P` and toggle anchor positions
+    to `true` by default; the JS shim downgrades them to
+    `"legendonly"` for any plate the user has hidden.
+  - JS shim rewritten — same shape as the curve picker's:
+    `hiddenPlates` object, `applyVisibility(entry)`,
+    `plotly_legendclick` / `plotly_legenddoubleclick` interceptors
+    (returns `false` to prevent Plotly's default toggle), and a
+    typeahead `pick(name)` that sets `currentEntry` then calls
+    `applyVisibility` + `Plotly.relayout` for the title.
+  - Stale `n_traces = ... + 1` removed; counts are now computed after
+    the build loop based on the actual number of anchors appended.
+
+**Smoke tests on all four plates:**
+
+| Plate | Past plates | Cross-run trace count | Anchors |
+|---|---|---|---|
+| Pilot (no past plates) | 0 | section hidden — no past data | — |
+| 18-05 | 1 | 199 = 1 ref + 197×1 + 1 anchor ✓ | 1 ✓ |
+| 27-05 RUN000 | 2 | 397 = 1 ref + 197×2 + 2 anchors ✓ | 2 ✓ |
+| 27-05 RUN002 | 3 | 595 = 1 ref + 197×3 + 3 anchors ✓ | 3 ✓ |
+
+User-visible behaviour:
+- The cross-run scatter legend now lists the same past plates on
+  every antigen.
+- Click a past-plate entry → that series hides on the current
+  antigen AND stays hidden when the user typeaheads to a different
+  antigen.
+- Double-click → isolate that plate (hide all others); double-click
+  again to restore.
+- The y=x reference line uses Plotly's default legend behaviour
+  (its trace_plate_map entry is `null` so the interceptor falls
+  through).
+
+### Session 18 — 2026-05-28 (Cross-run MFI comparison + per-plate rug columns + enriched hover)
+
+Three additions in response to user feedback after reviewing the
+plate-4 report.
+
+**1. Per-plate rug columns.** The rug subplot used to have two
+x-positions: "This run" at `x=0` and "Past" (all past plates
+stacked) at `x=1`. Now it has **1 + P columns**: `x=0` for the
+current run plus one column per past plate at `x=1..P`. Each column
+gets a short date-only header above it (e.g. `05/11/2026`); the
+existing colour-coded `This run` header stays. Vertical separator
+between current and first past plate is heavier than the separators
+between past plates so the visual "this vs past" boundary is clear.
+
+The rug subplot's width now scales with the number of plate columns:
+`rug_width = min(0.08 × (1 + P) + 0.04, 0.42)` and the curve panel
+takes the remainder. With 3 past plates the rug is ~32 % of figure
+width; the curve panel keeps the rest. Cap at 0.42 prevents the
+curve from collapsing on long-running histories.
+
+**2. Enriched rug hovers.** Both current-plate and past-plate rug
+ticks now show `Sample: {barcode} (well {well})`, `Patient ID:
+{patient_id}`, and `MFI {y}`. Past-plate ticks additionally lead
+with `<b>{plate label · Box{N}}</b>`. Required adding `patient_id`
+and `barcode` to `specimen_mfi_history.json` (`_build_specimen_mfi_history`
+in `pipeline.py` updated to include them in `keep`).
+
+**3. Cross-run MFI comparison scatter** (new). For the selected
+antigen, every sample that exists on both this plate and a past
+plate produces a point at `(current_mfi, past_mfi)`. One trace per
+past plate (legend-toggleable); a faint dotted `y = x` reference
+line behind the scatter shows where perfect agreement would land.
+- Log axes on both sides.
+- Sample identity preference for the join: `patient_id` > `barcode`
+  > `sample_name`. Specimens with no patient_id still match via
+  barcode.
+- Hover shows the past-plate label, the sample barcode, patient ID,
+  well on each plate, and both MFI values.
+- Antigen swap driven by a separate `<input list>` typeahead
+  (`#cross-run-input`) wired with its own `Plotly.restyle` + 3-arg
+  `relayout` for the title. Initial display is the first analyte;
+  the typeahead toggles trace visibility per antigen.
+- Renders only when there's at least one past plate AND at least one
+  joinable sample; the template gates the section on
+  `cross_run_present`.
+
+**Files edited:**
+
+- `src/pipeline.py::_build_specimen_mfi_history` — added `barcode`
+  and `patient_id` to the `keep` list. History file grows by two
+  columns per row.
+- `src/report.py::_make_curve_picker`:
+  - `RUG_X` reduced to status-only (no more fixed `HIST` slot).
+  - Past-plate rug loop indexes `enumerate(past_plates)` and uses
+    `x_pos = 1 + plate_idx` for the per-plate column.
+  - Both rug hovertemplates rewritten to include sample + patient
+    ID + well + MFI.
+  - `_rug_annotations` rebuilt to emit one header per column.
+  - Subplot scaffold's `column_widths` now scales with `P`; summary
+    annotation anchor uses `curve_width - 0.01` so it tracks.
+  - `rug_x_range = [-0.5, 0.5 + P]`.
+  - Column separator loop draws between each adjacent pair (heavier
+    between This/Past, lighter between past pairs).
+- `src/report.py::_make_cross_run_scatter` (**new**) — full
+  implementation per #3 above. ~180 lines. Returns empty string
+  when there's no past data or no joinable samples.
+- `src/report.py::generate_report` — calls `_make_cross_run_scatter`,
+  passes `cross_run_html` and `cross_run_present` to the template.
+- `templates/report.html` — new `<h3>Cross-run MFI comparison</h3>`
+  subsection inside the Standard-Curve Picker `<details>`, gated on
+  `cross_run_present`.
+
+**Smoke tests:**
+
+- Pilot (Plate 1, no past plates): cross-run section correctly
+  hidden. Per-plate rug columns reduced to just `This run` (P=0).
+  No regression.
+- 18-05 (Plate 2, 1 past plate): cross-run scatter shows pilot vs
+  this-plate for every joinable sample.
+- 27-05 RUN000 (Plate 3, 2 past plates): rug subplot has 3 columns
+  (This + pilot + 18-05). Cross-run scatter shows 2 series (pilot,
+  18-05).
+- 27-05 RUN002 (Plate 4, 3 past plates): rug subplot has 4
+  columns; cross-run scatter has 3 past-plate series.
+  - `specimen_mfi_history.json` ends at 65,262 rows with columns
+    `[analyte, barcode, box_id, mfi, patient_id, plate_id, run_date,
+    sample_name, status, well]`. patient_id correctly persisted.
+  - Verified the cross-run hover template, the per-plate rug
+    headers, and the patient_id field in both rug hover variants
+    via raw HTML grep.
+
+**Carry-over to Session 19+:** unchanged.
+
+### Session 17 — 2026-05-28 (Rug subplot y-axis alignment fix)
+
+User reported a subtle alignment issue: when hovering on the
+standard-curve line in the picker, the value shown in the tooltip
+didn't visually align with the y-axis position the cursor was on.
+Specimens in the rug column also looked off relative to the same
+MFI value on the curve.
+
+**Root cause:** the curve subplot (col 1) had `type='log'` set
+explicitly on its y-axis. The rug subplot (col 2) had `matches='y'`
+(set automatically by `shared_yaxes=True` in `make_subplots`) but
+was missing an explicit `type='log'`. Plotly's `matches` constraint
+propagates the *range* between two axes but **does not reliably
+propagate the scale type** — so the rug's y-axis was effectively
+linear with a range derived from the log-axis's range, which
+re-projects every MFI value to a different visual position than on
+the curve panel.
+
+Result: a specimen at MFI = 290 sat at a different vertical pixel
+in the rug than where the curve crossed MFI = 290. Confirmed by
+parsing the layout JSON out of one of the generated reports —
+`yaxis` had `type='log'`, but `yaxis2` had no `type` set
+(falling back to linear).
+
+**Fix:** one extra line in `_make_curve_picker`:
+
+```python
+fig.update_yaxes(type="log", showgrid=True, row=1, col=2)  # was: no type
+```
+
+A comment was added next to the `update_yaxes` calls explaining the
+gotcha so this doesn't get reintroduced.
+
+**Verification (after regenerate):**
+
+- `yaxis`:  `type='log', matches=None`
+- `yaxis2`: `type='log', matches='y'`
+
+Both subplots now share a log y-axis. Every MFI value renders at
+the same pixel-y in both panels.
+
+All 4 plates re-processed in
+`~/uvira-luminex-qc-results/smoke/`.
+
+### Session 16 — 2026-05-28 (Curve-picker legend toggle persists across antigens)
+
+User reported a bug: in the Standard-Curve Picker, the per-plate
+legend toggles only worked for the first antigen on the list. After
+typeaheading to a different antigen, clicking a legend entry did
+nothing.
+
+**Root cause:** the per-antigen past-plate traces had
+`showlegend=True` only when `ai == 0` (i.e. the first antigen). When
+the typeahead switched to a different antigen, Plotly set the first
+antigen's traces (the ones hosting the legend) to `visible=False`,
+which made the legend entries either vanish or refer to invisible
+traces — clicking them had no visible effect.
+
+**Fix:** anchor every legend entry on a dedicated **always-visible**
+trace that lives outside the per-antigen slot scheme. Add a JS state
+machine that tracks user toggles in a `hiddenPlates` set and merges
+that state with the typeahead's per-antigen visibility on every
+restyle, so the user's choice survives antigen switches.
+
+**Files edited:**
+
+- `src/report.py::_make_curve_picker`:
+  - **Anchor traces (new).** After the per-antigen loop, append:
+    - One `legendgroup="current"` Standards anchor (marker style).
+    - One `legendgroup="current"` "This plate (`{plate_id} · Box{N}`)"
+      anchor (blue line style).
+    - One `legendgroup="plate:<plate_id>"` anchor per past plate
+      (grey dotted line style).
+    All anchors carry `x=[None], y=[None], hoverinfo="skip"` and
+    `showlegend=True, visible=True`.
+  - **Per-antigen traces.** All Standards / 4PL / past-curve /
+    past-rug traces now have `showlegend=False` and `name=""` (they
+    no longer try to host their own legend entries).
+  - **`trace_plate_map`** — array of length `n_total_traces`. Entry
+    is `plate_id` for any trace whose visibility should be
+    controlled by per-plate legend toggle; `null` for current-plate
+    traces. Includes the tail anchor traces.
+  - **`n_total_traces = n_traces + 2 + P`** (2 current-plate anchors +
+    P past-plate anchors).
+  - **Per-antigen `vis` arrays in `lookup`** now have length
+    `n_total_traces`; the anchor positions are all `True` by default
+    and get downgraded to `"legendonly"` by the JS shim when the
+    user hides a plate.
+- `src/report.py` JS shim — rewritten:
+  - State: `hiddenPlates = {}` (object as Set, plate_id → true).
+  - `applyVisibility(entry)` — clones `entry.vis`, for every trace
+    that maps to a hidden plate downgrades to `"legendonly"`, then
+    calls `Plotly.restyle`.
+  - `plotly_legendclick` handler — for past-plate clicks
+    (`tracePlateMap[curveNumber]` non-null), toggles the plate in
+    `hiddenPlates` and reapplies visibility; returns `false` to
+    prevent Plotly's default toggle. Current-plate ("current"
+    legendgroup) clicks fall through to Plotly's default behaviour.
+  - `plotly_legenddoubleclick` handler — implements isolate
+    semantics (double-click a past plate → hide all others; if
+    already isolated, restore all).
+  - `pick(name)` — sets `currentEntry`, calls `applyVisibility`,
+    then `Plotly.relayout` for the title and annotations (latter
+    drives the per-antigen status-count box).
+  - Wires the legend handlers on `plotly_legendclick` /
+    `plotly_legenddoubleclick`, defaulting to `window.load` when
+    the chart hasn't been drawn yet.
+
+**Tests:**
+
+- All 4 plates re-processed cleanly.
+- Trace-count sanity: pilot (no past plates) = 1202 (200 × 6 + 2);
+  RUN002 (3 past plates) = 2369 (197 × 12 + 2 + 3).
+- `tracePlateMap` correctly tags 1185 past-plate slots (197 × 6 +
+  3 anchors) on the RUN002 report.
+- All 5 anchor traces present in RUN002 figure JSON:
+  Standards anchor, This-plate-4PL anchor, and one per past plate
+  (`PLATE_05112026_RUN000`, `PLATE_05182026_RUN000`,
+  `PLATE_05272026_RUN000`).
+- JS shim contains `hiddenPlates`, `applyVisibility`,
+  `plotly_legendclick`, `plotly_legenddoubleclick` and the typeahead
+  `pick`.
+
+**User-visible behaviour change:**
+
+- Legend entries are now always present regardless of which antigen
+  is selected.
+- Click a past-plate entry → that plate's overlays hide on the
+  current antigen AND stay hidden when the user switches to a
+  different antigen.
+- Double-click a past-plate entry → isolate to just that plate;
+  double-click again to restore all.
+- Current-plate legend entries ("Standards", "This plate (…)") use
+  Plotly's default toggle behaviour (single-click hides every
+  per-antigen Standards / 4PL / status-rug trace; not particularly
+  useful but kept for completeness).
+
+### Session 15 — 2026-05-28 (PMT operating mode in metadata + 4th plate)
+
+User uploaded a fourth Box1 run (`PLATE_05272026_RUN002`, high-PMT
+re-read of the same physical plate as `PLATE_05272026_RUN000`). The
+user flagged that yesterday's run was on **Low PMT** and asked for
+the operating mode to be surfaced in the Plate Overview so this
+class of issue is spottable at a glance.
+
+**Key finding — explains the plate 3 anomaly.** The 27-05 first try
+(`PLATE_05272026_RUN000`) was run on `Luminex® 200™ Low PMT`; the
+pilot, the 18-05 re-run, and this new high-PMT 27-05 re-read are all
+on `FLEXMAP 3D® High PMT`. Low PMT produces MFI roughly an order of
+magnitude lower than High PMT, which is why the 27-05 first try's
+Background MFI looked dramatically lower than every other plate
+(documented in Session 14's review). After the high-PMT re-read,
+the Background levels for that physical plate fall back in line
+with the pilot.
+
+**Files edited:**
+- `src/parse_xponent.py` — `field_map` entry for
+  `ProtocolOperatingMode → operating_mode`, with a comment
+  explaining the cross-plate MFI gotcha.
+- `templates/report.html` — new "Operating mode:" cell in the
+  Plate Overview metadata grid. Colour-coded: green for High PMT,
+  amber for Low PMT, plus a `⚠ Low PMT` badge (with hover tooltip)
+  whenever the string contains `Low PMT`. The hint text reads
+  "Low PMT mode produces ~10× lower MFI than High PMT — confirm
+  this was intentional before comparing to other plates".
+
+**Pipeline runs:** all four plates re-processed into
+`~/uvira-luminex-qc-results/smoke/` so every report carries the new
+field. Smoke output now contains:
+
+| Plate | Operating mode | Source |
+|---|---|---|
+| `PLATE_05112026_RUN000` (pilot) | FLEXMAP 3D® High PMT | -- |
+| `PLATE_05182026_RUN000` (re-run 1) | FLEXMAP 3D® High PMT | -- |
+| `PLATE_05272026_RUN000` (re-run 2, first try) | **Luminex® 200™ Low PMT** ⚠ | -- |
+| `PLATE_05272026_RUN002` (re-run 2, high-PMT re-read) | FLEXMAP 3D® High PMT | new this session |
+
+**Standard-curve diagnostic on the new plate** (high-PMT re-read of
+the 27-05 sample):
+- The S1/S2 ratios are still **30–50×** (should be ~4×). PMT was
+  not the issue — this is the same wet-lab dilution failure we
+  flagged on the original 27-05 plate. S3 again reads higher than
+  S2 on multiple antigens, repeating the A2 < A3 pathology.
+- Confirms (definitively) that the standards problem is upstream
+  of detection — re-reading the same physical plate at higher PMT
+  doesn't recover the missing carryover.
+
+**Bead-count side-effect:** the high-PMT re-read shows 19 red + 1028
+yellow bead-count cells (vs 0 + 4 on the low-PMT first read of the
+same physical plate). Bead recovery degraded on the second read.
+Documented in [`PLATE_RUN_FINDINGS.md`](PLATE_RUN_FINDINGS.md).
+
+**Cross-plate state after this session:**
+- `nc_well_history.json` now spans 3 plates (18-05, 27-05 RUN000,
+  27-05 RUN002).
+- `background_history.json` / `fit_history_PC.json` /
+  `specimen_mfi_history.json` span all 4 plates.
+
+**Carry-over to Session 16+:** unchanged.
+
+### Session 14 — 2026-05-27 (Third plate processed — 27-05 Box1 rerun)
+
+User uploaded a **third** Box1 plate run (`PLATE_05272026_RUN000`)
+with the same layout as the 18-05 rerun (Standards A1–A10,
+Background A11–A12, 82 specimens, Controls NI7 / NI18 in H11 / H12).
+The goal was both (a) to verify the option-3 classification still
+works on a fresh plate and (b) to assess whether the standard-curve
+problem we flagged on the 18-05 plate had been resolved.
+
+**Pipeline run:**
+
+- Processed into the existing `~/uvira-luminex-qc-results/smoke/`
+  output directory, so the new plate accumulates alongside the
+  pilot + 18-05 rerun in every history JSON.
+- No code changes needed — the option-3 (`plate_well_type`) signal
+  classified H11 / H12 as `nc` correctly. NI7 / NI18 land in the
+  NC QC section with their MFI carried into `nc_well_history.json`.
+- 82 specimens (= 84 wells − 2 NCs), 197 antigens, run-date
+  `2026-05-27 16:08`.
+
+**Cross-plate history now spans three plates** (verified by
+inspecting the JSONs in `smoke/history/`):
+
+| History file | Rows | Plates |
+|---|---|---|
+| `fit_history_PC.json` | 594 | pilot + 18-05 + 27-05 |
+| `specimen_mfi_history.json` | 49,108 | all three |
+| `background_history.json` | 594 | all three |
+| `std_curve_history_PC.json` | 5,940 | all three |
+| `nc_well_history.json` | 788 | 18-05 + 27-05 (pilot had no NCs) |
+
+The 27-05 report (`QC_PLATE_05272026_RUN000.html`) now overlays
+the pilot AND the 18-05 plate as past-plate traces in the curve
+picker, NC heatmap, and Background MFI overview. Each is its own
+legend entry (`05/11/2026 · R0 · Box1`, `05/18/2026 · R0 · Box1`,
+`05/27/2026 · R0 · Box1`), toggleable independently.
+
+**Standard-curve quality assessment (lab observation, not an app
+issue):**
+
+Sampled the standards block for mAbs + a few strong-signal
+antigens. The 27-05 plate is **noticeably better than the 18-05
+plate** but **still off** from the expected 4-fold serial dilution:
+
+| Antigen | S1 MFI | S2 MFI | **S1/S2 ratio** | Expected |
+|---|---|---|---|---|
+| BAC_S.typhi_HlyE *(mAb)* | 4,973 | 130 | **38.3×** | ~4× |
+| CHO_CtxB *(mAb)* | 1,725 | 46 | **37.8×** | ~4× |
+| CHO_Inaba_OSP *(mAb)* | 8,059 | 188 | **42.8×** | ~4× |
+| CHO_Ogawa_OSP *(mAb)* | 9,373 | 207 | **45.3×** | ~4× |
+| ARB_YFV_E | 698 | 19 | **36.9×** | ~4× |
+| RES_Ade5_hexon | 1,365 | 52 | **26.2×** | ~4× |
+| HHV_CMV | 3,400 | 71 | **48.1×** | ~4× |
+
+The 18-05 plate had S1/S2 ratios of 60-760× (basically S2-S10 sat
+at the noise floor). The 27-05 plate has S1/S2 ≈ 30-50× — so this
+time *some* dilution propagated, but the step was much too big.
+Most likely the second dilution wasn't quite 1:4 — closer to
+1:30 by the ratios, consistent with a missed second carryover
+step or a partial / wrong-volume transfer between A1 and A2.
+
+Subsequent dilutions (A3 onwards) drop into noise: HylE goes
+4,973 → 130 → 376 → 13 → 7 → … — A3 actually being *higher* than
+A2 is a strong clue that the wells received different volumes /
+sources, not a clean serial dilution down the row.
+
+App is doing the right thing — most `fit_ok` flags will read
+FAIL for this plate because the dynamic-range and R² QC criteria
+can't be satisfied by a 1-or-2-point curve sitting above a flat
+tail. AU values and Range Matrix entries for this plate should
+not be trusted; bead counts, Background QC, NC heatmap, and the
+historical overlays remain useful.
+
+**Carry-over to Session 15+:** unchanged from prior sessions —
+actual macOS / Windows release builds when needed.
+
+### Session 13 — 2026-05-18 (Input-file `Type` is the primary classification signal)
+
+User uploaded a new plate run (18-05-2026 re-run of Box1) with two
+**Control** wells in H11 / H12 — but their `Description` column in the
+input file was `NI7` / `NI18`, **not** `Control`. Intelliflex carries
+`Description` into the output CSV's `Sample` field, so the wells
+arrived in the pipeline named `NI7` / `NI18` and the sample-name regex
+classified them as `specimen` instead of `nc` (despite the input
+file's `Type=Control`). The fix is structural: the input file's `Type`
+column should override sample-name regex when both are present.
+
+**Files edited:**
+
+- `src/pipeline.py` —
+  - The layout merge now runs **before** `classify_wells`, so
+    `plate_well_type` (added by `build_layout`) is available as a
+    column on `data` at classification time.
+  - `keep_cols` extended to bring `plate_well_type` through the merge
+    alongside `sample_id` / `barcode` / `patient_id` / `box_id`.
+  - The legacy layout-xlsx branch still works: any `dilution` column
+    on the legacy layout is renamed to `dilution_layout` before the
+    merge so it survives, and a step after `classify_wells` overrides
+    `dilution` from `dilution_layout` per-well.
+- `src/classify.py` —
+  - Module docstring rewritten to document the new priority:
+    input-file `Type` is authoritative; sample-name regex is the
+    fallback.
+  - New constant `_PWT_TO_WELL_TYPE = {standard:pc, background:background,
+    control:nc, unknown:specimen}`.
+  - `classify_wells` runs the regex classification first (still the
+    source of truth when no input file is uploaded), then — if
+    `plate_well_type` is present on `df` — overrides the regex result
+    for every row whose `plate_well_type` (lower-cased) maps to a
+    known well type. Wells with an unrecognised `plate_well_type`
+    (or with the column missing entirely) keep their regex result.
+
+**Tests:**
+
+- Unit-level on a 5-well fixture:
+  1. With `plate_well_type` column → H11/H12 `Control` correctly
+     classifies as `nc` even though sample names are `NI7` / `NI18`.
+  2. Without `plate_well_type` → `NI7` / `NI18` fall through to
+     `specimen` (regex fallback works).
+  3. Mixed: one well with `plate_well_type="weird"` → that row falls
+     back to its regex result; other rows use the override.
+- End-to-end:
+  - **New 18-05-2026 plate**: 82 specimens (was 84 before fix);
+    `nc_levels_PLATE_05182026_RUN000.csv` written with 394 rows
+    (= 2 wells × 197 antigens). NC sample names: `['NI18', 'NI7']`,
+    in wells `['H11', 'H12']`.
+  - **Pilot (Pilot_Uvira_XXL)**: 84 specimens (unchanged); no
+    `nc_levels_*.csv` (correct — no NC wells on this plate). No
+    regression.
+
+**Post-implementation Q&A** (user verified both questions):
+
+1. *Does the app work with both CSVs (no-NC pilot + with-NC rerun)?*
+   Yes. The pipeline keys off the input file's `Type` column with no
+   per-plate code path. Pilot's report renders the
+   "No named negative-control wells on this plate" banner in the NC
+   QC section; the new-plate report renders a populated NC heatmap
+   for `NI7` / `NI18`. No regression on either output.
+
+2. *Does `QC_PLATE_05182026_RUN000.html` show pilot data too?*
+   Yes — because both plates were processed into the same output
+   directory (`~/uvira-luminex-qc-results/smoke/`), and that
+   directory's `history/` JSONs accumulated both plates. The shared
+   history files end at:
+
+   | History file | Rows | Plates |
+   |---|---|---|
+   | `fit_history_PC.json` | 397 | pilot + new |
+   | `specimen_mfi_history.json` | 32,954 | pilot + new |
+   | `background_history.json` | 397 | pilot + new |
+   | `std_curve_history_PC.json` | 3,970 | pilot + new |
+   | `nc_well_history.json` | 394 | new only (pilot had no NCs) |
+
+   The new-plate report references the pilot plate_id **17,340×**
+   (sample names, legendgroup tags, hover customdata, etc.) versus
+   2× for itself as `(current)`. So the pilot is genuinely embedded
+   as historical overlays — grey-dotted curve in the picker, "Past"
+   column in the rug, second trace on the Background MFI overview.
+
+   To start a fresh report with no historical overlay, process a
+   plate into a new output directory (or delete the
+   `history/` subdirectory before re-running).
+
+**Carry-over to Session 14+:** unchanged — actual macOS / Windows
+release builds when needed. Every other To-Do item is `[x]`.
 
 ### Session 12 — 2026-05-18 (Accept `Control` as an NC label)
 
