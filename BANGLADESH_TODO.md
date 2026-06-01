@@ -205,6 +205,13 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
       `problem_fraction_threshold`. Cards forced to a 4-column row.
 - [x] **Bead-count heatmap**: x-axis shows the **well location only** (no sample
       ID); hover shows Antigen, Well, Sample, Bead count, Tier.
+- [x] **Wide-matrix legibility + frozen antigen labels**: matrix rendered as two
+      row-aligned panes — a fixed antigen-label column on the left (frozen) and
+      the heatmap (wells) in a horizontal-scroll pane beside it; both share an
+      outer vertical-scroll box. Fonts 7px, cells 10px rows × 9px cols. Page
+      width unaffected (`min-width:0` on the content grid track + on the scroll
+      pane). Label pane uses a wide left margin so long antigen names aren't
+      clipped and sit flush against the cells.
 - [x] Heatmap + problem tables render at 384 scale.
 
 ### 4. Background QC section (after Bead Count; substantial edits)
@@ -378,6 +385,13 @@ confirm the prefix→pathogen rules in Settings.
 - Verified on Plate 1: DOM order correct, new card copy present, hover enriched.
 - Plate Overview review fixes from last round also confirmed (compact 6-card row,
   top-centered plate-map legend, trimmed map description).
+- **Review fixes (Section 3):** the wide bead heatmap was stretching the whole
+  page — fixed with `min-width:0` on the `1fr` content grid track (and on the
+  scroll pane). Reworked the matrix into a **frozen left antigen-label pane +
+  horizontally-scrolling heatmap** (per user choice "antigens left, freeze
+  them"), shrank fonts to 7px and cells to 10×9px, and fixed the large
+  label↔cell gap (left-margin sizing) so long antigen names aren't clipped.
+- Section 3 finalized and approved.
 - Next: Section 4 (Background QC overhaul — max-MFI default 300, rewritten
   description, IQR overview plot, folded/scrollable table with individual MFIs +
   current/previous-plate IQR columns).

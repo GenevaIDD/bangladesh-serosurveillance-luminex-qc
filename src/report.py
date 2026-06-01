@@ -315,15 +315,29 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
                 f"Bead count: {count_str}<br>Tier: {tier_matrix.iat[i, j].upper()}"
             )
 
-    fig = go.Figure(
+    # --- Geometry. Antigens (rows) stay frozen on the left; the wells
+    # (columns) scroll horizontally. Both panes share the same per-row pixel
+    # height + top/bottom margins so their rows line up, and they live in a
+    # shared vertical-scroll container. ---
+    n_rows = len(analyte_rows)
+    n_well_cols = len(well_cols)
+    ROW_PX = 10          # per-antigen row height (tight)
+    COL_PX = 9           # per-well column width (tight)
+    TOP, BOT = 60, 12    # identical on both panes → rows align
+    # Frozen label pane: nearly all width is the left margin that holds the
+    # antigen names; the (empty) data column is a thin sliver hugging the
+    # heatmap, so there's almost no gap between the names and the cells.
+    LABEL_MARGIN = 150   # px reserved for the antigen text
+    label_w = LABEL_MARGIN + 8
+    plot_h = TOP + n_rows * ROW_PX + BOT
+
+    y_ticktext = [f"<i>{a} (excluded)</i>" if a in excluded else a for a in analyte_rows]
+
+    # Right pane: the heatmap itself (y tick labels hidden — they live in the
+    # frozen left pane). X axis = well location only; sample ID is in hover.
+    heat = go.Figure(
         data=go.Heatmap(
-            z=z,
-            # X axis shows the well location only (e.g. A1); the sample ID
-            # would crowd a 384-column heatmap, so it lives in the hover.
-            x=well_cols,
-            y=analyte_rows,
-            text=text,
-            hoverinfo="text",
+            z=z, x=well_cols, y=analyte_rows, text=text, hoverinfo="text",
             colorscale=[
                 [0.0, "#e74c3c"], [0.34, "#e74c3c"],
                 [0.34, "#f1c40f"], [0.67, "#f1c40f"],
@@ -332,49 +346,57 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
             zmin=0, zmax=2, showscale=False, xgap=0.5, ygap=0.5,
         )
     )
-    # Fixed pixel geometry so every well column is legible; the container
-    # below scrolls horizontally (and vertically) for the full 384-well ×
-    # 200-antigen matrix.
-    n_well_cols = len(well_cols)
-    width = 200 + n_well_cols * 13 + 40
-    height = max(400, min(20 + 15 * len(analyte_rows), 6500))
-    fig.update_layout(
-        margin=dict(l=180, r=20, t=24, b=20),
-        width=width, height=height,
-        xaxis=dict(tickangle=-90, tickfont=dict(size=9), side="top",
+    heat.update_layout(
+        margin=dict(l=2, r=16, t=TOP, b=BOT),
+        width=2 + n_well_cols * COL_PX + 16, height=plot_h,
+        plot_bgcolor="white",
+        xaxis=dict(tickangle=-90, tickfont=dict(size=7), side="top",
                    tickmode="array", tickvals=list(range(n_well_cols)),
                    ticktext=[str(w) for w in well_cols]),
-        yaxis=dict(tickfont=dict(size=8), autorange="reversed"),
+        yaxis=dict(showticklabels=False, autorange="reversed",
+                   range=[n_rows - 0.5, -0.5]),
     )
-    if excluded:
-        fig.update_yaxes(
-            ticktext=[f"<i>{a} (excluded)</i>" if a in excluded else a for a in analyte_rows],
-            tickvals=list(range(len(analyte_rows))),
-        )
-    # Dotted vertical separators between well-type groups (PC / Background
-    # / NC / specimen) so the eye can tell groups apart in a 96-column heatmap.
-    # ``yref="paper"`` lets the line extend above the heatmap into the
-    # x-tick label band so it visually connects to the column labels;
-    # without this the line stops at the plot edge and is easy to miss.
+    # Dotted separators between well-type groups (PC / Background / NC /
+    # specimen) so groups are visually distinct across the wide matrix.
     if well_types:
-        boundaries = _group_boundaries(well_cols, well_types)
-        for idx, _left, _right in boundaries:
-            fig.add_shape(
-                type="line",
-                xref="x", yref="paper",
-                x0=idx - 0.5, x1=idx - 0.5,
-                y0=0, y1=1.08,
-                line=dict(color="#2c3e50", width=1.5, dash="dot"),
-                opacity=0.75,
-                layer="above",
+        for idx, _left, _right in _group_boundaries(well_cols, well_types):
+            heat.add_shape(
+                type="line", xref="x", yref="paper",
+                x0=idx - 0.5, x1=idx - 0.5, y0=0, y1=1.04,
+                line=dict(color="#2c3e50", width=1.2, dash="dot"),
+                opacity=0.7, layer="above",
             )
-    inner = _plotly_html(fig, "fig-bead-heatmap", height=height, responsive=False)
-    # Scrollable container (horizontal + vertical) so the wide 384-column
-    # matrix stays legible — each well is visible by scrolling across.
+
+    # Left pane: frozen antigen labels only. Same height/margins/row order so
+    # it stays row-aligned with the heatmap as the outer box scrolls vertically.
+    labels = go.Figure(
+        data=go.Heatmap(
+            z=[[None]] * n_rows, x=[""], y=analyte_rows,
+            showscale=False, hoverinfo="skip",
+        )
+    )
+    labels.update_layout(
+        margin=dict(l=LABEL_MARGIN, r=2, t=TOP, b=BOT),
+        width=label_w, height=plot_h, plot_bgcolor="white",
+        xaxis=dict(visible=False, fixedrange=True),
+        yaxis=dict(side="left", tickfont=dict(size=7), autorange="reversed",
+                   range=[n_rows - 0.5, -0.5], tickmode="array",
+                   tickvals=list(range(n_rows)), ticktext=y_ticktext,
+                   fixedrange=True),
+    )
+
+    labels_html = _plotly_html(labels, "fig-bead-labels", height=plot_h, responsive=False)
+    heat_html = _plotly_html(heat, "fig-bead-heatmap", height=plot_h, responsive=False)
+
+    # Outer box scrolls vertically (both panes together). The right pane
+    # scrolls horizontally on its own; the left label pane stays frozen.
     return (
-        '<div style="max-width:100%; max-height:760px; overflow:auto; '
-        'border:1px solid #e1e4e8; border-radius:4px; padding:4px;">'
-        f"{inner}</div>"
+        '<div style="max-width:100%; max-height:680px; overflow-y:auto; '
+        'border:1px solid #e1e4e8; border-radius:4px;">'
+        '<div style="display:flex; flex-wrap:nowrap; align-items:flex-start;">'
+        f'<div style="flex:0 0 auto;">{labels_html}</div>'
+        f'<div style="flex:1 1 0; min-width:0; overflow-x:auto;">{heat_html}</div>'
+        '</div></div>'
     )
 
 
