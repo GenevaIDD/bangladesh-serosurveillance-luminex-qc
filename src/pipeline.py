@@ -125,15 +125,16 @@ def run_pipeline(
     # — were removed in Session 4: Uvira plates have no PC duplicates, no
     # MagPix kit-control beads, and the row-A "Background" wells are
     # already classified as NC; their MFI is reported alongside specimens.)
-    specimen_results = compute_concentrations(data, fits)
+    specimen_results = compute_concentrations(data, fits, config=config)
     data = compute_net_mfi(data)
     if "net_mfi" in data.columns:
         specimen_results["net_mfi"] = data.loc[specimen_results.index, "net_mfi"]
 
     # 9b. Section-3 deliverables: per-(antigen × sample) range table
-    # and the per-antigen "% samples in linear range" summary.
+    # and the per-antigen "% samples in linear range" summary. Each antigen
+    # is scored against its auto-selected pool's curve.
     excluded_analytes = get_excluded_analytes(config)
-    in_range = compute_in_range_table(data, fits, excluded_analytes=excluded_analytes)
+    in_range = compute_in_range_table(data, fits, excluded_analytes=excluded_analytes, config=config)
     pct_in_range = compute_pct_in_range_per_antigen(in_range, excluded_analytes=excluded_analytes)
 
     # 9c. NC well levels (empty when the plate has no NC samples).

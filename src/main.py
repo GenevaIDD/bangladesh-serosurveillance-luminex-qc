@@ -1,4 +1,4 @@
-"""Entry point for the Uvira Luminex QC tool."""
+"""Entry point for the Bangladesh Serosurveillance Luminex QC tool."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def main():
 
     threading.Thread(target=open_browser, daemon=True).start()
 
-    print(f"Uvira Luminex QC Tool running at http://127.0.0.1:{port}")
+    print(f"Bangladesh Serosurveillance Luminex QC Tool running at http://127.0.0.1:{port}")
     print("Press Ctrl+C to quit.\n")
 
     app.run(

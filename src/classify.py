@@ -1,38 +1,34 @@
 """Classify wells as PC standard, background, NC, or specimen.
 
-Classification priority:
+Bangladesh National Serosurveillance assay (384-well, Intelliflex). There
+is no Intelliflex input file, so the per-well ``sample_name`` from the CSV
+is the only classification signal. Each name is matched against the
+configured regex patterns, checked in this order:
 
-1. **Authoritative — input file Type column.** When the Intelliflex
-   ``*_inputfile.csv`` is uploaded, its ``Type`` field for each well is
-   carried into a ``plate_well_type`` column by
-   ``parse_layout.build_layout`` (lower-cased). When present it is the
-   primary signal and maps as:
+    Background  : '^Background'                    → background  ('Background0')
+    NC          : 'Negative'                       → nc          ('Pilot Control: Negative 0 , 1:1000')
+    PC/standard : '^Pilot Control:'                → pc          ('Pilot Control: Dengue pool 1:4000')
+    Specimen    : everything else                  → specimen    ('12602_r3_Serum')
 
-       Type=Standard    → well_type = pc
-       Type=Background  → well_type = background
-       Type=Control     → well_type = nc
-       Type=Unknown     → well_type = specimen
+NC is checked *before* PC on purpose: both NC and PC samples share the
+'Pilot Control:' prefix, so the more-specific 'Negative' match must win.
+Patterns are matched with ``re.search`` (not anchored) and are editable on
+the Settings page.
 
-   This lets operators name a Control well anything (e.g. ``NI7``,
-   ``Pool_B``) and still have it classified correctly.
+For PC wells, the **pool** and **dilution** are parsed from the sample name
+(``pc_pool``, ``dilution`` columns):
 
-2. **Fallback — sample-name regex.** When the input file is absent,
-   or for any well whose ``plate_well_type`` is missing / unrecognised,
-   the per-well ``sample_name`` is matched against the configured
-   regex patterns:
+    'Pilot Control: Dengue pool 1:4000'                  → pool='Dengue pool',  dilution=4000,  x_kind='dilution'
+    'Pilot Control: Orpal pool 1:800'                    → pool='Orpal pool',   dilution=800
+    'Pilot Control: Anti-OSP & cTxB & HlyE pool 1:16'    → pool='Anti-OSP & cTxB & HlyE pool', dilution=16
+    'Pilot Control: HlyE 50 ng/mL'                       → pool='HlyE', dilution=50, x_kind='concentration'
+    'Pilot Control: Cholera High (1:1000)'               → pool='Cholera High', dilution=NaN, single_point=True
 
-       PC          : '^Standard\\d+$'
-       Background  : '^Background'
-       NC          : '^NC' / '^Negative' / '^Control'
-       Specimen    : everything else (typically 'FD########' barcodes)
-
-   Patterns are editable on the Settings page.
-
-Dilution for PC wells is looked up by the trailing integer of the
-``Standard{N}`` name into ``config['standard']['dilutions']``. This is
-the same in both classification paths because Intelliflex auto-generates
-``Standard1`` .. ``Standard10`` as the sample name for Standard-type
-wells even when the operator left ``Description`` blank.
+A descriptive parenthetical (e.g. '(Anti OSP IgG-125ng/ml …)') is stripped
+before parsing so the pool label is stable across plates. Single-point
+controls (e.g. Cholera High/Low) get ``dilution=NaN`` and are flagged via
+``pc_single_point`` so the report shows them as reference markers rather
+than fitting a curve to a single point.
 """
 
 from __future__ import annotations
@@ -49,9 +45,10 @@ from .config import (
 )
 
 
-# Authoritative mapping from the Intelliflex input file's `Type`
-# column (lower-cased) to our internal well_type enum. Anything not
-# in this map falls back to sample-name regex classification.
+# Authoritative mapping from an Intelliflex input file's `Type` column
+# (lower-cased) to our internal well_type enum, kept for any future plate
+# that ships an input file. Bangladesh pilots have none, so the
+# sample-name regex below is the working path.
 _PWT_TO_WELL_TYPE: dict[str, str] = {
     "standard":   "pc",
     "background": "background",
@@ -61,45 +58,43 @@ _PWT_TO_WELL_TYPE: dict[str, str] = {
 
 
 def classify_wells(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
-    """Add ``well_type`` and ``dilution`` columns.
-
-    See module docstring for the classification priority (input-file
-    ``plate_well_type`` column wins; sample-name regex is the
-    fallback).
-    """
+    """Add ``well_type``, ``dilution``, ``pc_pool``, ``pc_single_point`` and
+    ``pc_x_kind`` columns. See module docstring for the rules."""
     pc_pats = PC_PATTERNS
     bg_pats = BACKGROUND_PATTERNS
     nc_pats = NC_PATTERNS
-    dilution_series = STANDARD_DILUTIONS
     if config is not None:
         wc = config.get("well_classification", {})
         pc_pats = wc.get("pc_patterns", pc_pats)
         bg_pats = wc.get("background_patterns", bg_pats)
         nc_pats = wc.get("nc_patterns", nc_pats)
-        std_dils = config.get("standard", {}).get("dilutions")
-        if isinstance(std_dils, list) and std_dils:
-            dilution_series = [float(d) for d in std_dils]
 
     df = df.copy()
 
-    # Start with the regex-derived classification. This always runs —
-    # it's the source of truth when no input file was uploaded, and
-    # the fallback for any plate_well_type the input file leaves
-    # blank or labels with an unrecognised value.
     df["well_type"] = df["sample_name"].apply(
         lambda n: _classify_sample(n, pc_pats, bg_pats, nc_pats)
     )
 
-    # When the input file is present, ``plate_well_type`` is the
-    # authoritative signal — override the regex result for every row
-    # whose plate_well_type maps to a known well_type.
+    # When an input file is present (future plates), its plate_well_type
+    # is authoritative and overrides the regex result.
     if "plate_well_type" in df.columns:
         pwt = df["plate_well_type"].astype(str).str.strip().str.lower()
         mapped = pwt.map(_PWT_TO_WELL_TYPE)
         override_mask = mapped.notna()
         df.loc[override_mask, "well_type"] = mapped[override_mask]
 
-    df["dilution"] = df["sample_name"].apply(lambda n: _dilution_for_pc(n, dilution_series))
+    # Parse pool / dilution from PC sample names.
+    is_pc = df["well_type"] == "pc"
+    parsed = df.loc[is_pc, "sample_name"].apply(_parse_pc)
+    df["pc_pool"] = None
+    df["dilution"] = float("nan")
+    df["pc_single_point"] = False
+    df["pc_x_kind"] = None
+    if is_pc.any():
+        df.loc[is_pc, "pc_pool"] = parsed.apply(lambda p: p["pool"])
+        df.loc[is_pc, "dilution"] = parsed.apply(lambda p: p["dilution"])
+        df.loc[is_pc, "pc_single_point"] = parsed.apply(lambda p: p["single_point"])
+        df.loc[is_pc, "pc_x_kind"] = parsed.apply(lambda p: p["x_kind"])
 
     if config is not None:
         spec_dil = config.get("specimens", {}).get("default_dilution")
@@ -115,27 +110,56 @@ def _classify_sample(
     nc_patterns: list[str],
 ) -> str:
     name = (name or "").strip()
-    for pat in pc_patterns:
-        if re.match(pat, name, re.IGNORECASE):
-            return "pc"
+    # Order matters: background → nc → pc → specimen. NC must beat PC
+    # because both share the "Pilot Control:" prefix.
     for pat in background_patterns:
-        if re.match(pat, name, re.IGNORECASE):
+        if re.search(pat, name, re.IGNORECASE):
             return "background"
     for pat in nc_patterns:
-        if re.match(pat, name, re.IGNORECASE):
+        if re.search(pat, name, re.IGNORECASE):
             return "nc"
+    for pat in pc_patterns:
+        if re.search(pat, name, re.IGNORECASE):
+            return "pc"
     return "specimen"
 
 
-def _dilution_for_pc(name: str, dilution_series: list[float]) -> float:
-    """Standard1 → dilution_series[0]; Standard10 → dilution_series[9].
+def _parse_pc(name: str) -> dict:
+    """Parse a PC sample name into pool label, dilution, and x-axis kind.
 
-    Returns NaN for non-Standard names.
+    Returns dict: {pool, dilution, single_point, x_kind} where
+    ``x_kind`` ∈ {'dilution', 'concentration', 'single'}.
     """
-    m = re.match(r"^Standard(\d+)$", (name or "").strip(), re.IGNORECASE)
-    if not m:
-        return float("nan")
-    idx = int(m.group(1)) - 1
-    if 0 <= idx < len(dilution_series):
-        return float(dilution_series[idx])
-    return float("nan")
+    s = (name or "").strip()
+    # Drop the shared "Pilot Control:" prefix.
+    s = re.sub(r"^\s*Pilot Control:\s*", "", s, flags=re.IGNORECASE)
+    # Strip any descriptive parenthetical, e.g. "(Anti OSP IgG-125ng/ml …)"
+    # or "(1:1000)". This normalizes the pool label across plates.
+    paren = re.findall(r"\(([^)]*)\)", s)
+    s_noparen = re.sub(r"\([^)]*\)", "", s).strip().strip(",").strip()
+
+    # 1) Dilution series: trailing "1:N" (commas allowed in N).
+    m = re.search(r"1\s*:\s*([\d,]+)\s*$", s_noparen)
+    if m:
+        dil = float(m.group(1).replace(",", ""))
+        pool = s_noparen[: m.start()].strip().strip(",").strip()
+        return {"pool": pool, "dilution": dil, "single_point": False, "x_kind": "dilution"}
+
+    # 2) Concentration series: trailing "N ng/mL" (HlyE).
+    m = re.search(r"([\d.]+)\s*ng\s*/?\s*m?l\s*$", s_noparen, flags=re.IGNORECASE)
+    if m:
+        conc = float(m.group(1))
+        pool = s_noparen[: m.start()].strip().strip(",").strip()
+        return {"pool": pool, "dilution": conc, "single_point": False, "x_kind": "concentration"}
+
+    # 3) Single-point control (e.g. "Cholera High", "Cholera high/ low: High").
+    #    No fittable series; show as a reference marker. If the original had
+    #    a "(1:N)" parenthetical, surface that dilution for context.
+    dil = float("nan")
+    for p in paren:
+        mm = re.search(r"1\s*:\s*([\d,]+)", p)
+        if mm:
+            dil = float(mm.group(1).replace(",", ""))
+            break
+    pool = s_noparen if s_noparen else s.strip()
+    return {"pool": pool, "dilution": dil, "single_point": True, "x_kind": "single"}

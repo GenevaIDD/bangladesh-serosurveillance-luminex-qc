@@ -1,4 +1,4 @@
-"""Flask web app for Uvira Luminex QC tool."""
+"""Flask web app for Bangladesh Serosurveillance Luminex QC tool."""
 
 from __future__ import annotations
 
@@ -238,7 +238,7 @@ def create_app() -> Flask:
             buf,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name="uvira_luminex_all_data.xlsx",
+            download_name="bangladesh_serosurveillance_all_data.xlsx",
         )
 
     @app.route("/delete/<plate_id>", methods=["POST"])
@@ -370,7 +370,7 @@ def create_app() -> Flask:
         # Simple markdown-to-HTML: render as preformatted with basic styling
         html = (
             '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-            '<title>Uvira Luminex QC — Specification</title>'
+            '<title>Bangladesh Serosurveillance Luminex QC — Specification</title>'
             '<style>'
             'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
             ' max-width: 900px; margin: 0 auto; padding: 20px; color: #333; }'
@@ -492,7 +492,7 @@ def create_app() -> Flask:
         buf = io.BytesIO()
         buf.write(yaml.dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"))
         buf.seek(0)
-        return send_file(buf, mimetype="text/yaml", as_attachment=True, download_name="uvira_luminex_config.yaml")
+        return send_file(buf, mimetype="text/yaml", as_attachment=True, download_name="bangladesh_serosurveillance_config.yaml")
 
     @app.route("/settings/import", methods=["POST"])
     def import_config():

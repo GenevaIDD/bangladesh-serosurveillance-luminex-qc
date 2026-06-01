@@ -1,17 +1,24 @@
-"""Panel definition and default thresholds for Uvira 200-plex Luminex assay.
+"""Panel definition and default thresholds for the Bangladesh National
+Serosurveillance 202-plex Luminex assay (384-well, Intelliflex, High PMT).
 
 All configurable values have defaults here. User overrides are stored in
-~/uvira-luminex-qc-results/config.yaml and loaded at runtime via settings.py.
+~/bangladesh-serosurveillance-luminex-qc-results/config.yaml and loaded at
+runtime via settings.py.
+
+The production panel is 202-plex; pilot plates ran fewer beads due to reagent
+shortages. The per-plate panel is always auto-derived from the xPONENT
+``Median`` header on ingest, so the list below is only a display/fallback
+default.
 """
 
 from __future__ import annotations
 
-APP_VERSION = "0.9.0-uvira"
+APP_VERSION = "0.1.0-bangladesh"
 
-RESULTS_DIR_NAME = "uvira-luminex-qc-results"
+RESULTS_DIR_NAME = "bangladesh-serosurveillance-luminex-qc-results"
 
-# --- Uvira 200-plex antigen panel (auto-derived from xPONENT header on
-# first ingest; this list is the canonical default). ---
+# --- 202-plex antigen panel (auto-derived from xPONENT header on
+# first ingest; this list is the canonical default / fallback). ---
 
 ANTIGENS = [
     "RES_Ade3", "RES_Ade5_hexon", "TOXO_TgAMA1", "RES_Ade40_hexon",
@@ -85,12 +92,9 @@ ANTIGENS = [
 
 # Bead regions known to have been added in error during plate setup. These
 # are kept in the data (soft flag) but rendered visually muted in the
-# report. Editable from the Settings page.
-EXCLUDED_ANALYTES = [
-    "FLU_B_HA_Maryland_1959",
-    "FLU_B_NP_Brisbane_2008",
-    "VPD_Tet_tox",
-]
+# report. Editable from the Settings page. Empty by default for Bangladesh
+# (the legacy MPXV/Uvira exclusions do not apply to this assay).
+EXCLUDED_ANALYTES: list[str] = []
 
 # Kit-control bead concept does not apply to the Uvira assay; the NC for
 # this plate is the Row-A "Background" well, not a kit-bead.
@@ -127,27 +131,34 @@ STANDARD_DILUTIONS = [
 SPECIMEN_DEFAULT_DILUTION = 100  # placeholder; specimens are run at a single dilution
 
 # --- Well classification patterns ---
-# Intelliflex inputfile labels A1..A10 = "Standard" (sample names
-# "Standard1".."Standard10"), A11/A12 = "Background" (sample name
-# "Background"). Specimen sample names are FD-prefixed barcodes.
+# Bangladesh sample-name conventions (no Intelliflex input file; the
+# Sample name in the CSV is the only classification signal):
 #
-# Background wells are the plate-blank rows in A11/A12 — they capture
-# non-specific signal and are reported alongside the curve.  Negative
-# controls are a separate concept: a known seronegative sample that
-# should read below LLOQ on every antigen.  The pilot plate has no NC
-# wells, but the patterns below accept the common labels used on later
-# plates (NC1, Negative_pool, Control, …) so the user can simply name
-# the well and not edit Settings.
-PC_PATTERNS = [r"^Standard\d+$"]
+#   Background  : "Background0"                          → background
+#   NC          : "Pilot Control: Negative 0 , 1:1000"   → nc
+#                 "Pilot Control: Negative 49 , 1:1000"
+#   PC/standard : "Pilot Control: <pool> [<descr>] <dilution>"  → pc
+#                 e.g. "Pilot Control: Dengue pool 1:4000",
+#                      "Pilot Control: Orpal pool 1:800",
+#                      "Pilot Control: Anti-OSP & cTxB & HlyE pool 1:16",
+#                      "Pilot Control: HlyE 50 ng/mL",
+#                      "Pilot Control: Cholera High (1:1000)"  (single point)
+#   Specimen    : "{id}_r3_{Serum|DBS}"                  → specimen
+#
+# Classification order in classify.py is: background → nc → pc → specimen,
+# and patterns are matched with re.search (not anchored) so the shared
+# "Pilot Control:" prefix on NC + PC samples resolves correctly (NC wins
+# because it is checked first). Patterns are editable on the Settings page.
+PC_PATTERNS = [r"^Pilot Control:"]
 BACKGROUND_PATTERNS = [r"^Background"]
-NC_PATTERNS = [r"^NC", r"^Negative", r"^Control"]
+NC_PATTERNS = [r"Negative"]
 
 # --- Structured defaults dict for settings.py ---
 
 DEFAULTS = {
     "assay": {
-        "name": "Uvira 200-Plex Luminex",
-        "description": "200-plex Luminex immunoassay on Intelliflex (Uvira pilot)",
+        "name": "Bangladesh Serosurveillance 202-Plex Luminex",
+        "description": "202-plex Luminex immunoassay on Intelliflex (High PMT, 384-well) — Bangladesh National Serosurveillance",
     },
     "panel": {
         # bead_region is informational only on Intelliflex; analytes are
@@ -155,6 +166,11 @@ DEFAULTS = {
         "antigens": [{"name": a, "bead_region": None} for a in ANTIGENS],
         "kit_controls": [],
         "excluded_analytes": list(EXCLUDED_ANALYTES),
+        # Priority antigens whose standard curves are meant to be
+        # interpreted. Empty list = all antigens (default). Curves are
+        # still fit for every antigen; this only filters the display in
+        # the Standard Curve Summary / All Curves Overview (Section 5).
+        "priority_antigens": [],
     },
     "well_classification": {
         "pc_patterns": PC_PATTERNS,

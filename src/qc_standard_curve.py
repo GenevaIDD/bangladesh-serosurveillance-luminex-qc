@@ -70,8 +70,14 @@ def fit_standard_curves(
 
     pc = df[df["well_type"] == "pc"].copy()
 
+    # Single-point controls (e.g. Cholera High/Low) are not a dilution
+    # series — they cannot be fit to a 4PL. Drop them from the curve-fit
+    # input here; the report shows them as reference markers (Section 5).
+    if "pc_single_point" in pc.columns:
+        pc = pc[~pc["pc_single_point"].fillna(False)]
+
     # Discover pools; fall back to a single unnamed pool if pc_pool column missing
-    if "pc_pool" in pc.columns:
+    if "pc_pool" in pc.columns and pc["pc_pool"].notna().any():
         pools = sorted(pc["pc_pool"].dropna().unique())
     else:
         pools = ["PC"]
@@ -103,12 +109,22 @@ def fit_standard_curves(
                 }
                 continue
 
-            # Average replicates at each dilution
-            means = adata.groupby("dilution")["mfi"].mean().reset_index()
+            # Average replicates at each dilution (drops NaN-dilution rows)
+            means = adata.dropna(subset=["dilution"]).groupby("dilution")["mfi"].mean().reset_index()
             means = means.sort_values("dilution")
 
             x = means["dilution"].values
             y = means["mfi"].values
+
+            # Need at least a few distinct dilution points to fit a 4PL.
+            if len(x) < 4:
+                pool_results[analyte] = {
+                    "params": None, "fit_ok": False, "std_data": adata,
+                    "mean_data": means, "error": f"Too few dilution points ({len(x)})",
+                    "qc_warnings": [], "obs_exp": None,
+                    "reportable_range": None, "dropped_point": None,
+                }
+                continue
 
             params, fit_ok, error, qc_warnings = _fit_one(x, y, x_min=x.min(), x_max=x.max())
 
@@ -131,9 +147,11 @@ def fit_standard_curves(
 
             obs_exp = None
             reportable_range = None
+            r_squared = None
             if params is not None:
                 obs_exp = _compute_obs_exp(x, y, params, tolerance=recovery_tolerance)
                 reportable_range = _compute_reportable_range(x, y, params, tolerance=recovery_tolerance)
+                r_squared = _r_squared_log(x, y, params)
 
             pool_results[analyte] = {
                 "params": params,
@@ -145,6 +163,7 @@ def fit_standard_curves(
                 "obs_exp": obs_exp,
                 "reportable_range": reportable_range,
                 "dropped_point": dropped_point,
+                "r_squared": r_squared,
             }
 
         all_fits[pool] = pool_results
@@ -360,7 +379,117 @@ def _pool_slug(pool_name: str) -> str:
     return pool_name.replace(" ", "_")
 
 
-def compute_concentrations(df: pd.DataFrame, fits: dict) -> pd.DataFrame:
+def _r_squared_log(x, y, params) -> float | None:
+    """R² of the 4PL fit on log10(MFI) — matches the optimizer's objective."""
+    try:
+        log_y = np.log10(np.maximum(np.asarray(y, dtype=float), 1.0))
+        log_pred = np.log10(np.maximum(four_pl(np.asarray(x, dtype=float), *params), 1.0))
+        ss_res = float(np.sum((log_y - log_pred) ** 2))
+        ss_tot = float(np.sum((log_y - np.mean(log_y)) ** 2))
+        return 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Automatic antigen → pool selection.
+#
+# Each antigen is scored against the standard curve of the control pool that
+# is *meant* to calibrate it. We derive that pool automatically:
+#
+#   1. Parse the antigen's pathogen group from its name (prefix / keywords).
+#   2. Parse each pool's target group(s) from the pool name.
+#   3. Candidate pools = pools whose target group contains the antigen's group
+#      AND that produced a usable fit for that antigen.
+#   4. Tie-break (and fall back when no name match) by the best-fitting curve:
+#      fit_ok first, then highest R².
+#
+# This runs as the default. A per-antigen override map can be supplied via
+# ``config['panel']['pool_antigen_overrides']`` (antigen → pool name) once the
+# team signs off on the prefix→pathogen rules.
+# ---------------------------------------------------------------------------
+
+
+def _antigen_group(name: str) -> str | None:
+    """Map an antigen name to a pathogen group, or None if not a target group."""
+    n = (name or "").upper()
+    if "DENV" in n or "DENGUE" in n:
+        return "dengue"
+    if "HLYE" in n or "TYPHI" in n:
+        return "typhoid"
+    if "OSP" in n or "CTXB" in n or "CTX_B" in n or "INABA" in n or "OGAWA" in n \
+            or n.startswith("CHO_") or "CHOLERA" in n or "VIBRIO" in n:
+        return "cholera"
+    return None
+
+
+def _pool_groups(pool_name: str) -> set[str]:
+    """Map a pool name to the set of pathogen groups it targets."""
+    p = (pool_name or "").lower()
+    groups: set[str] = set()
+    if "dengue" in p or "orpal" in p:
+        groups.add("dengue")
+    if "osp" in p or "ctxb" in p or "cholera" in p:
+        groups.add("cholera")
+    if "hlye" in p:
+        groups.add("typhoid")
+    return groups
+
+
+def select_pool_per_antigen(
+    fits: dict,
+    antigens: list[str] | None = None,
+    config: dict | None = None,
+) -> dict[str, str]:
+    """Pick the best pool to score each antigen against.
+
+    Returns ``{antigen: pool_name}``. Antigens with no usable fit in any
+    pool are omitted (callers treat them as NO_FIT).
+    """
+    pools = list(fits.keys())
+    if not pools:
+        return {}
+    if antigens is None:
+        antigens = sorted({a for pf in fits.values() for a in pf})
+
+    overrides = {}
+    if config is not None:
+        overrides = config.get("panel", {}).get("pool_antigen_overrides", {}) or {}
+
+    pool_grp = {pool: _pool_groups(pool) for pool in pools}
+
+    def _fit_rank(pool: str, antigen: str):
+        """Sort key: prefer params present, fit_ok, then higher R²."""
+        fr = fits.get(pool, {}).get(antigen) or {}
+        has = fr.get("params") is not None
+        ok = bool(fr.get("fit_ok"))
+        r2 = fr.get("r_squared")
+        r2 = r2 if isinstance(r2, (int, float)) else -1.0
+        return (has, ok, r2)
+
+    selected: dict[str, str] = {}
+    for antigen in antigens:
+        # Manual override wins if the named pool has a fit for this antigen.
+        ov = overrides.get(antigen)
+        if ov in fits and fits[ov].get(antigen, {}).get("params") is not None:
+            selected[antigen] = ov
+            continue
+
+        grp = _antigen_group(antigen)
+        # Candidate pools by name match (when the antigen has a known group).
+        candidates = [p for p in pools if grp and grp in pool_grp[p]] if grp else []
+        # Keep only candidates that actually fit this antigen.
+        candidates = [p for p in candidates if fits[p].get(antigen, {}).get("params") is not None]
+        # Fall back to any pool that fit this antigen.
+        if not candidates:
+            candidates = [p for p in pools if fits[p].get(antigen, {}).get("params") is not None]
+        if not candidates:
+            continue  # no usable fit anywhere → NO_FIT
+        selected[antigen] = max(candidates, key=lambda p: _fit_rank(p, antigen))
+    return selected
+
+
+def compute_concentrations(df: pd.DataFrame, fits: dict, config: dict | None = None) -> pd.DataFrame:
     """Apply 4PL inversion to compute AU (Arbitrary Units) for specimen wells.
 
     The AU scale is anchored so that the first (lowest) standard dilution
@@ -429,13 +558,27 @@ def compute_concentrations(df: pd.DataFrame, fits: dict) -> pd.DataFrame:
                 specimens.loc[mask, lloq_col] = rau_vals < rr["lloq"]
                 specimens.loc[mask, uloq_col] = rau_vals > rr["uloq"]
 
-    # For multi-pool: also set the plain 'rau' etc. from the first pool as default
+    # For multi-pool: the plain 'rau'/'extrapolated'/'below_lloq'/'above_uloq'
+    # columns are the *default* view. Fill them per antigen from the pool that
+    # is meant to calibrate that antigen (auto-selected), not blindly from the
+    # first pool.
     if multi_pool:
-        first_slug = _pool_slug(pools[0])
-        specimens["rau"] = specimens[f"rau_{first_slug}"]
-        specimens["extrapolated"] = specimens[f"extrapolated_{first_slug}"]
-        specimens["below_lloq"] = specimens[f"below_lloq_{first_slug}"]
-        specimens["above_uloq"] = specimens[f"above_uloq_{first_slug}"]
+        selected = select_pool_per_antigen(fits, antigens=None, config=config)
+        specimens["rau"] = np.nan
+        specimens["extrapolated"] = False
+        specimens["below_lloq"] = False
+        specimens["above_uloq"] = False
+        for analyte, pool_name in selected.items():
+            slug = _pool_slug(pool_name)
+            mask = specimens["analyte"] == analyte
+            if not mask.any():
+                continue
+            for plain, suffixed in (
+                ("rau", f"rau_{slug}"), ("extrapolated", f"extrapolated_{slug}"),
+                ("below_lloq", f"below_lloq_{slug}"), ("above_uloq", f"above_uloq_{slug}"),
+            ):
+                if suffixed in specimens.columns:
+                    specimens.loc[mask, plain] = specimens.loc[mask, suffixed]
 
     return specimens
 
@@ -504,6 +647,7 @@ def compute_in_range_table(
     df: pd.DataFrame,
     fits: dict,
     excluded_analytes: list[str] | None = None,
+    config: dict | None = None,
 ) -> pd.DataFrame:
     """Per-(specimen well × antigen) IN_RANGE / OUT_OF_RANGE table.
 
@@ -531,9 +675,11 @@ def compute_in_range_table(
             columns=["well", "sample_name", "analyte", "mfi", "mfi_lloq",
                      "mfi_uloq", "status", "excluded"]
         )
-    # Single-pool assumption for Uvira; if multi-pool present (legacy),
-    # use the first pool.
-    pool_fits = fits[pools[0]]
+    # Each antigen is scored against the standard curve of the pool that
+    # is meant to calibrate it (auto-selected by pathogen name, tie-broken
+    # by best fit). See select_pool_per_antigen.
+    all_antigens = sorted({a for pf in fits.values() for a in pf})
+    selected = select_pool_per_antigen(fits, antigens=all_antigens, config=config)
 
     specimens = df[df["well_type"] == "specimen"].copy()
     if specimens.empty:
@@ -542,10 +688,12 @@ def compute_in_range_table(
         )[["well", "sample_name", "analyte", "mfi", "mfi_lloq", "mfi_uloq",
            "status", "excluded"]]
 
-    # Pre-compute MFI bounds per analyte
-    bounds: dict[str, tuple[float | None, float | None]] = {
-        analyte: _mfi_bounds_for_fit(fit) for analyte, fit in pool_fits.items()
-    }
+    # Pre-compute MFI bounds per analyte from its selected pool's fit.
+    bounds: dict[str, tuple[float | None, float | None]] = {}
+    for analyte in all_antigens:
+        pool = selected.get(analyte)
+        fit = fits[pool].get(analyte) if pool else None
+        bounds[analyte] = _mfi_bounds_for_fit(fit) if fit else (None, None)
 
     rows = []
     optional_cols = [c for c in ("sample_id", "patient_id", "barcode", "box_id")

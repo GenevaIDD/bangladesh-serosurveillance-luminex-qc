@@ -156,8 +156,13 @@ def _parse_data_block(rows: list[list[str]], block_start: int) -> pd.DataFrame:
 
 
 def _parse_well_from_location(loc: str) -> str:
-    """'1(1,A1)' → 'A1'."""
-    m = re.search(r"\d+\(\d+,([A-H]\d+)\)", loc)
+    """'1(1,A1)' → 'A1'.
+
+    Accepts rows A–P and columns 1–24 so both 96-well (A–H × 1–12) and
+    384-well (A–P × 1–24) plates parse. The Bangladesh assay runs on
+    384-well plates.
+    """
+    m = re.search(r"\d+\(\d+,([A-P]\d+)\)", loc)
     if m:
         return m.group(1)
     return loc

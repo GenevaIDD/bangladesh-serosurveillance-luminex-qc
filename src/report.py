@@ -1,4 +1,4 @@
-"""HTML report generation for the Uvira 200-plex Luminex QC tool.
+"""HTML report generation for the Bangladesh Serosurveillance 202-plex Luminex QC tool.
 
 The report is a single self-contained HTML file (Plotly is loaded from a
 CDN) with these sections:
@@ -43,7 +43,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .config import APP_VERSION, RECOVERY_TOLERANCE
 from .settings import get_excluded_analytes, get_qc_thresholds
-from .qc_standard_curve import four_pl, range_problem_summary
+from .qc_standard_curve import four_pl, range_problem_summary, select_pool_per_antigen
 from .qc_beads import bead_problem_summary
 from .qc_background import qc_background_levels
 
@@ -89,11 +89,29 @@ def generate_report(
     pool_fits = _first_pool(fits)
     plate_id = metadata.get("plate_id", "unknown")
 
+    # Multi-pool auto-selection summary, for the report's explanatory banner:
+    # which control pools were detected, and how many antigens each pool was
+    # chosen to calibrate (by pathogen-name match, tie-broken by best fit).
+    pool_selection = _build_pool_selection_summary(fits, config)
+
     well_types_map = (
         data.drop_duplicates("well").set_index("well")["well_type"].to_dict()
         if not data.empty and "well_type" in data.columns
         else {}
     )
+
+    # Per-well-type counts for the Plate Overview number cards.
+    _wt_counts: dict[str, int] = {}
+    for _wt in well_types_map.values():
+        _wt_counts[_wt] = _wt_counts.get(_wt, 0) + 1
+    plate_counts = {
+        "total": len(well_types_map),
+        "nc": _wt_counts.get("nc", 0),
+        "pc": _wt_counts.get("pc", 0),
+        "specimen": _wt_counts.get("specimen", 0),
+        "background": _wt_counts.get("background", 0),
+        "antigens": len(metadata.get("analytes") or []) or (len(pool_fits) if pool_fits else 0),
+    }
 
     # IMPORTANT: build figures in the same order they appear in the
     # rendered HTML.  ``_plotly_html`` embeds the Plotly.js library
@@ -110,11 +128,13 @@ def generate_report(
     #   6. Standard-Curve Picker → curve_picker
     #   7. Range Matrix      → range_heatmap
     #   8. NC QC             → nc_heatmap + nc_history
+    # Build figures in DOM order (Plotly.js embeds on the first call):
+    #   1. Plate Overview → 2. Bead Count → 3. Background QC → …
     plate_layout_html = _make_plate_layout_overview(data)
+    bead_heatmap_html = _make_bead_heatmap(bead_qc, excluded, well_types=well_types_map)
     bg_overview_html = _make_background_overview_plot(
         history_background, current_plate_id=metadata.get("plate_id"), excluded=excluded
     )
-    bead_heatmap_html = _make_bead_heatmap(bead_qc, excluded, well_types=well_types_map)
     nc_history_html = _make_nc_history_plot(history_nc, current_plate_id=metadata.get("plate_id"))
     nc_history_present = bool(nc_history_html)
     curve_grid_html = _make_curve_grid(pool_fits, excluded)
@@ -171,6 +191,8 @@ def generate_report(
         summary=summary,
         excluded_analytes=sorted(excluded),
         layout_info=layout_info,
+        plate_counts=plate_counts,
+        csv_file=metadata.get("file", ""),
         bead_thresholds={
             "red_below": bead_qc.get("red_threshold"),
             "yellow_below": bead_qc.get("yellow_threshold"),
@@ -181,6 +203,7 @@ def generate_report(
         bead_problems=bead_problems,
         bead_problem_counts=_tier_counts(bead_qc.get("problems", pd.DataFrame())),
         curve_summary=curve_summary,
+        pool_selection=pool_selection,
         curve_picker_html=curve_picker_html,
         cross_run_html=cross_run_html,
         cross_run_present=bool(cross_run_html),
@@ -285,17 +308,19 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
     for i, an in enumerate(analyte_rows):
         for j, w in enumerate(well_cols):
             count = matrix.iat[i, j]
-            label = sample_labels.get(w, "")
+            label = sample_labels.get(w, "") or "—"
             count_str = "—" if pd.isna(count) else f"{int(count)}"
             text[i, j] = (
-                f"<b>{an}</b><br>Well {w} ({label})<br>Count: {count_str}<br>"
-                f"Tier: {tier_matrix.iat[i, j].upper()}"
+                f"<b>{an}</b><br>Well: {w}<br>Sample: {label}<br>"
+                f"Bead count: {count_str}<br>Tier: {tier_matrix.iat[i, j].upper()}"
             )
 
     fig = go.Figure(
         data=go.Heatmap(
             z=z,
-            x=[f"{w} {sample_labels.get(w, '')}".strip() for w in well_cols],
+            # X axis shows the well location only (e.g. A1); the sample ID
+            # would crowd a 384-column heatmap, so it lives in the hover.
+            x=well_cols,
             y=analyte_rows,
             text=text,
             hoverinfo="text",
@@ -307,10 +332,18 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
             zmin=0, zmax=2, showscale=False, xgap=0.5, ygap=0.5,
         )
     )
-    height = max(400, min(20 + 14 * len(analyte_rows), 4500))
+    # Fixed pixel geometry so every well column is legible; the container
+    # below scrolls horizontally (and vertically) for the full 384-well ×
+    # 200-antigen matrix.
+    n_well_cols = len(well_cols)
+    width = 200 + n_well_cols * 13 + 40
+    height = max(400, min(20 + 15 * len(analyte_rows), 6500))
     fig.update_layout(
-        margin=dict(l=180, r=20, t=20, b=120),
-        xaxis=dict(tickangle=-90, tickfont=dict(size=8), side="top"),
+        margin=dict(l=180, r=20, t=24, b=20),
+        width=width, height=height,
+        xaxis=dict(tickangle=-90, tickfont=dict(size=9), side="top",
+                   tickmode="array", tickvals=list(range(n_well_cols)),
+                   ticktext=[str(w) for w in well_cols]),
         yaxis=dict(tickfont=dict(size=8), autorange="reversed"),
     )
     if excluded:
@@ -335,7 +368,14 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
                 opacity=0.75,
                 layer="above",
             )
-    return _plotly_html(fig, "fig-bead-heatmap", height=height)
+    inner = _plotly_html(fig, "fig-bead-heatmap", height=height, responsive=False)
+    # Scrollable container (horizontal + vertical) so the wide 384-column
+    # matrix stays legible — each well is visible by scrolling across.
+    return (
+        '<div style="max-width:100%; max-height:760px; overflow:auto; '
+        'border:1px solid #e1e4e8; border-radius:4px; padding:4px;">'
+        f"{inner}</div>"
+    )
 
 
 def _make_curve_grid(pool_fits: dict, excluded: set[str], cols: int = 10) -> str:
@@ -1833,72 +1873,111 @@ def _make_background_overview_plot(
 
 
 def _make_plate_layout_overview(data: pd.DataFrame) -> str:
-    """8×12 plate-map heatmap colour-coded by well_type.
+    """Shape-coded plate map (96- or 384-well).
 
-    Cells are labelled with the sample name (truncated) and hover
-    shows the full well_type + sample. Mirrors the plate-shape
-    overview the legacy MPOX MagPix report had as a quick visual.
+    Well types are distinguished by marker *shape* (not colour):
+    circle = PC/standard, ✕ = NC (negative), square = specimen,
+    open square = background. No sample labels are drawn — the well
+    position, sample ID, and type are shown on hover. The figure is
+    rendered inside a horizontally/vertically scrolling container so a
+    full 384-well plate is legible.
     """
     if data is None or data.empty or "well" not in data.columns:
         return "<p style='color:#999;'>No plate layout to display.</p>"
 
-    wells = data.drop_duplicates("well")[["well", "sample_name", "well_type"]].copy()
+    cols_keep = ["well", "sample_name", "well_type"]
+    if "sample_id" in data.columns:
+        cols_keep.append("sample_id")
+    wells = data.drop_duplicates("well")[cols_keep].copy()
     wells["row"] = wells["well"].str[0]
-    wells["col"] = pd.to_numeric(wells["well"].str[1:], errors="coerce")
-    wells = wells.dropna(subset=["col"])
-    wells["col"] = wells["col"].astype(int)
+    wells["coln"] = pd.to_numeric(wells["well"].str[1:], errors="coerce")
+    wells = wells.dropna(subset=["coln"])
+    wells["coln"] = wells["coln"].astype(int)
 
-    rows = list("ABCDEFGH")
-    cols = list(range(1, 13))
+    # Infer geometry; snap to 96 or 384.
+    max_row = max((ord(r) - ord("A") + 1) for r in wells["row"]) if not wells.empty else 8
+    max_col = int(wells["coln"].max()) if not wells.empty else 12
+    is_384 = max_row > 8 or max_col > 12
+    n_rows = 16 if is_384 else 8
+    n_cols = 24 if is_384 else 12
+    rows = [chr(ord("A") + i) for i in range(n_rows)]
 
-    type_to_int = {"pc": 0, "background": 1, "nc": 2, "specimen": 3}
-    type_to_color = {
-        "pc":         "#3498db",  # blue (matches "current 4PL" colour)
-        "background": "#95a5a6",  # neutral grey
-        "nc":         "#e67e22",  # orange — flags presence of a real NC sample
-        "specimen":   "#dff0e2",  # very pale green
+    # Per-type marker style. Shape carries the meaning; colour is a soft
+    # secondary cue only.
+    type_style = {
+        "pc":         dict(symbol="circle",      color="#2c7fb8", size=13, name="PC / standard"),
+        "nc":         dict(symbol="x",           color="#d95f02", size=13, name="NC (negative)"),
+        "specimen":   dict(symbol="square",      color="#7fbf7b", size=12, name="Specimen"),
+        "background": dict(symbol="square-open", color="#95a5a6", size=12, name="Background"),
     }
-    # Build matrices for z (type), text (sample), and hover.
-    z = np.full((len(rows), len(cols)), np.nan)
-    text = np.empty((len(rows), len(cols)), dtype=object)
-    hover = np.empty((len(rows), len(cols)), dtype=object)
-    text.fill(""); hover.fill("")
-    for r in wells.itertuples(index=False):
-        if r.row not in rows or r.col not in cols:
+
+    def _label(r) -> str:
+        sid = getattr(r, "sample_id", None)
+        if sid is not None and str(sid).strip() and str(sid).lower() != "nan":
+            return str(sid)
+        return (r.sample_name or "").strip()
+
+    type_disp = {"pc": "PC (standard)", "nc": "NC (negative)",
+                 "specimen": "Specimen", "background": "Background"}
+
+    fig = go.Figure()
+    # One scatter trace per well_type (legend + distinct shape).
+    for wtype, style in type_style.items():
+        sub = wells[wells["well_type"] == wtype]
+        if sub.empty:
             continue
-        ri, ci = rows.index(r.row), cols.index(r.col)
-        wtype = (r.well_type or "specimen").lower()
-        z[ri, ci] = type_to_int.get(wtype, 3)
-        sample = (r.sample_name or "").strip()
-        # Truncate long sample names to fit the cell.
-        text[ri, ci] = sample if len(sample) <= 12 else sample[:11] + "…"
-        hover[ri, ci] = (
-            f"<b>{r.well}</b><br>{wtype.upper()}<br>{sample}"
-        )
+        xs, ys, hov = [], [], []
+        for r in sub.itertuples(index=False):
+            if r.row not in rows or not (1 <= r.coln <= n_cols):
+                continue
+            xs.append(r.coln)
+            ys.append(r.row)
+            hov.append(
+                f"<b>{r.well}</b><br>Sample: {html.escape(_label(r)) or '—'}"
+                f"<br>Type: {type_disp.get(wtype, wtype)}"
+            )
+        if not xs:
+            continue
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers", name=style["name"],
+            marker=dict(symbol=style["symbol"], size=style["size"],
+                        color=style["color"],
+                        line=dict(width=1, color="#34495e") if style["symbol"] != "x" else dict(width=2, color=style["color"])),
+            hovertext=hov, hoverinfo="text",
+        ))
 
-    # 4-stop discrete colorscale (one per well_type).
-    colorscale = [
-        [0.000, type_to_color["pc"]],         [0.250, type_to_color["pc"]],
-        [0.250, type_to_color["background"]], [0.500, type_to_color["background"]],
-        [0.500, type_to_color["nc"]],         [0.750, type_to_color["nc"]],
-        [0.750, type_to_color["specimen"]],   [1.000, type_to_color["specimen"]],
-    ]
-
-    fig = go.Figure(go.Heatmap(
-        z=z, x=[str(c) for c in cols], y=rows,
-        text=text, texttemplate="%{text}",
-        hovertext=hover, hoverinfo="text",
-        colorscale=colorscale, zmin=0, zmax=3,
-        showscale=False, xgap=2, ygap=2,
-    ))
+    # Pixel sizing: ~34px per column / ~30px per row so a 384 plate is
+    # legible. The container scrolls if it exceeds the box.
+    px_w = max(420, 70 + n_cols * 34)
+    px_h = max(280, 96 + n_rows * 30)
     fig.update_layout(
-        margin=dict(l=30, r=30, t=10, b=20),
-        height=240,
-        xaxis=dict(side="top", tickfont=dict(size=11), title=""),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=11), title=""),
+        # Generous top margin hosts the centered legend *above* the column
+        # numbers (which sit on the top axis) with a clear gap between them.
+        margin=dict(l=40, r=20, t=64, b=16),
+        width=px_w, height=px_h,
+        plot_bgcolor="#fbfcfd",
+        legend=dict(orientation="h", x=0.5, y=1.11, xanchor="center",
+                    yanchor="bottom", font=dict(size=11)),
+        xaxis=dict(
+            side="top", title="", tickmode="array",
+            tickvals=list(range(1, n_cols + 1)), tickfont=dict(size=10),
+            range=[0.5, n_cols + 0.5], showgrid=True, gridcolor="#eef1f4",
+            zeroline=False, constrain="domain",
+        ),
+        yaxis=dict(
+            title="", categoryorder="array", categoryarray=rows[::-1],
+            tickfont=dict(size=10), showgrid=True, gridcolor="#eef1f4",
+            zeroline=False, scaleanchor="x", scaleratio=1,
+        ),
     )
-    fig.update_traces(textfont=dict(size=9, color="#2c3e50"))
-    return _plotly_html(fig, "fig-plate-layout", height=260)
+    inner = _plotly_html(fig, "fig-plate-layout", height=px_h, responsive=False)
+    # Scrollable container (both axes); the inline-block inner is centered
+    # horizontally so the map isn't stranded at the left edge.
+    return (
+        '<div style="max-width:100%; max-height:600px; overflow:auto; '
+        'border:1px solid #e1e4e8; border-radius:4px; padding:4px; text-align:center;">'
+        f'<div style="display:inline-block; text-align:left;">{inner}</div></div>'
+    )
 
 
 def _make_nc_history_plot(history_nc, current_plate_id: str | None = None) -> str:
@@ -2041,6 +2120,35 @@ def _first_pool(fits: dict | None) -> dict:
         return {}
     pools = list(fits.keys())
     return fits[pools[0]] if pools else {}
+
+
+def _build_pool_selection_summary(fits: dict | None, config: dict | None) -> dict:
+    """Summarize the automatic antigen → pool selection for the report banner.
+
+    Returns dict:
+        pools:    list of control pool names detected on the plate
+        rows:     [{pool, n_antigens}] — how many antigens each pool was
+                  chosen to calibrate (sorted by n_antigens desc)
+        n_pools:  number of pools
+        n_assigned: number of antigens routed to a pool
+    """
+    if not fits:
+        return {"pools": [], "rows": [], "n_pools": 0, "n_assigned": 0}
+    pools = list(fits.keys())
+    selection = select_pool_per_antigen(fits, antigens=None, config=config)
+    counts: dict[str, int] = {p: 0 for p in pools}
+    for pool in selection.values():
+        counts[pool] = counts.get(pool, 0) + 1
+    rows = sorted(
+        ({"pool": p, "n_antigens": counts.get(p, 0)} for p in pools),
+        key=lambda r: r["n_antigens"], reverse=True,
+    )
+    return {
+        "pools": pools,
+        "rows": rows,
+        "n_pools": len(pools),
+        "n_assigned": len(selection),
+    }
 
 
 def _fmt(v, decimals=2) -> str:

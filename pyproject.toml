@@ -1,7 +1,7 @@
 [project]
-name = "uvira-luminex-qc"
+name = "bangladesh-serosurveillance-luminex-qc"
 version = "0.9.0"
-description = "QC tool for 200-plex Uvira Luminex immunoassays on Intelliflex"
+description = "QC tool for the Bangladesh National Serosurveillance 202-plex Luminex assay (Intelliflex, 384-well)"
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.0",

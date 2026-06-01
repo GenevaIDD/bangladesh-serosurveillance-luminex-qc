@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Uvira Luminex QC Report — {{ metadata.plate_id }}</title>
+<title>Bangladesh Serosurveillance Luminex QC Report — {{ metadata.plate_id }}</title>
 <!-- Plotly.js is embedded inline on the first chart below (no CDN; works offline). -->
 <style>
   :root {
@@ -42,6 +42,10 @@
   nav.sidebar a.muted-link { color: #95a5a6; }
   main.content {
     padding: 20px 30px 40px; max-width: 1300px;
+    /* min-width:0 lets the 1fr grid track stay within the viewport instead
+       of being stretched by very wide children (e.g. the 384-column bead
+       heatmap), which scroll inside their own container instead. */
+    min-width: 0;
   }
   h1 { color: #2c3e50; border-bottom: 3px solid var(--blue); padding-bottom: 10px; margin-bottom: 6px; }
   h2 { color: #2c3e50; margin-top: 36px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
@@ -168,187 +172,78 @@
 
 <main class="content">
 
-<h1 style="margin:0 0 4px; border:none;">Uvira Luminex QC Report</h1>
-<p class="subtitle"><b>Plate:</b> {{ metadata.plate_id }}
-{% if metadata.run_date %} &nbsp;·&nbsp; <b>Run:</b> {{ metadata.run_date }}{% endif %}
-{% if metadata.instrument_program %} &nbsp;·&nbsp; <b>Instrument:</b> {{ metadata.instrument_program }}{% endif %}
-</p>
+<h1 style="margin:0 0 10px; border:none;">Bangladesh Serosurveillance Luminex QC Report</h1>
 
 <!-- =================== 1. Plate Overview =================== -->
 <details class="section" id="sec-overview" open>
 <summary>Plate Overview</summary>
 <div class="inner">
-  <div class="meta-grid">
-    <div><b>Batch:</b> {{ metadata.batch or "—" }}</div>
-    <div><b>Panel:</b> {{ metadata.panel_name or "—" }}</div>
-    <div><b>Instrument SN:</b> {{ metadata.instrument_sn or "—" }}</div>
-    <div><b>Operator:</b> {{ metadata.operator or "—" }}</div>
-    <div>
-      <b>Operating mode:</b>
-      {% if metadata.operating_mode %}
-        {% set is_low = 'Low PMT' in metadata.operating_mode %}
-        <span style="font-weight:600; color:{{ '#b8860b' if is_low else '#27ae60' }};">
-          {{ metadata.operating_mode }}
-        </span>
-        {% if is_low %}<span class="badge badge-yellow" style="margin-left:6px;" title="Low PMT mode produces ~10x lower MFI than High PMT — confirm this was intentional before comparing to other plates">⚠ Low PMT</span>{% endif %}
-      {% else %}—{% endif %}
-    </div>
-    <div><b>Antigens analysed:</b> {{ n_antigens }}</div>
-    <div><b>Specimens:</b> {{ n_specimens }}</div>
-    {% if layout_info.box_ids %}<div><b>Box(es) loaded:</b> {{ layout_info.box_ids | join(", ") }}</div>{% endif %}
-    {% if layout_info.n_with_patient_id is defined %}
-      <div><b>Patient IDs resolved:</b> {{ layout_info.n_with_patient_id }} / {{ layout_info.n_specimens }}</div>
-    {% endif %}
+  <table style="width:auto; min-width:480px;">
+    <tbody>
+      <tr><th style="text-align:left;">Plate ID</th><td>{{ metadata.plate_id or "—" }}</td></tr>
+      <tr><th style="text-align:left;">Batch</th><td>{{ metadata.batch or "—" }}</td></tr>
+      <tr><th style="text-align:left;">Run date</th><td>{{ metadata.run_date or "—" }}</td></tr>
+      <tr><th style="text-align:left;">Operator</th><td>{{ metadata.operator or "—" }}</td></tr>
+      <tr><th style="text-align:left;">Instrument</th><td>{{ metadata.instrument_program or "—" }}{% if metadata.instrument_sn %} &nbsp;(SN {{ metadata.instrument_sn }}){% endif %}</td></tr>
+      <tr><th style="text-align:left;">Operating mode</th><td>
+        {% if metadata.operating_mode %}
+          {% set is_low = 'Low PMT' in metadata.operating_mode %}
+          <span style="font-weight:600; color:{{ '#b8860b' if is_low else '#27ae60' }};">{{ metadata.operating_mode }}</span>
+          {% if is_low %}<span class="badge badge-yellow" style="margin-left:6px;" title="Low PMT mode produces ~10x lower MFI than High PMT — confirm this was intentional before comparing to other plates">⚠ Low PMT</span>{% endif %}
+        {% else %}—{% endif %}
+      </td></tr>
+      <tr><th style="text-align:left;">CSV file</th><td>{{ csv_file or "—" }}</td></tr>
+      {% if metadata.panel_name %}<tr><th style="text-align:left;">Panel</th><td>{{ metadata.panel_name }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+
+  <div class="stat-row" style="margin-top:16px; grid-template-columns:repeat(6, minmax(0,1fr)); gap:8px;">
+    <div class="stat" style="padding:10px 12px;"><div class="num">{{ plate_counts.total }}</div><div class="lbl">Total wells</div></div>
+    <div class="stat" style="padding:10px 12px;"><div class="num">{{ plate_counts.pc }}</div><div class="lbl">PC / standard wells</div></div>
+    <div class="stat" style="padding:10px 12px;"><div class="num">{{ plate_counts.nc }}</div><div class="lbl">NC (negative) wells</div></div>
+    <div class="stat" style="padding:10px 12px;"><div class="num">{{ plate_counts.specimen }}</div><div class="lbl">Specimen wells</div></div>
+    <div class="stat" style="padding:10px 12px;"><div class="num">{{ plate_counts.background }}</div><div class="lbl">Background (blank) wells</div></div>
+    <div class="stat" style="padding:10px 12px;"><div class="num">{{ plate_counts.antigens }}</div><div class="lbl">Antigens analysed</div></div>
   </div>
 
-  {% if excluded_analytes %}
-  <div class="banner warn" style="margin-top:14px;">
-    <b>⚠ Excluded analytes ({{ excluded_analytes | length }}):</b>
-    {{ excluded_analytes | join(", ") }}.
-    Soft-flagged: kept in every table and plot but visually muted.
-  </div>
-  {% endif %}
-
-  <h3 style="margin-top:18px;">Plate layout</h3>
+  <h3 style="margin-top:18px;">Plate map</h3>
   <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
-    Cells are coloured by well type and labelled with the sample name.
-    <span style="display:inline-block; width:10px; height:10px; background:#3498db; vertical-align:middle; border-radius:2px;"></span> Standards &nbsp;
-    <span style="display:inline-block; width:10px; height:10px; background:#95a5a6; vertical-align:middle; border-radius:2px;"></span> Background &nbsp;
-    <span style="display:inline-block; width:10px; height:10px; background:#e67e22; vertical-align:middle; border-radius:2px;"></span> NC &nbsp;
-    <span style="display:inline-block; width:10px; height:10px; background:#dff0e2; vertical-align:middle; border-radius:2px;"></span> Specimen
+    Well types are shown by <b>shape</b> (see legend). Hover a well for its
+    position, sample ID, and type.
   </p>
   {{ plate_layout_html | safe }}
 </div>
 </details>
 
-<!-- =================== 2. Background QC =================== -->
-<details class="section" id="sec-bg" open>
-<summary>Background QC</summary>
-<div class="inner">
-  {% if bg_levels.present %}
-  <div class="stat-row">
-    <div class="stat {{ 'flag-on' if bg_levels.n_cv_flag else 'flag-off' }}">
-      <div class="num">{{ bg_levels.n_cv_flag }}</div>
-      <div class="lbl">Antigens with Background %CV &gt; {{ bg_cv_pct }}%</div>
-    </div>
-    <div class="stat {{ 'flag-on' if bg_levels.n_max_flag else 'flag-off' }}">
-      <div class="num">{{ bg_levels.n_max_flag }}</div>
-      <div class="lbl">Antigens with any Background MFI &gt; {{ bg_max_mfi }}</div>
-    </div>
-    <div class="stat">
-      <div class="num">{{ bg_levels.rows | length }}</div>
-      <div class="lbl">Antigens with Background data</div>
-    </div>
-  </div>
-
-  <div class="banner" style="margin-top:14px;">
-    <b>How Background QC works.</b> Background wells are the plate
-    blanks — wells where no specimen was loaded (Row A / A11 &amp; A12
-    on the pilot). For each antigen we look at every Background
-    well's MFI and ask three things:
-    <ol style="margin:6px 0 0 22px; padding:0;">
-      <li><b>Mean Background MFI.</b> The average non-specific signal
-        for that antigen. A useful baseline; not flagged on its own.</li>
-      <li><b>%CV across Background wells.</b> Standard deviation
-        divided by the mean, expressed as a percentage. Measures how
-        <em>consistent</em> the background is well-to-well. If %CV is
-        high, the antigen's background signal is noisy and any
-        downstream specimen result for that antigen is less
-        trustworthy. Antigens are flagged
-        <span class="badge badge-red">CV</span> when %CV exceeds
-        <b>{{ bg_cv_pct }}%</b> (editable on the Settings page).</li>
-      <li><b>Max Background MFI.</b> The single highest MFI seen in
-        any Background well for that antigen. A high value suggests
-        contamination, carry-over, or cross-reactivity from the bead
-        itself. Antigens are flagged
-        <span class="badge badge-orange">MAX</span> when any
-        Background well exceeds <b>{{ bg_max_mfi }} MFI</b>
-        (editable on the Settings page).</li>
-    </ol>
-    Antigens with neither flag get <span class="badge badge-green">OK</span>.
-    These three numbers mirror the legacy MPOX NC-bead checks, applied
-    to the Background wells whenever the plate has no named negative
-    control. Excluded analytes are still listed (muted) so they don't
-    silently disappear from the QC trail.
-  </div>
-
-  {% if bg_overview_present %}
-  <h3 style="margin-top:18px;">Background MFI overview (all plates)</h3>
-  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
-    Mean Background MFI per antigen, one point per plate-run. Antigens
-    appear in panel order (the order they were exported in the xPONENT
-    CSV header) so a given x-position always refers to the same bead
-    region across plates. Click a plate in the legend to hide / show
-    it. Excluded analytes are italicised in the tick labels.
-  </p>
-  {{ bg_overview_html | safe }}
-  {% endif %}
-
-  <h3 style="margin-top:18px;">Per-antigen Background QC table</h3>
-  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
-    One row per antigen.  Sort or scroll to find specific flags.
-  </p>
-  <div class="scroll-tbl">
-    <table>
-      <thead>
-        <tr>
-          <th>Analyte</th><th>n wells</th><th>Mean MFI</th><th>SD</th>
-          <th>%CV</th><th>Max MFI</th><th>Flags</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in bg_levels.rows %}
-        <tr class="{% if r.excluded %}muted{% endif %}">
-          <td>{{ r.analyte }}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
-          <td>{{ r.n_wells }}</td>
-          <td>{{ r.mean_mfi }}</td>
-          <td>{{ r.sd_mfi }}</td>
-          <td>{{ r.cv_pct }}</td>
-          <td>{{ r.max_mfi }}</td>
-          <td>
-            {% if r.cv_flag %}<span class="badge badge-red">CV</span>{% endif %}
-            {% if r.max_flag %}<span class="badge badge-orange">MAX</span>{% endif %}
-            {% if not r.cv_flag and not r.max_flag %}<span class="badge badge-green">OK</span>{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="banner">No Background wells on this plate.</div>
-  {% endif %}
-</div>
-</details>
-
-<!-- =================== 4. Bead-Count Matrix =================== -->
+<!-- =================== 2. Bead Count =================== -->
 <details class="section" id="sec-bead" open>
-<summary>Bead-Count Matrix</summary>
+<summary>Bead Count</summary>
 <div class="inner">
-  <div class="stat-row">
-    <div class="stat {{ 'flag-on' if bead_summary.n_problem_antigens else 'flag-off' }}">
+  <div class="stat-row" style="grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px;">
+    <div class="stat {{ 'flag-on' if bead_summary.n_problem_antigens else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num">{{ bead_summary.n_problem_antigens }}</div>
-      <div class="lbl">Antigens flagged<br>(≥ {{ problem_threshold_pct }}% of their wells are red or yellow)</div>
+      <div class="lbl">Antigens flagged (≥ {{ problem_threshold_pct }}% of wells have either {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} beads or &lt; {{ bead_thresholds.red_below }} beads)</div>
     </div>
-    <div class="stat {{ 'flag-on' if bead_summary.n_problem_samples else 'flag-off' }}">
+    <div class="stat {{ 'flag-on' if bead_summary.n_problem_samples else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num">{{ bead_summary.n_problem_samples }}</div>
-      <div class="lbl">Specimens flagged<br>(≥ {{ problem_threshold_pct }}% of their antigens are red or yellow)</div>
+      <div class="lbl">Specimens flagged (≥ {{ problem_threshold_pct }}% of antigens have either {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} beads or &lt; {{ bead_thresholds.red_below }} beads)</div>
     </div>
-    <div class="stat {{ 'flag-on' if bead_problem_counts.red else 'flag-off' }}">
+    <div class="stat {{ 'flag-on' if bead_problem_counts.red else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num" style="color:var(--red);">{{ bead_problem_counts.red }}</div>
-      <div class="lbl">Red cells<br>(bead count &lt; {{ bead_thresholds.red_below }})</div>
+      <div class="lbl">Overall cells with bead count &lt; {{ bead_thresholds.red_below }} (red cells)</div>
     </div>
-    <div class="stat {{ 'flag-warn' if bead_problem_counts.yellow else 'flag-off' }}">
+    <div class="stat {{ 'flag-warn' if bead_problem_counts.yellow else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num" style="color:#b58900;">{{ bead_problem_counts.yellow }}</div>
-      <div class="lbl">Yellow cells<br>(bead count {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }})</div>
+      <div class="lbl">Overall cells with bead count {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} (yellow cells)</div>
     </div>
   </div>
 
   <p style="margin-top:14px;">
-    Thresholds:
+    A cell is one antigen in one well. Tiers by bead count:
     <span class="badge badge-red">Red &lt; {{ bead_thresholds.red_below }}</span>
     <span class="badge badge-yellow">Yellow {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }}</span>
     <span class="badge badge-green">Green ≥ {{ bead_thresholds.yellow_below }}</span>
+    (thresholds editable on the Settings page).
   </p>
   {{ bead_heatmap_html | safe }}
 
@@ -420,7 +315,103 @@
 </div>
 </details>
 
-<!-- =================== 3. Standard-Curve Summary =================== -->
+<!-- =================== 3. Background QC =================== -->
+<details class="section" id="sec-bg" open>
+<summary>Background QC</summary>
+<div class="inner">
+  {% if bg_levels.present %}
+  <div class="stat-row">
+    <div class="stat {{ 'flag-on' if bg_levels.n_cv_flag else 'flag-off' }}">
+      <div class="num">{{ bg_levels.n_cv_flag }}</div>
+      <div class="lbl">Antigens with Background %CV &gt; {{ bg_cv_pct }}%</div>
+    </div>
+    <div class="stat {{ 'flag-on' if bg_levels.n_max_flag else 'flag-off' }}">
+      <div class="num">{{ bg_levels.n_max_flag }}</div>
+      <div class="lbl">Antigens with any Background MFI &gt; {{ bg_max_mfi }}</div>
+    </div>
+    <div class="stat">
+      <div class="num">{{ bg_levels.rows | length }}</div>
+      <div class="lbl">Antigens with Background data</div>
+    </div>
+  </div>
+
+  <div class="banner" style="margin-top:14px;">
+    <b>How Background QC works.</b> Background wells are the plate
+    blanks — wells where no specimen was loaded (Row A / A11 &amp; A12
+    on the pilot). For each antigen we look at every Background
+    well's MFI and ask three things:
+    <ol style="margin:6px 0 0 22px; padding:0;">
+      <li><b>Mean Background MFI.</b> The average non-specific signal
+        for that antigen. A useful baseline; not flagged on its own.</li>
+      <li><b>%CV across Background wells.</b> Standard deviation
+        divided by the mean, expressed as a percentage. Measures how
+        <em>consistent</em> the background is well-to-well. If %CV is
+        high, the antigen's background signal is noisy and any
+        downstream specimen result for that antigen is less
+        trustworthy. Antigens are flagged
+        <span class="badge badge-red">CV</span> when %CV exceeds
+        <b>{{ bg_cv_pct }}%</b> (editable on the Settings page).</li>
+      <li><b>Max Background MFI.</b> The single highest MFI seen in
+        any Background well for that antigen. A high value suggests
+        contamination, carry-over, or cross-reactivity from the bead
+        itself. Antigens are flagged
+        <span class="badge badge-orange">MAX</span> when any
+        Background well exceeds <b>{{ bg_max_mfi }} MFI</b>
+        (editable on the Settings page).</li>
+    </ol>
+    Antigens with neither flag get <span class="badge badge-green">OK</span>.
+  </div>
+
+  {% if bg_overview_present %}
+  <h3 style="margin-top:18px;">Background MFI overview (all plates)</h3>
+  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
+    Mean Background MFI per antigen, one point per plate-run. Antigens
+    appear in panel order (the order they were exported in the xPONENT
+    CSV header) so a given x-position always refers to the same bead
+    region across plates. Click a plate in the legend to hide / show
+    it.
+  </p>
+  {{ bg_overview_html | safe }}
+  {% endif %}
+
+  <h3 style="margin-top:18px;">Per-antigen Background QC table</h3>
+  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
+    One row per antigen.  Sort or scroll to find specific flags.
+  </p>
+  <div class="scroll-tbl">
+    <table>
+      <thead>
+        <tr>
+          <th>Analyte</th><th>n wells</th><th>Mean MFI</th><th>SD</th>
+          <th>%CV</th><th>Max MFI</th><th>Flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in bg_levels.rows %}
+        <tr class="{% if r.excluded %}muted{% endif %}">
+          <td>{{ r.analyte }}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+          <td>{{ r.n_wells }}</td>
+          <td>{{ r.mean_mfi }}</td>
+          <td>{{ r.sd_mfi }}</td>
+          <td>{{ r.cv_pct }}</td>
+          <td>{{ r.max_mfi }}</td>
+          <td>
+            {% if r.cv_flag %}<span class="badge badge-red">CV</span>{% endif %}
+            {% if r.max_flag %}<span class="badge badge-orange">MAX</span>{% endif %}
+            {% if not r.cv_flag and not r.max_flag %}<span class="badge badge-green">OK</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="banner">No Background wells on this plate.</div>
+  {% endif %}
+</div>
+</details>
+
+<!-- =================== 4. Standard-Curve Summary =================== -->
 <details class="section" id="sec-curve-summary" open>
 <summary>Standard-Curve Summary</summary>
 <div class="inner">
@@ -444,6 +435,33 @@
     </div>
   </div>
 
+  {% if pool_selection and pool_selection.n_pools > 1 %}
+  <div class="banner" style="margin-top:14px;">
+    <b>Multiple control pools — how each antigen is scored.</b> This plate
+    carries <b>{{ pool_selection.n_pools }}</b> control pools, each a separate
+    dilution series:
+    <span>{{ pool_selection.pools | join(", ") }}</span>.
+    A 4PL standard curve is fit for <em>every</em> antigen against
+    <em>every</em> pool, but a specimen can only be scored against one curve
+    per antigen. The tool picks that curve automatically:
+    <ul style="margin:6px 0 0 18px; padding:0;">
+      <li>It reads the <b>pathogen from the antigen name</b> (e.g.
+        <code>ARB_DENV*</code> → dengue, <code>CHO_*</code>/OSP/CtxB → cholera,
+        <code>*HlyE*</code> → typhoid) and matches it to the pool(s) meant to
+        calibrate that pathogen.</li>
+      <li>When more than one pool targets the same pathogen (e.g. the Dengue
+        pool and ORPAL both cover dengue), it keeps the <b>best-fitting curve</b>
+        — the one that passes Fit-OK and has the highest R².</li>
+      <li>Antigens whose pathogen isn't one of the calibrated targets fall back
+        to the best-fitting pool available.</li>
+    </ul>
+    Antigens chosen per pool on this plate:
+    <span>{% for r in pool_selection.rows %}{{ r.pool }} ({{ r.n_antigens }}){% if not loop.last %}; {% endif %}{% endfor %}</span>.
+    This mapping is the default and will be overridable on the Settings page
+    once the pathogen rules are signed off.
+  </div>
+  {% endif %}
+
   <div class="banner" style="margin-top:14px;">
     <b>What does "Fit OK" mean?</b> Each antigen's standard points are
     fit to a 4-parameter logistic (4PL) curve. A fit is marked
@@ -458,8 +476,6 @@
     A fit that converges but fails any of these is marked
     <span class="badge badge-warn">FAIL</span>; the parameters are
     still shown, but the LLOQ / ULOQ and %-in-range are unreliable.
-    Excluded analytes are not used for laboratory decisions even if the
-    fit passes.
   </div>
 
   <p style="margin-top:14px;">
@@ -556,7 +572,7 @@
 </div>
 </details>
 
-<!-- =================== 4. All Curves Overview =================== -->
+<!-- =================== 5. All Curves Overview =================== -->
 <details class="section" id="sec-curve-grid" open>
 <summary>All Curves Overview</summary>
 <div class="inner">
@@ -571,7 +587,7 @@
 </div>
 </details>
 
-<!-- =================== 5. Standard-Curve Picker =================== -->
+<!-- =================== 6. Standard-Curve Picker =================== -->
 <details class="section" id="sec-curve-picker" open>
 <summary>Standard-Curve Picker</summary>
 <div class="inner">
@@ -620,7 +636,7 @@
 </div>
 </details>
 
-<!-- =================== 6. Standard-Curve Range Matrix =================== -->
+<!-- =================== 7. Standard-Curve Range Matrix =================== -->
 <details class="section" id="sec-range" open>
 <summary>Standard-Curve Range Matrix</summary>
 <div class="inner">
@@ -630,6 +646,11 @@
     <span class="badge badge-r-in">IN_RANGE</span>
     <span class="badge badge-r-above">ABOVE_RANGE</span>
     <span class="badge badge-r-nofit">NO_FIT</span>.
+    {% if pool_selection and pool_selection.n_pools > 1 %}
+    Each antigen is scored against its <b>auto-selected control pool</b> — the
+    pool matched to the antigen's pathogen, tie-broken by best fit (see the
+    Standard-Curve Summary above for details).
+    {% endif %}
   </p>
   {{ range_heatmap_html | safe }}
 
@@ -846,7 +867,7 @@
 </details>
 
 <div class="footer">
-  Generated by Uvira Luminex QC Tool v{{ version }} &middot;
+  Generated by Bangladesh Serosurveillance Luminex QC Tool v{{ version }} &middot;
   <a href="/" style="color: var(--blue);">Menu</a> &middot;
   <a href="/specification" style="color: var(--blue);">Specification</a>
 </div>
