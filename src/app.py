@@ -163,11 +163,15 @@ def create_app() -> Flask:
 
     @app.route("/download/specimens/<filename>")
     def download_specimens(filename):
-        spec_file = results / "specimens" / secure_filename(filename)
-        if not spec_file.exists():
-            flash("Specimen file not found.", "error")
-            return redirect(url_for("index"))
-        return send_file(spec_file, as_attachment=True)
+        # Per-plate CSVs are written to reports/; the specimens CSV is also
+        # mirrored into specimens/. Look in both so every download link works.
+        safe = secure_filename(filename)
+        for sub in ("specimens", "reports"):
+            f = results / sub / safe
+            if f.exists():
+                return send_file(f, as_attachment=True)
+        flash("Download file not found.", "error")
+        return redirect(url_for("index"))
 
     @app.route("/export/all")
     def export_all():
@@ -182,9 +186,24 @@ def create_app() -> Flask:
         history_dir = results / "history"
         specimens_dir = results / "specimens"
 
+        reports_dir = results / "reports"
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            # All specimens
+            # Clean master "results" sheet — tidy per (plate × well × antigen)
+            # with the selected pool, RAU/AU, and range status. This is the
+            # headline analysis-ready table (legacy-style, plus RAU).
+            res_frames = []
+            for csv_file in sorted(reports_dir.glob("results_*.csv")):
+                try:
+                    res_frames.append(pd.read_csv(csv_file, encoding="utf-8"))
+                except Exception:
+                    pass
+            if res_frames:
+                pd.concat(res_frames, ignore_index=True).to_excel(
+                    writer, sheet_name="results", index=False
+                )
+
+            # All specimens (raw + per-pool AU columns)
             spec_frames = []
             for csv_file in sorted(specimens_dir.glob("specimens_*.csv")):
                 df = pd.read_csv(csv_file, encoding="utf-8")
@@ -224,8 +243,8 @@ def create_app() -> Flask:
                     writer, sheet_name="standard_curve_data", index=False
                 )
 
-            # NC levels
-            nc_path = history_dir / "nc_history.json"
+            # NC levels (cross-plate history; file is nc_well_history.json)
+            nc_path = history_dir / "nc_well_history.json"
             if nc_path.exists():
                 nc_data = pd.DataFrame(json.loads(nc_path.read_text(encoding="utf-8")))
                 if not nc_data.empty:
@@ -414,6 +433,21 @@ def create_app() -> Flask:
         excluded = [line.strip() for line in excluded_raw.splitlines() if line.strip()]
         config["panel"]["excluded_analytes"] = excluded
 
+        # Priority antigens (newline-separated; empty = all antigens shown).
+        priority_raw = request.form.get("priority_antigens", "")
+        priority = [line.strip() for line in priority_raw.splitlines() if line.strip()]
+        config["panel"]["priority_antigens"] = priority
+
+        # Standard-curve pool mode + scoring pool.
+        mode = request.form.get("pool_mode", "per_pool").strip()
+        config["panel"]["pool_mode"] = mode if mode in ("per_pool", "auto_select") else "per_pool"
+        config["panel"]["scoring_pool"] = request.form.get("scoring_pool", "").strip()
+        # Pool assignment rules ("<regex> => <pool>", one per line).
+        rules_raw = request.form.get("pool_assignment_rules", "")
+        config["panel"]["pool_assignment_rules"] = [
+            line.strip() for line in rules_raw.splitlines() if line.strip()
+        ]
+
         # Well classification patterns
         pc_pats = request.form.get("pc_patterns", "")
         bg_pats = request.form.get("background_patterns", "")
@@ -421,17 +455,6 @@ def create_app() -> Flask:
         config["well_classification"]["pc_patterns"] = [p.strip() for p in pc_pats.split(",") if p.strip()]
         config["well_classification"]["background_patterns"] = [p.strip() for p in bg_pats.split(",") if p.strip()]
         config["well_classification"]["nc_patterns"] = [p.strip() for p in nc_pats.split(",") if p.strip()]
-
-        # Standard dilution series
-        std_dils_raw = request.form.get("standard_dilutions", "").strip()
-        if std_dils_raw:
-            try:
-                config["standard"]["dilutions"] = [
-                    float(d.strip()) for d in std_dils_raw.split(",") if d.strip()
-                ]
-            except ValueError:
-                flash("Invalid dilution values. Use comma-separated numbers.", "error")
-                return redirect(url_for("settings"))
 
         # Specimen dilution
         try:
@@ -446,7 +469,8 @@ def create_app() -> Flask:
                 qc[key] = int(request.form.get(key, qc.get(key, 0)))
             except (ValueError, TypeError):
                 pass
-        for key in ("recovery_tolerance", "problem_fraction_threshold", "bg_cv_threshold"):
+        for key in ("recovery_tolerance", "problem_fraction_threshold",
+                    "bg_cv_threshold", "pc_cv_threshold"):
             try:
                 qc[key] = float(request.form.get(key, qc.get(key, 0)))
             except (ValueError, TypeError):

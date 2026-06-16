@@ -125,6 +125,24 @@ of `UVIRA_TODO.md`.
 
 Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blocked.
 
+### 11. Docs, downloads, master export, cleanup — DONE (Session 11)
+- [x] **README.md + SPECIFICATION.md** rewritten for the Bangladesh 202-plex /
+      384-well / High-PMT / multi-pool assay (sections, pools, auto pool-select,
+      outputs, settings, build). No Uvira/MPXV copy.
+- [x] **Per-plate download CSVs fixed**: report links point to
+      `/download/specimens/<f>`, but only `specimens_*.csv` was mirrored to
+      `specimens/` — the rest live in `reports/`. `download_specimens` now checks
+      both dirs. Verified all 9 links return 200.
+- [x] **Clean master CSV (with RAU)**: new per-plate `results_<plate>.csv`
+      (`_build_clean_results`) — plate, well, sample_id, matrix, analyte, pool,
+      mfi, RAU, status, censored. `/export/all` now leads with a concatenated
+      **results** sheet (+ specimens / curve params / curve data / nc_levels);
+      fixed the NC history filename (`nc_well_history.json`). Verified via Flask.
+- [x] **Code cleanup**: removed dead `_make_nc_heatmap`, `get_kit_control_names`,
+      `KIT_CONTROLS`/`ALL_BEADS`, `PC_CV_THRESHOLD`/`pc_cv_threshold`,
+      `STANDARD_DILUTIONS` (+ the dead `standard_dilutions` settings handler) and
+      the unused `replicate_qc`/`kit_controls` report params. Imports clean.
+
 ### 0. Project setup & rebranding
 - [x] Fork folder from `uvira-luminex-qc` → `bangladesh-serosurveillance-luminex-qc`.
 - [x] Create this tracking doc (`BANGLADESH_TODO.md`) with the plan.
@@ -133,9 +151,9 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
       titles; download filename prefixes; `.spec` files renamed + internal names;
       `APP_VERSION = "0.1.0-bangladesh"`; assay name/description; pyproject; GitHub
       URL. `report.py` module docstring.
-- [ ] Rewrite `README.md` + `SPECIFICATION.md` for the 202-plex / 384-well /
-      Bangladesh context (remove Uvira/MPXV-specific copy entirely). *(deferred —
-      do alongside the descriptions audit, Section 8.)*
+- [x] Rewrite `README.md` + `SPECIFICATION.md` for the 202-plex / 384-well /
+      Bangladesh context (remove Uvira/MPXV-specific copy entirely). DONE
+      Session 11.
 - [x] Legacy docs moved to `legacy/` (UVIRA_TODO + PLATE_RUN_FINDINGS .md/.html).
       Pilot CSVs copied to `tests/fixtures/`.
 
@@ -214,83 +232,92 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
       clipped and sit flush against the cells.
 - [x] Heatmap + problem tables render at 384 scale.
 
-### 4. Background QC section (after Bead Count; substantial edits)
-- [ ] **Default max-MFI threshold → 300** (`bg_max_mfi`), editable in Settings.
-- [ ] **Rewrite the "How Background QC works" description.** Remove the
-      confusing point 3 (Max Background MFI) wording; make every point match
-      what the code actually computes after the table changes below. No stale
-      copy left behind.
-- [ ] **"Background MFI overview (all plates)" plot — redesign**:
-  - Show, per antigen, the **IQR of historical plate runs** as a bar/range and
-    the **current plate's mean** as a dot positioned relative to that IQR.
-  - **< 3 plates total** → keep the current dot-per-plate scatter.
-  - **≥ 3 plates** → vertical line spanning the IQR + a dot for the current
-    plate (ideally inside the IQR).
-  - Leave a hook for flagging dots outside the IQR (decision deferred — see
-    Open questions).
-- [ ] **Per-antigen Background QC table — rebuild + fold by default**:
-  - Wrap in a collapsible (click-to-expand) container; make it scrollable
-    horizontally and vertically.
-  - **Remove** Mean MFI, Max MFI columns and the MAX flag.
-  - **Keep** Analyte, n wells, SD, %CV; **add** the individual MFI measurements
-    (one per background well) and two new IQR columns: **IQR of current plate**
-    and **IQR of previous plates** (separate columns).
-  - Column order: Analyte → n wells → individual MFI measurements → SD → %CV →
-    IQR current plate → IQR previous plates.
-  - Flags intentionally deferred — **note left in code/table** ("flags TBD").
+### 4. Background QC section (after Bead Count; substantial edits) — DONE (Session 4)
+- [x] **Default max-MFI threshold → 300** (`bg_max_mfi`) in `config.py`,
+      `qc_background.py`, `pipeline.py`, `report.py` fallback, and `settings.html`.
+- [x] **Rewrote the "How Background QC works" description**: dropped the
+      confusing mean/max points; now describes within-plate spread (individual
+      MFIs, SD, %CV) and the this-plate-vs-history IQR comparison, and states
+      that formal pass/fail flagging is still in development (max-MFI is a
+      tracked reference only). No stale copy left.
+- [x] **Overview plot redesigned** (`_bg_overview_iqr` + branch in
+      `_make_background_overview_plot`): < 3 plates → existing dot scatter;
+      ≥ 3 plates → grey vertical bar = previous-plates IQR (Q1–Q3, current
+      excluded) + current-plate mean dot; dots **outside the IQR flagged** in
+      red (provisional, "flagging in development" note). Verified with a
+      synthetic 3-plate history.
+- [x] **Per-antigen table rebuilt + folded** (click to expand, scrollable both
+      ways). Dropped Mean MFI, Max MFI, and the MAX/CV flag column. Columns now:
+      Analyte → n wells → Individual MFIs → SD → %CV → IQR current plate (Q1–Q3
+      of this plate's Background wells) → IQR previous plates (Q1–Q3 of per-plate
+      mean across earlier plates). Flags deferred — noted in code + UI.
+- [x] Cards replaced with neutral info (antigens w/ Background data, Background
+      wells this plate, previous plates in history) — no premature pass/fail.
 
-### 5. Standard curves — multi-pool + priority-pathogen concept
-- [ ] **Multi-pool fitting**: fit a 4PL per (pool × antigen). Each pool uses its
-      own parsed dilution series. Single-point controls (Cholera High/Low) are
-      not fit but can be shown as reference points.
-- [ ] **Settings: priority pathogens.** New field (textarea/multiselect) to
-      define priority antigens (and possibly pool→antigen pairings).
-      **Default = all antigens** from the CSV output. Persist to YAML.
-- [ ] **Standard Curve Summary** + **All Curves Overview**: show **priority
-      antigens only** (curves still fit for all; display filtered). Likely one
-      curve grid per pool (mirrors the two screenshots: "ITM PC" / "ITM PC2").
-- [ ] **All Curves Overview — make interactive**: convert from the static
-      matplotlib PNG grid to interactive plots with the **same hover + rug
-      plot** as the picker. Rug plot here uses **current plate run only** (no
-      historical overlays).
-- [ ] **Linear-range square (confirmed from screenshots)**: on each curve, draw
-      a **green shaded rectangle** spanning the reportable range — x from
-      ULOQ-dilution to LLOQ-dilution, y from LLOQ-MFI to ULOQ-MFI (dashed green
-      border, light-green fill), using existing `reportable_range`. Standard
-      points **outside recovery tolerance** drawn as **red triangles** ("Out of
-      tolerance"); a dropped/excluded point drawn as a **bold "×"**. Legend:
-      Observed (blue dot), Out of tolerance (red triangle), 4PL Fit (red line),
-      Specimens (rug ticks). Curve line is **red**, observed points **blue**.
-- [ ] **Standard Curve Picker**: keep fitting against **ALL** antigens (all
-      pools); **fold by default** (click-to-expand) with a disclaimer that not
-      all curves are meant to be interpreted — only priority (pool × antigen)
-      curves — and that the picker is for review only.
+### 5. Standard curves — multi-pool + priority-pathogen concept — DONE (Session 5)
+- [x] **Multi-pool fitting** (Section 1): 4PL per (pool × antigen); single-point
+      controls excluded from fitting.
+- [x] **Settings: priority pathogens** — new textarea (`panel.priority_antigens`,
+      default empty = all); wired through `settings.html`, `app.py`, and a
+      `get_priority_antigens` getter. Persists to YAML.
+- [x] **Per-antigen selected fit** (`_build_selected_fits`): each antigen shown
+      against its auto-selected pool's curve (pool name injected); a single
+      `selected_fits` dict feeds the Summary, Overview, and Picker.
+- [x] **Standard Curve Summary** filtered to **priority antigens** (default all),
+      with a new **Pool** column and a note that curves are fit for all antigens.
+- [x] **All Curves Overview — interactive** (`_make_curve_grid_interactive`):
+      Plotly small-multiples for priority antigens with hover, current-plate
+      specimen **rug** (status-coloured), **linear-range green square**, red
+      4PL line, blue observed points, **red triangles** for out-of-tolerance
+      standards, **✕** for a dropped point. Falls back to a static grid (still
+      with the square) above 48 panels (unfiltered default).
+- [x] **Standard Curve Picker**: covers **all** antigens (each via its selected
+      pool fit); **folded by default** with a "review only — only priority
+      curves are interpretable" disclaimer.
+- [x] Linear-range square **now also in the Standard-Curve Picker** (Session 9):
+      per-antigen green reportable-range rectangle (log10 coords) appended to the
+      rug-separator base shapes and swapped on typeahead via
+      `Plotly.relayout(DIV,"shapes",…)`.
 
-### 6. Standard-Curve Range Matrix + Serum/DBS pairing
-- [ ] Remove sample-ID labels from the top axis; **keep well location** visible.
-- [ ] Hover still shows: antigen, well position, sample id, and status
-      (below range / in range / above range / no fit).
-- [ ] **Paired Serum-vs-DBS comparison** (new folded sub-section/tab): for each
-      person with both a `_Serum` and a `_DBS` sample, compare their MFI (and/or
-      AU) per antigen — e.g. scatter of serum MFI vs DBS MFI with a y=x line, or
-      a per-antigen paired view. Folded by default. Specimens still listed
-      individually elsewhere; this is an added QC view, not a replacement.
+### 6. Standard-Curve Range Matrix + Serum/DBS pairing — DONE (Session 6)
+- [x] Range Matrix rebuilt with the **frozen antigen-label** + horizontal-scroll
+      pattern (shared `_frozen_label_heatmap` helper). Top axis shows the **well
+      location only** (no sample-ID); hover shows Antigen, Well, Sample, Status
+      (Below/In/Above range, No fit). Uses `sample_id` when present, else
+      `sample_name`.
+- [x] **Paired Serum-vs-DBS comparison** (`_make_serum_dbs_comparison`): folded
+      sub-section under the Range Matrix. Parses `{id}_r3_{Serum|DBS}`
+      (case-insensitive), pairs per person × antigen, and plots Serum MFI vs DBS
+      MFI (scattergl) with a y=x reference line and per-point hover. Specimens
+      still listed individually elsewhere.
 
-### 7. Settings page — make thresholds editable
-- [ ] Priority-pathogen list (section 5).
-- [ ] Background max-MFI threshold (default 300).
-- [ ] Bead-count thresholds (min/warn) — already present; verify wired through
-      to the new card copy.
-- [ ] Problem-fraction (≥X%) threshold for flagged antigens/samples — already
-      present; verify.
-- [ ] Background %CV threshold — already present; verify.
-- [ ] Audit: every threshold used in the report must be read from config, not
-      hard-coded, and every description string must reflect the live value.
+### 7. Settings page — make thresholds editable — DONE (Session 7)
+- [x] Priority-pathogen list (Section 5).
+- [x] Background max-MFI threshold (default 300).
+- [x] Bead-count thresholds (min/warn) — labels clarified ("RED below" / "YELLOW
+      below"); read live from config in `qc_bead_counts`.
+- [x] Problem-fraction (≥X%) threshold — present; read live in pipeline + report.
+- [x] Background %CV threshold — present (reference only).
+- [x] Recovery tolerance — present; drives LLOQ/ULOQ.
+- [x] **Audit**: confirmed every threshold is read from config (bead via
+      `qc_bead_counts`, problem-fraction/bg-cv/bg-max/recovery via
+      `qc_thresholds`, priority via `panel`); none hard-coded in the report.
+- [x] **Cleanup**: removed the now-unused "Standard Dilutions" field (dilutions
+      are parsed from sample names per pool) and replaced it with an explanatory
+      note; updated Well-Classification labels/copy for Bangladesh naming; marked
+      Background thresholds as "reference (flagging in development)".
+- [x] Verified Settings round-trip with a Flask test client (GET renders, POST
+      persists all thresholds + priority list, reset restores defaults).
 
-### 8. Descriptions audit (cross-cutting)
-- [ ] Review **every** section's explanatory text and rewrite to match what the
-      code actually computes/shows after the changes above. Remove all
-      Uvira/MPXV-specific and stale copy.
+### 8. Descriptions audit (cross-cutting) — DONE (Session 8)
+- [x] Reviewed every section's explanatory text against current behavior. Fixed:
+      NC QC (Bangladesh `Negative` pattern, `Background0`, pre-2019 NA plasma, NC
+      flagging-in-development note); Background QC download desc (flags are
+      reference-only); Range-Matrix download desc (auto-selected pool; dropped
+      Uvira barcode/patient_id/box_id wording); upload page (input-file + barcode
+      map marked optional / not needed for Bangladesh).
+- [x] Confirmed no stale Uvira / MPXV / MagPix / RENAMED / Row-A / Standard1 /
+      12-plex copy remains in report.html, index.html, settings.html.
 
 ### 9. Validation
 - [ ] Obtain a representative Bangladesh 384-well xPONENT CSV (+ input file +
@@ -299,10 +326,25 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - [ ] Regression-check the Uvira fixtures still process (96-well path).
 
 ### 10. Deferred / future work (noted, not in this scope)
-- [ ] PC Replicate Variability section — to be worked on later.
-- [ ] Negative Control levels section — to be worked on later.
+- [x] **PC Replicate Variability** — BUILT (Session 12). Standards are run in
+      duplicate; `qc_pc_replicates` computes the %CV between the two replicate
+      wells per (pool × antigen × dilution), flags points > `pc_cv_threshold`
+      (default 0.20, editable in Settings), and the report shows a "PC replicate
+      variability" subsection (cards + folded flagged-points table) with a
+      `pc_replicates_*.csv` download.
+- [~] Negative Control levels section — **reworked to the legacy MPOX style**
+      (Session 9): per-antigen "NC MFI across plates" small-multiples (current
+      plate red) + folded "NC details for this plate" (mean-MFI-by-analyte bar +
+      Well/Analyte/MFI table). Deeper NC flagging (thresholds, drift) still TBD.
 - [ ] Decide background-IQR out-of-range flagging rule.
 - [ ] Decide final flag rules for the Background QC table.
+- [ ] **Standard-Curve Picker performance at full panel scale.** Generating the
+      full ~200-antigen report is slow (minutes); the picker builds a very large
+      multi-trace Plotly figure (all antigens × pools + historical overlays).
+      With a priority list set everything is fast. Optimize later (e.g. limit/
+      lazy traces, or build the picker only for a capped set). Logged Session 5.
+- [x] Add the green linear-range square inside the Picker's own curve panel —
+      DONE Session 9.
 
 ---
 
@@ -360,16 +402,246 @@ tie-breaking by best fit (default on). Team can later override per antigen and
 confirm the prefix→pathogen rules in Settings.
 
 **Still open (non-blocking):**
-1. **Pool → priority-antigen mapping (exact lists)**: auto-mapping now runs by
-   default (name + best-fit). Team to confirm/override the prefix→pathogen rules
-   and the priority-display list later in Settings.
-2. **Individual dengue controls (Plate 2)**: are the 28 individual dengue
-   controls "specimens" or "controls" for QC display? (Characterization samples,
-   not a standard series. Default: treat as specimens unless told otherwise.)
+1. **Pool → priority-antigen mapping (exact lists)**: **Decision (Session 13):
+   default mode is `per_pool` — fit & show a curve for EVERY (pool × antigen),
+   NO matching or auto-selection.** Auto-select remains available as a Settings
+   option. Caveat (documented in the report): pools have different dilution
+   ranges (Dengue 1:1k–16M, ORPAL 1:100–102k, OSP/cTxB 1:1–16k, HlyE ng/mL), so
+   RAU is anchored per pool and not comparable across pools; specimen RAU/range
+   use a single configurable scoring pool. Once the team confirms the
+   pool→antigen mapping, switch to a per-antigen intended calibrator.
 
 ---
 
 ## Session History
+
+### Session 15 — 2026-06-02 (CI release workflow for Mac/Windows builds)
+- Rewrote the inherited `.github/workflows/build.yml` (was still MPXV-branded:
+  wrong spec filenames, `MPXV Luminex QC.app`, MPXV zip/artifact names) for the
+  Bangladesh app: builds `bangladesh-serosurveillance-luminex-qc.spec` (macOS
+  `.app`, ad-hoc codesigned + zipped) and `…-win.spec` (Windows folder zipped),
+  uploads artifacts, and on a `v*` tag publishes a GitHub Release with both zips.
+  Also runs on `workflow_dispatch`.
+- Added `src.qc_pc_replicates` to the `hiddenimports` of both `.spec` files (new
+  module this project; would otherwise risk a missing-import in the frozen app).
+- Verified all build inputs exist (run.py, make_icon.py, icons .icns/.ico,
+  templates, static/vendor, SPECIFICATION.md) and the workflow YAML is valid.
+- Note: builds run on GitHub's macOS/Windows runners — push the repo + a `vX.Y.Z`
+  tag (or run the workflow manually) to produce the downloadable apps. No native
+  build was possible in this Linux sandbox.
+- Added a **"Download & install"** section to the README (Releases link + macOS
+  right-click-Open / `xattr` and Windows SmartScreen first-launch steps).
+- Smoke-tested: app imports + boots (home + settings pages 200). All session
+  changes are still **uncommitted/local**; CI has not run yet (no tags).
+
+### Session 14 — 2026-06-02 (Regex pool-assignment rules in Settings)
+- Documented how `auto_select` works (antigen-name pathogen group → pools whose
+  name targets that group → best-fit tie-break → fallback).
+- Added a **Settings "Pool assignment rules"** textarea: `"<regex> => <pool>"`,
+  one per line, first match wins. In `select_pool_per_antigen` the order is now:
+  (1) exact `pool_antigen_overrides`, (2) **user regex rules** (`_parse_pool_rules`),
+  (3) built-in pathogen heuristic, (4) best-fit fallback. Lets the lab define the
+  antigen→pool mapping explicitly without code (and sidesteps the keyword
+  heuristic's edge cases). Config `panel.pool_assignment_rules` + app.py parse.
+- Verified: a rule `ARB_DENV.* => Orpal pool` forces all DENV antigens to ORPAL;
+  `RES_Ade.* => Dengue pool` assigns antigens the heuristic wouldn't match;
+  settings round-trip + reset OK.
+
+### Session 13 — 2026-06-02 (Per-pool curve mode — no matching/auto-select)
+- **Decision reversed**: do NOT auto-select a pool per antigen for the interim.
+  New default **`pool_mode = "per_pool"`**: a 4PL is fit and shown for EVERY
+  (pool × antigen), with no pathogen matching and no best-fit pick.
+  - Standard-Curve Summary → one row per (pool × antigen) (Pool column; %-in-range
+    omitted since it's a single-pool metric).
+  - All-Curves Overview → one curve grid **per pool** (legacy ITM-style), each
+    with its hover / rug / linear-range square.
+  - Picker / cross-run / Range Matrix / RAU → scored against a single
+    **scoring pool** (`panel.scoring_pool`; blank → the pool with the most
+    fit_ok antigens, via `default_scoring_pool`). Per-pool AU columns remain in
+    specimens CSV; clean results uses the scoring pool.
+- **Settings**: added `pool_mode` (per_pool | auto_select) dropdown + `scoring_pool`
+  field; wired through `app.py`; verified round-trip + reset → per_pool.
+- Refactor: `compute_in_range_table` / `compute_concentrations` /
+  `_build_clean_results` now take an explicit `pool_map`; `build_pool_map`
+  applies the mode. `auto_select` mode preserved (banner explains each mode).
+- Fixed a `html` name-shadowing bug (`html = template.render` shadowed the
+  `import html` used by the per-pool heading escape) → render var renamed.
+- Verified both modes render on the pilot (per-pool: 5 pool grids + per-(pool×
+  antigen) summary; auto_select: single grid + Pool column).
+- **Bug fix**: in per-pool mode every pool's interactive grid was emitted with
+  the same Plotly div id (`fig-curve-grid`), so only the first pool's grid
+  rendered and the rest were blank. Threaded a unique `div_id` per pool
+  (`fig-curve-grid-{i}`) through `_make_curve_grid` → all pool grids now render.
+
+### Session 12 — 2026-06-02 (PC replicate QC + pool-group fix + threshold restore)
+- Confirmed standards run in **duplicate** (2 wells per pool × dilution).
+- Restored `PC_CV_THRESHOLD` (default 0.20) — now a real, consumed threshold —
+  + Settings field + POST handler.
+- New **`qc_pc_replicates`** module: %CV between duplicate standard wells per
+  (pool × antigen × dilution); per-point table + per-(pool × antigen) summary.
+  Wired into the pipeline (`pc_replicates_*.csv` export) and a "PC replicate
+  variability" subsection in the report (cards + folded flagged-points table +
+  download). Verified end-to-end + settings round-trip.
+- **Bug fix**: `_antigen_group` was tagging Borrelia `TBD_OspA`/`OspC` as
+  *cholera* via a bare "OSP" substring. Cholera now keys on the `CHO_` prefix /
+  cholera-specific tokens (CtxB/Inaba/Ogawa/cholera/vibrio); verified TBD_Osp*
+  → None, CHO_Inaba_OSP → cholera.
+- Clarified the pool-column question: full-panel selected-pool distribution is
+  150 Dengue / 44 Orpal / 2 Anti-OSP&cTxB / 1 HlyE / 1 combined — the cholera/
+  typhoid pools map only to their targets; the rest fall back to the broadly-
+  reactive pooled sera. (Earlier "only Dengue/Orpal" was a 12-antigen preview
+  artifact.)
+
+### Session 11 — 2026-06-01 (Docs + downloads + master CSV + cleanup)
+- Rewrote README.md + SPECIFICATION.md for Bangladesh (202-plex / 384-well /
+  High PMT / multi-pool; sections, pools, auto pool-selection, outputs, build).
+- Fixed all per-plate CSV download links (`download_specimens` now serves from
+  both `specimens/` and `reports/`) — verified 9/9 return 200.
+- Added clean master `results_<plate>.csv` (`_build_clean_results`: well ×
+  antigen with pool, MFI, **RAU**, status, censored, Serum/DBS matrix) and made
+  `/export/all` lead with a concatenated **results** sheet; fixed NC history
+  filename. Verified the workbook via a Flask test client.
+- Code cleanup: removed dead `_make_nc_heatmap`, `get_kit_control_names`,
+  `KIT_CONTROLS`/`ALL_BEADS`, `PC_CV_THRESHOLD`, `STANDARD_DILUTIONS`, the dead
+  `standard_dilutions` settings handler, and unused `replicate_qc`/`kit_controls`
+  report params. All modules import cleanly.
+- This completes the planned scope (Sections 0–11). Remaining items are the
+  deferred/in-development ones in Section 10 (Background/NC flagging rules, PC
+  replicate variability, picker performance, team pool→antigen mapping).
+
+### Session 10 — 2026-06-01 (Picker rug alignment + NC controls split)
+- **Picker rug/curve alignment**: curve and rug panels now pinned to the SAME
+  explicit per-antigen log10 y-range (`_y_range_for`, computed from standards +
+  current/historical specimen MFIs), set on load and via
+  `Plotly.relayout({yaxis.range, yaxis2.range})` on each pick — guarantees a
+  given MFI lands at the same height in both panels.
+- **Picker linear-range square**: reimplemented as a per-antigen filled
+  ("toself") trace toggled by the existing visibility scheme (the layout-shape +
+  relayout approach wasn't rendering); `n_per_analyte` 2P+6 → 2P+7.
+- **NC reworked per user decisions**: Negative 0 and Negative 49 kept **separate**
+  (`_nc_control` parses the control; duplicate wells averaged within each
+  control). Across-plate panels = static grid over **all** antigens, one coloured
+  line per control, current-plate markers ringed. NC bar = grouped bars per
+  control. NC table gained a **Control** column. Clarified the "dots = plates"
+  point (preview used synthetic plates).
+- Verified on Plate 1: 4 NC wells → Negative 0 / Negative 49; panels, grouped
+  bar, and table all split by control.
+
+### Session 9 — 2026-06-01 (Picker linear-range square + NC rework)
+- **Picker linear-range square**: added a per-antigen green reportable-range
+  rectangle to the Standard-Curve Picker (log10 coords on the log axes),
+  appended to the static rug-separator shapes and swapped per antigen via
+  `Plotly.relayout(DIV,"shapes",…)`; description updated.
+- **NC QC reworked to the legacy MPOX style**: replaced the two purple heatmaps
+  with (1) per-antigen "Negative Control MFI across plates" small-multiples
+  (`_make_nc_history_plot` now a subplot grid; line + markers across plates,
+  current plate red; bounded to priority antigens, capped at 48), and (2) a
+  folded "NC details for this plate" containing a mean-NC-MFI-by-analyte bar
+  (`_make_nc_bar`, scrollable) + a Well/Analyte/MFI table (`_format_nc_table`).
+  Banner rewritten accordingly.
+- Verified: picker carries shapes + relayout; NC panels/bar/table render; old
+  `fig-nc-heatmap` removed.
+- Remaining: README/SPEC rewrite for the Bangladesh context.
+
+### Session 8 — 2026-06-01 (Section 8: Descriptions audit)
+- Swept all report/upload copy for accuracy and stale Uvira/MPXV references:
+  - NC QC banner rewritten (Bangladesh `Negative` pattern, `Background0`,
+    pre-2019 NA plasma; "deeper NC QC in development" note; updated "no NC" copy).
+  - Downloads: Background QC desc (flags reference-only), Range-Matrix desc
+    (auto-selected pool; removed barcode/patient_id/box_id Uvira wording).
+  - Upload page: input-file + barcode-map fields marked optional / not needed
+    (wells classified from the sample name; IDs in `{id}_r3_{Serum|DBS}`).
+- Verified report renders and a grep sweep finds no remaining
+  Uvira/MPXV/MagPix/RENAMED/Row-A/Standard1/12-plex copy.
+- Next: rewrite README.md + SPECIFICATION.md for the Bangladesh 202-plex / 384-
+  well / multi-pool context (Section 0 leftover).
+
+### Session 7 — 2026-06-01 (Section 7: Settings audit)
+- Confirmed all flag thresholds are editable AND read live from config: bead
+  RED/YELLOW (via `qc_bead_counts`), problem-fraction, background %CV, background
+  max-MFI, recovery tolerance (via `qc_thresholds`), priority antigens (via
+  `panel`). Nothing hard-coded in the report path.
+- Cleaned the Settings page: removed the unused "Standard Dilutions" field
+  (dilutions now parsed per-pool from sample names) → replaced with a note;
+  rewrote Well-Classification labels/help for Bangladesh naming
+  (`Background0` / `Pilot Control:` / `Negative` / `{id}_r3_{Serum|DBS}`);
+  clarified bead labels ("RED below"/"YELLOW below"); marked the two Background
+  thresholds as reference-only (flagging still in development).
+- Verified the full Settings round-trip with a Flask test client (GET renders,
+  POST persists every threshold + the priority list, reset restores defaults).
+- Next: Section 8 (descriptions audit across all sections), then README / SPEC
+  rewrite for the Bangladesh context.
+
+### Session 6 — 2026-06-01 (Section 6: Range Matrix + Serum/DBS)
+- Added shared **`_frozen_label_heatmap`** helper (frozen antigen-label pane +
+  horizontal-scroll well pane); the Range Matrix now uses it — bare well-location
+  top axis, hover = Antigen / Well / Sample / Status. (Bead matrix keeps its own
+  equivalent inline version.)
+- **`_make_serum_dbs_comparison`**: folded Serum-vs-DBS scatter (scattergl) under
+  the Range Matrix — pairs `{id}_r3_{Serum|DBS}` per person × antigen, y=x
+  reference, per-point hover. Hidden when no matched pairs exist.
+- Clarified earlier preview confusion (Section 5): the "handful of antigens" was
+  a fast-preview artifact (only ~10–24 antigens fit to dodge the 45 s tool cap);
+  the real pipeline fits all ~200 (198/200 get a usable fit). Logged a picker
+  performance follow-up (full-panel report is slow).
+- Verified: range matrix frozen panes + enriched hover; serum/dbs section builds
+  and pairs on the pilot specimens.
+- **Follow-up (Section 6):** upgraded both the bead matrix and the range matrix
+  to full **freeze panes** — promoted the helper to `_freeze_pane_heatmap`
+  (frozen corner + frozen column header for well positions + frozen row header
+  for antigens + scrolling body), with a small JS shim syncing the body's
+  horizontal scroll → column header and vertical scroll → row header. Now both
+  the antigen names AND the well positions stay visible while scrolling either
+  way. Bead matrix retains its well-type group separators.
+- Next: Section 7 (Settings completeness — confirm all flag thresholds editable)
+  and Section 8 (descriptions audit), then README/SPEC rewrite.
+
+### Session 5 — 2026-06-01 (Section 5: Standard curves)
+- **Priority-pathogen setting**: `panel.priority_antigens` (default empty = all)
+  added to config, `settings.html`, `app.py` POST, and `get_priority_antigens`.
+- **`_build_selected_fits`**: per-antigen fit from its auto-selected pool (pool
+  injected), shaped as a single-pool dict; one `selected_fits` feeds Summary /
+  Overview / Picker. Priority list derived (panel order; empty = all).
+- **Standard-Curve Summary**: now priority-filtered, with a **Pool** column and
+  a "fit for all antigens / curves shown for priority" note.
+- **All-Curves Overview** rebuilt: interactive Plotly small-multiples
+  (`_make_curve_grid_interactive`) for ≤ 48 panels — hover, current-plate
+  status-coloured **rug**, green **linear-range square**, red 4PL line, blue
+  observed points, red-triangle out-of-tolerance standards, ✕ dropped point.
+  `_make_curve_grid_static` keeps the matplotlib grid (now with the square) for
+  larger/unfiltered sets. Linear-range geometry via `_linear_range_box`.
+- **Standard-Curve Picker** folded by default with a "review only" disclaimer;
+  now spans all antigens via their selected-pool fits.
+- Verified: default (all) shows the Pool column + note; priority filter narrows
+  the Summary/Overview to the chosen antigens; interactive grid carries the
+  square + rug + out-of-tolerance markers; picker collapsed with disclaimer.
+- Follow-up: add the linear-range square inside the picker curve too (deferred);
+  PC Replicate Variability + NC levels still later (Section 9 / general).
+- Next: Section 6 (Range Matrix axis change + Serum/DBS paired sub-section),
+  then Section 7/8 (settings completeness + descriptions audit).
+
+### Session 4 — 2026-06-01 (Section 3 finalize + Section 4: Background QC)
+- Finalized Section 3 (bead matrix frozen labels + sizing) per user approval.
+- **Section 4 — Background QC overhaul:**
+  - Max-MFI default 100 → **300** everywhere (config, qc_background, pipeline,
+    report fallback, settings.html).
+  - `qc_background_levels` now returns the **individual Background-well MFIs**
+    plus the current-plate **IQR (Q1/Q3)**; mean/sd/cv/max retained for the
+    plot + history. Flagging columns kept for reference only (display deferred).
+  - **Overview plot**: new `_bg_overview_iqr` — ≥3 plates shows previous-plate
+    IQR bars (current excluded) + current-plate dot, outside-IQR dots flagged
+    red; <3 plates keeps the dot scatter. `_make_background_overview_plot`
+    branches on plate count.
+  - **Description rewritten** (clear, accurate; no stale mean/max copy; states
+    flagging is in development).
+  - **Per-antigen table**: folded by default, scrollable; columns Analyte /
+    n wells / Individual MFIs / SD / %CV / IQR current plate / IQR previous
+    plates. Mean/Max/flag columns removed.
+  - Cards now neutral (no premature pass/fail).
+  - Verified: single-plate report renders (table + columns + note); ≥3-plate
+    IQR overview + previous-plate IQR column verified with a synthetic history.
+- Next: Section 5 (standard curves — multi-pool priority display, interactive
+  All-Curves Overview with rug + linear-range square, folded picker).
 
 ### Session 3 — 2026-06-01 (Section 3: Bead Count)
 - Reordered report: **Plate Overview → Bead Count → Background QC → …**

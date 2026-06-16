@@ -58,14 +58,19 @@ def get_antigen_names(config: dict) -> list[str]:
     return [a["name"] for a in config["panel"]["antigens"]]
 
 
-def get_kit_control_names(config: dict) -> list[str]:
-    """Kit-control names. Empty list on Uvira; kept for legacy callers."""
-    return [c["name"] for c in config["panel"].get("kit_controls", [])]
-
-
 def get_excluded_analytes(config: dict) -> list[str]:
     """Analytes that are soft-flagged in the report (kept in data, muted in UI)."""
     return list(config.get("panel", {}).get("excluded_analytes", []))
+
+
+def get_priority_antigens(config: dict) -> list[str]:
+    """Priority antigens whose standard curves are meant to be interpreted.
+
+    Empty list = all antigens (the default). Curves are still fit for every
+    antigen regardless; this only controls which antigens are *displayed* in
+    the Standard-Curve Summary and All-Curves Overview.
+    """
+    return list(config.get("panel", {}).get("priority_antigens", []))
 
 
 def get_qc_thresholds(config: dict) -> dict:

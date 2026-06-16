@@ -96,18 +96,13 @@ ANTIGENS = [
 # (the legacy MPXV/Uvira exclusions do not apply to this assay).
 EXCLUDED_ANALYTES: list[str] = []
 
-# Kit-control bead concept does not apply to the Uvira assay; the NC for
-# this plate is the Row-A "Background" well, not a kit-bead.
-KIT_CONTROLS: list[str] = []
-
-ALL_BEADS = ANTIGENS + KIT_CONTROLS
-
 # --- QC thresholds ---
 
 BEAD_COUNT_MIN = 30          # Red below this
 BEAD_COUNT_WARN = 50         # Yellow between MIN and WARN; green above
-PC_CV_THRESHOLD = 0.25       # Unused on Uvira (no PC duplicates) — kept for legacy callers
 RECOVERY_TOLERANCE = 0.30    # ±30% Obs/Exp recovery for standard curve points
+PC_CV_THRESHOLD = 0.20       # Flag a standard point when the %CV between its
+                             # duplicate wells exceeds this (PC replicate QC)
 
 # Shared "≥ X% problematic" threshold used by the bead-count and range
 # summary cards. An antigen is "problem" when at least this fraction of
@@ -115,18 +110,15 @@ RECOVERY_TOLERANCE = 0.30    # ±30% Obs/Exp recovery for standard curve points
 # counts; BELOW_RANGE / ABOVE_RANGE for ranges).
 PROBLEM_FRACTION_THRESHOLD = 0.20
 
-# Background QC (used when no NC wells are present on the plate).
-BG_CV_THRESHOLD = 0.25       # Flag antigen if Background %CV > 25%
-BG_MAX_MFI = 100             # Flag antigen if max Background MFI > 100
+# Background QC. The max-MFI threshold defaults to 300 for Bangladesh
+# (High PMT) and is editable on the Settings page. Formal Background
+# flagging rules are still being finalized (see BANGLADESH_TODO Section 4).
+BG_CV_THRESHOLD = 0.25       # Background %CV reference threshold
+BG_MAX_MFI = 300             # Background max-MFI reference threshold
 
-# --- Standard curve dilution series ---
-# 10-point 4-fold dilution from Std+Mabs row of the dilution-series screenshot.
-# Standard1 maps to STANDARD_DILUTIONS[0] (the most concentrated point) and
-# Standard10 to STANDARD_DILUTIONS[9] (the most dilute).
-STANDARD_DILUTIONS = [
-    62.5, 250.0, 1000.0, 4000.0, 16000.0,
-    64000.0, 256000.0, 1024000.0, 4096000.0, 16384000.0,
-]
+# Standard-curve dilutions are NOT a fixed series for Bangladesh — each
+# control pool carries its own dilution series encoded in the sample name
+# (e.g. "Pilot Control: Dengue pool 1:4000"), parsed per-well in classify.py.
 
 SPECIMEN_DEFAULT_DILUTION = 100  # placeholder; specimens are run at a single dilution
 
@@ -164,13 +156,25 @@ DEFAULTS = {
         # bead_region is informational only on Intelliflex; analytes are
         # keyed by name in the xPONENT export.
         "antigens": [{"name": a, "bead_region": None} for a in ANTIGENS],
-        "kit_controls": [],
         "excluded_analytes": list(EXCLUDED_ANALYTES),
         # Priority antigens whose standard curves are meant to be
         # interpreted. Empty list = all antigens (default). Curves are
         # still fit for every antigen; this only filters the display in
         # the Standard Curve Summary / All Curves Overview (Section 5).
         "priority_antigens": [],
+        # How standard curves are presented/scored:
+        #   "per_pool"    — fit & show a curve for EVERY (pool × antigen);
+        #                   no antigen→pool matching or auto-selection.
+        #   "auto_select" — pick one calibrating pool per antigen (pathogen
+        #                   name match, tie-broken by best fit).
+        "pool_mode": "per_pool",
+        # In per_pool mode, the single pool used to compute specimen RAU /
+        # range status (Range Matrix, clean results). Blank = first pool.
+        "scoring_pool": "",
+        # Optional user rules for auto_select mode: "<regex> => <pool name>"
+        # strings, first match wins, applied before the built-in pathogen
+        # heuristic. Lets the lab define antigen→pool mapping without code.
+        "pool_assignment_rules": [],
     },
     "well_classification": {
         "pc_patterns": PC_PATTERNS,
@@ -178,7 +182,6 @@ DEFAULTS = {
         "nc_patterns": NC_PATTERNS,
     },
     "standard": {
-        "dilutions": list(STANDARD_DILUTIONS),  # explicit (not "auto") — Intelliflex doesn't encode them in sample names
         "bead_batch": "",
     },
     "specimens": {
@@ -187,8 +190,8 @@ DEFAULTS = {
     "qc_thresholds": {
         "bead_count_min": BEAD_COUNT_MIN,
         "bead_count_warn": BEAD_COUNT_WARN,
-        "pc_cv_threshold": PC_CV_THRESHOLD,
         "recovery_tolerance": RECOVERY_TOLERANCE,
+        "pc_cv_threshold": PC_CV_THRESHOLD,
         "drop_outlier": True,
         "problem_fraction_threshold": PROBLEM_FRACTION_THRESHOLD,
         "bg_cv_threshold": BG_CV_THRESHOLD,

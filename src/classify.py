@@ -41,7 +41,6 @@ from .config import (
     PC_PATTERNS,
     BACKGROUND_PATTERNS,
     NC_PATTERNS,
-    STANDARD_DILUTIONS,
 )
 
 

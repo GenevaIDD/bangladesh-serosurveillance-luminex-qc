@@ -95,12 +95,16 @@
     <div class="hint">Select one or more plate-result CSV exports (e.g. <code>PlateRunResults_PLATE_….csv</code>).</div>
     <input type="file" id="csv_files" name="csv_files" accept=".csv" multiple required>
 
-    <label for="inputfile_file">Intelliflex Inputfile CSV</label>
-    <div class="hint">The <code>*_inputfile.csv</code> exported alongside the plate result. Maps each well to a Standard / Background / Unknown type and the on-plate barcode.</div>
+    <label for="inputfile_file">Intelliflex Inputfile CSV <span style="font-weight:normal; color:#888;">(optional)</span></label>
+    <div class="hint">Not needed for the Bangladesh plates — wells are classified from the
+      <code>Sample</code> name. Only upload an <code>*_inputfile.csv</code> if a future
+      plate ships one with an authoritative well <code>Type</code> column.</div>
     <input type="file" id="inputfile_file" name="inputfile_file" accept=".csv">
 
-    <label for="layout_file">Box Barcode Map XLSX (optional)</label>
-    <div class="hint">Optional: <code>RENAMED-Box*_Uvira_sera_*.xlsx</code>. Maps on-plate barcodes (FD…) to patient IDs.</div>
+    <label for="layout_file">Sample / Barcode Map XLSX <span style="font-weight:normal; color:#888;">(optional)</span></label>
+    <div class="hint">Optional. Only needed if specimen IDs live in a separate barcode→ID map
+      rather than in the sample name; the Bangladesh pilots carry the ID in the sample name
+      (<code>{id}_r3_{Serum|DBS}</code>), so this can be left blank.</div>
     <input type="file" id="layout_file" name="layout_file" accept=".xlsx">
 
     <button type="submit" id="submit-btn" class="btn btn-primary">

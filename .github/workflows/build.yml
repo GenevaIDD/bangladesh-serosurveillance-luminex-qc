@@ -21,28 +21,27 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          pip install -e ".[build]"
+        run: pip install -e ".[build]"
 
       - name: Generate icons
         run: python scripts/make_icon.py
 
       - name: Build macOS .app
-        run: python -m PyInstaller mpox-luminex-qc.spec --clean -y
+        run: python -m PyInstaller bangladesh-serosurveillance-luminex-qc.spec --clean -y
 
       - name: Codesign (ad-hoc)
-        run: codesign --force --deep --sign - "dist/MPXV Luminex QC.app"
+        run: codesign --force --deep --sign - "dist/Bangladesh Serosurveillance Luminex QC.app"
 
       - name: Create zip archive
         run: |
           cd dist
-          zip -r "MPXV-Luminex-QC-macOS.zip" "MPXV Luminex QC.app"
+          zip -r "Bangladesh-Serosurveillance-Luminex-QC-macOS.zip" "Bangladesh Serosurveillance Luminex QC.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MPXV-Luminex-QC-macOS
-          path: dist/MPXV-Luminex-QC-macOS.zip
+          name: Bangladesh-Serosurveillance-Luminex-QC-macOS
+          path: dist/Bangladesh-Serosurveillance-Luminex-QC-macOS.zip
 
   build-windows:
     runs-on: windows-latest
@@ -55,23 +54,22 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          pip install -e ".[build]"
+        run: pip install -e ".[build]"
 
       - name: Generate icons
         run: python scripts/make_icon.py
 
       - name: Build Windows exe
-        run: python -m PyInstaller mpox-luminex-qc-win.spec --clean -y
+        run: python -m PyInstaller bangladesh-serosurveillance-luminex-qc-win.spec --clean -y
 
       - name: Create zip archive
-        run: Compress-Archive -Path "dist/MPXV-Luminex-QC" -DestinationPath "dist/MPXV-Luminex-QC-Windows.zip"
+        run: Compress-Archive -Path "dist/Bangladesh-Serosurveillance-Luminex-QC" -DestinationPath "dist/Bangladesh-Serosurveillance-Luminex-QC-Windows.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MPXV-Luminex-QC-Windows
-          path: dist/MPXV-Luminex-QC-Windows.zip
+          name: Bangladesh-Serosurveillance-Luminex-QC-Windows
+          path: dist/Bangladesh-Serosurveillance-Luminex-QC-Windows.zip
 
   release:
     needs: [build-macos, build-windows]
@@ -88,5 +86,5 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/MPXV-Luminex-QC-macOS/MPXV-Luminex-QC-macOS.zip
-            artifacts/MPXV-Luminex-QC-Windows/MPXV-Luminex-QC-Windows.zip
+            artifacts/Bangladesh-Serosurveillance-Luminex-QC-macOS/Bangladesh-Serosurveillance-Luminex-QC-macOS.zip
+            artifacts/Bangladesh-Serosurveillance-Luminex-QC-Windows/Bangladesh-Serosurveillance-Luminex-QC-Windows.zip

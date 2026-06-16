@@ -599,6 +599,38 @@ window/report titles; README/SPEC; .spec files; .Rproj.</td>
 <h2>To-Do</h2>
 <p>Status legend: <code>[ ]</code> not started · <code>[~]</code> in
 progress · <code>[x]</code> done · <code>[!]</code> blocked.</p>
+<div id="docs-downloads-master-export-cleanup-done-session-11" class="section level3">
+<h3>11. Docs, downloads, master export, cleanup — DONE (Session 11)</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" checked></input><strong>README.md +
+SPECIFICATION.md</strong> rewritten for the Bangladesh 202-plex /
+384-well / High-PMT / multi-pool assay (sections, pools, auto
+pool-select, outputs, settings, build). No Uvira/MPXV copy.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Per-plate
+download CSVs fixed</strong>: report links point to
+<code>/download/specimens/&lt;f&gt;</code>, but only
+<code>specimens_*.csv</code> was mirrored to <code>specimens/</code> —
+the rest live in <code>reports/</code>. <code>download_specimens</code>
+now checks both dirs. Verified all 9 links return 200.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Clean master CSV
+(with RAU)</strong>: new per-plate
+<code>results_&lt;plate&gt;.csv</code>
+(<code>_build_clean_results</code>) — plate, well, sample_id, matrix,
+analyte, pool, mfi, RAU, status, censored. <code>/export/all</code> now
+leads with a concatenated <strong>results</strong> sheet (+ specimens /
+curve params / curve data / nc_levels); fixed the NC history filename
+(<code>nc_well_history.json</code>). Verified via Flask.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Code
+cleanup</strong>: removed dead <code>_make_nc_heatmap</code>,
+<code>get_kit_control_names</code>,
+<code>KIT_CONTROLS</code>/<code>ALL_BEADS</code>,
+<code>PC_CV_THRESHOLD</code>/<code>pc_cv_threshold</code>,
+<code>STANDARD_DILUTIONS</code> (+ the dead
+<code>standard_dilutions</code> settings handler) and the unused
+<code>replicate_qc</code>/<code>kit_controls</code> report params.
+Imports clean.</label></li>
+</ul>
+</div>
 <div id="project-setup-rebranding" class="section level3">
 <h3>0. Project setup &amp; rebranding</h3>
 <ul class="task-list">
@@ -615,10 +647,10 @@ app/window/report/settings titles; download filename prefixes;
 <code>APP_VERSION = &quot;0.1.0-bangladesh&quot;</code>; assay name/description;
 pyproject; GitHub URL. <code>report.py</code> module
 docstring.</label></li>
-<li><label><input type="checkbox"></input>Rewrite <code>README.md</code> +
-<code>SPECIFICATION.md</code> for the 202-plex / 384-well / Bangladesh
-context (remove Uvira/MPXV-specific copy entirely). <em>(deferred — do
-alongside the descriptions audit, Section 8.)</em></label></li>
+<li><label><input type="checkbox" checked></input>Rewrite
+<code>README.md</code> + <code>SPECIFICATION.md</code> for the 202-plex
+/ 384-well / Bangladesh context (remove Uvira/MPXV-specific copy
+entirely). DONE Session 11.</label></li>
 <li><label><input type="checkbox" checked></input>Legacy docs moved to
 <code>legacy/</code> (UVIRA_TODO + PLATE_RUN_FINDINGS .md/.html). Pilot
 CSVs copied to <code>tests/fixtures/</code>.</label></li>
@@ -704,161 +736,182 @@ inferred (96 or 384), equal-aspect, wrapped in a horizontally/vertically
 scrolling container (max-height 560px).</label></li>
 </ul>
 </div>
-<div id="bead-count-section-move-to-2nd-relabel" class="section level3">
-<h3>3. Bead Count section (move to 2nd; relabel)</h3>
+<div id="bead-count-section-move-to-2nd-relabel-done-session-3" class="section level3">
+<h3>3. Bead Count section (move to 2nd; relabel) — DONE (Session 3)</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Reorder so Bead Count comes
-<strong>immediately after</strong> Plate Overview (before Background
-QC).</label></li>
-<li><label><input type="checkbox"></input>Rewrite the four summary cards with
-self-explanatory copy (thresholds pulled live from settings, shown
-numerically):</label>
-<ul>
-<li>“Antigens flagged (≥{{ pct }}% of wells have either 30–49 beads or
-&lt;30 beads)”</li>
-<li>“Specimens flagged (≥{{ pct }}% of antigens have either 30–49 beads
-or &lt;30 beads)”</li>
-<li>“Overall cells with bead count &lt;30” (red cells)</li>
-<li>“Overall cells with bead count 30–49” (yellow cells)</li>
-<li>(Numbers 30/49/50 come from <code>bead_count_min</code> /
-<code>bead_count_warn</code>; the ≥X% from
-<code>problem_fraction_threshold</code>. Keep copy in sync with
-settings.)</li>
-</ul></li>
-<li><label><input type="checkbox"></input><strong>Bead-count heatmap
-axis</strong>: remove the sample-ID labels from the top axis;
-<strong>keep the well location</strong> visible. Hover still shows:
-antigen, well position, sample id, bead count, tier. (Mirrors the
-Range-Matrix axis change in Section 6.)</label></li>
-<li><label><input type="checkbox"></input>Confirm heatmap + problem tables
-still render correctly at 384 scale.</label></li>
+<li><label><input type="checkbox" checked></input>Reordered: Bead Count now
+comes immediately after Plate Overview, before Background QC (template
+blocks swapped + figure-build order updated in <code>report.py</code>
+for the Plotly embed-first invariant; section comments renumbered
+1–9).</label></li>
+<li><label><input type="checkbox" checked></input>Rewrote the four cards
+with self-explanatory copy (thresholds live from settings): “Antigens
+flagged (≥X% of wells have either 30–49 beads or &lt;30 beads)”,
+“Specimens flagged (≥X% of antigens …)”, “Overall cells with bead count
+&lt;30 (red cells)”, “Overall cells with bead count 30–49 (yellow
+cells)”. Numbers come from
+<code>bead_count_min</code>/<code>bead_count_warn</code>/
+<code>problem_fraction_threshold</code>. Cards forced to a 4-column
+row.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Bead-count
+heatmap</strong>: x-axis shows the <strong>well location only</strong>
+(no sample ID); hover shows Antigen, Well, Sample, Bead count,
+Tier.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Wide-matrix
+legibility + frozen antigen labels</strong>: matrix rendered as two
+row-aligned panes — a fixed antigen-label column on the left (frozen)
+and the heatmap (wells) in a horizontal-scroll pane beside it; both
+share an outer vertical-scroll box. Fonts 7px, cells 10px rows × 9px
+cols. Page width unaffected (<code>min-width:0</code> on the content
+grid track + on the scroll pane). Label pane uses a wide left margin so
+long antigen names aren’t clipped and sit flush against the
+cells.</label></li>
+<li><label><input type="checkbox" checked></input>Heatmap + problem tables
+render at 384 scale.</label></li>
 </ul>
 </div>
-<div id="background-qc-section-after-bead-count-substantial-edits" class="section level3">
-<h3>4. Background QC section (after Bead Count; substantial edits)</h3>
+<div id="background-qc-section-after-bead-count-substantial-edits-done-session-4" class="section level3">
+<h3>4. Background QC section (after Bead Count; substantial edits) —
+DONE (Session 4)</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input><strong>Default max-MFI threshold →
-300</strong> (<code>bg_max_mfi</code>), editable in
-Settings.</label></li>
-<li><label><input type="checkbox"></input><strong>Rewrite the “How Background
-QC works” description.</strong> Remove the confusing point 3 (Max
-Background MFI) wording; make every point match what the code actually
-computes after the table changes below. No stale copy left
-behind.</label></li>
-<li><label><input type="checkbox"></input><strong>“Background MFI overview
-(all plates)” plot — redesign</strong>:</label>
-<ul>
-<li>Show, per antigen, the <strong>IQR of historical plate runs</strong>
-as a bar/range and the <strong>current plate’s mean</strong> as a dot
-positioned relative to that IQR.</li>
-<li><strong>&lt; 3 plates total</strong> → keep the current
-dot-per-plate scatter.</li>
-<li><strong>≥ 3 plates</strong> → vertical line spanning the IQR + a dot
-for the current plate (ideally inside the IQR).</li>
-<li>Leave a hook for flagging dots outside the IQR (decision deferred —
-see Open questions).</li>
-</ul></li>
-<li><label><input type="checkbox"></input><strong>Per-antigen Background QC
-table — rebuild + fold by default</strong>:</label>
-<ul>
-<li>Wrap in a collapsible (click-to-expand) container; make it
-scrollable horizontally and vertically.</li>
-<li><strong>Remove</strong> Mean MFI, Max MFI columns and the MAX
-flag.</li>
-<li><strong>Keep</strong> Analyte, n wells, SD, %CV;
-<strong>add</strong> the individual MFI measurements (one per background
-well) and two new IQR columns: <strong>IQR of current plate</strong> and
-<strong>IQR of previous plates</strong> (separate columns).</li>
-<li>Column order: Analyte → n wells → individual MFI measurements → SD →
-%CV → IQR current plate → IQR previous plates.</li>
-<li>Flags intentionally deferred — <strong>note left in
-code/table</strong> (“flags TBD”).</li>
-</ul></li>
+<li><label><input type="checkbox" checked></input><strong>Default max-MFI
+threshold → 300</strong> (<code>bg_max_mfi</code>) in
+<code>config.py</code>, <code>qc_background.py</code>,
+<code>pipeline.py</code>, <code>report.py</code> fallback, and
+<code>settings.html</code>.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Rewrote the “How
+Background QC works” description</strong>: dropped the confusing
+mean/max points; now describes within-plate spread (individual MFIs, SD,
+%CV) and the this-plate-vs-history IQR comparison, and states that
+formal pass/fail flagging is still in development (max-MFI is a tracked
+reference only). No stale copy left.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Overview plot
+redesigned</strong> (<code>_bg_overview_iqr</code> + branch in
+<code>_make_background_overview_plot</code>): &lt; 3 plates → existing
+dot scatter; ≥ 3 plates → grey vertical bar = previous-plates IQR
+(Q1–Q3, current excluded) + current-plate mean dot; dots <strong>outside
+the IQR flagged</strong> in red (provisional, “flagging in development”
+note). Verified with a synthetic 3-plate history.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Per-antigen table
+rebuilt + folded</strong> (click to expand, scrollable both ways).
+Dropped Mean MFI, Max MFI, and the MAX/CV flag column. Columns now:
+Analyte → n wells → Individual MFIs → SD → %CV → IQR current plate
+(Q1–Q3 of this plate’s Background wells) → IQR previous plates (Q1–Q3 of
+per-plate mean across earlier plates). Flags deferred — noted in code +
+UI.</label></li>
+<li><label><input type="checkbox" checked></input>Cards replaced with
+neutral info (antigens w/ Background data, Background wells this plate,
+previous plates in history) — no premature pass/fail.</label></li>
 </ul>
 </div>
-<div id="standard-curves-multi-pool-priority-pathogen-concept" class="section level3">
-<h3>5. Standard curves — multi-pool + priority-pathogen concept</h3>
+<div id="standard-curves-multi-pool-priority-pathogen-concept-done-session-5" class="section level3">
+<h3>5. Standard curves — multi-pool + priority-pathogen concept — DONE
+(Session 5)</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input><strong>Multi-pool fitting</strong>:
-fit a 4PL per (pool × antigen). Each pool uses its own parsed dilution
-series. Single-point controls (Cholera High/Low) are not fit but can be
-shown as reference points.</label></li>
-<li><label><input type="checkbox"></input><strong>Settings: priority
-pathogens.</strong> New field (textarea/multiselect) to define priority
-antigens (and possibly pool→antigen pairings). <strong>Default = all
-antigens</strong> from the CSV output. Persist to YAML.</label></li>
-<li><label><input type="checkbox"></input><strong>Standard Curve
-Summary</strong> + <strong>All Curves Overview</strong>: show
-<strong>priority antigens only</strong> (curves still fit for all;
-display filtered). Likely one curve grid per pool (mirrors the two
-screenshots: “ITM PC” / “ITM PC2”).</label></li>
-<li><label><input type="checkbox"></input><strong>All Curves Overview — make
-interactive</strong>: convert from the static matplotlib PNG grid to
-interactive plots with the <strong>same hover + rug plot</strong> as the
-picker. Rug plot here uses <strong>current plate run only</strong> (no
-historical overlays).</label></li>
-<li><label><input type="checkbox"></input><strong>Linear-range square
-(confirmed from screenshots)</strong>: on each curve, draw a
-<strong>green shaded rectangle</strong> spanning the reportable range —
-x from ULOQ-dilution to LLOQ-dilution, y from LLOQ-MFI to ULOQ-MFI
-(dashed green border, light-green fill), using existing
-<code>reportable_range</code>. Standard points <strong>outside recovery
-tolerance</strong> drawn as <strong>red triangles</strong> (“Out of
-tolerance”); a dropped/excluded point drawn as a <strong>bold
-“×”</strong>. Legend: Observed (blue dot), Out of tolerance (red
-triangle), 4PL Fit (red line), Specimens (rug ticks). Curve line is
-<strong>red</strong>, observed points
-<strong>blue</strong>.</label></li>
-<li><label><input type="checkbox"></input><strong>Standard Curve
-Picker</strong>: keep fitting against <strong>ALL</strong> antigens (all
-pools); <strong>fold by default</strong> (click-to-expand) with a
-disclaimer that not all curves are meant to be interpreted — only
-priority (pool × antigen) curves — and that the picker is for review
-only.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Multi-pool
+fitting</strong> (Section 1): 4PL per (pool × antigen); single-point
+controls excluded from fitting.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Settings:
+priority pathogens</strong> — new textarea
+(<code>panel.priority_antigens</code>, default empty = all); wired
+through <code>settings.html</code>, <code>app.py</code>, and a
+<code>get_priority_antigens</code> getter. Persists to
+YAML.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Per-antigen
+selected fit</strong> (<code>_build_selected_fits</code>): each antigen
+shown against its auto-selected pool’s curve (pool name injected); a
+single <code>selected_fits</code> dict feeds the Summary, Overview, and
+Picker.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Standard Curve
+Summary</strong> filtered to <strong>priority antigens</strong> (default
+all), with a new <strong>Pool</strong> column and a note that curves are
+fit for all antigens.</label></li>
+<li><label><input type="checkbox" checked></input><strong>All Curves
+Overview — interactive</strong>
+(<code>_make_curve_grid_interactive</code>): Plotly small-multiples for
+priority antigens with hover, current-plate specimen
+<strong>rug</strong> (status-coloured), <strong>linear-range green
+square</strong>, red 4PL line, blue observed points, <strong>red
+triangles</strong> for out-of-tolerance standards, <strong>✕</strong>
+for a dropped point. Falls back to a static grid (still with the square)
+above 48 panels (unfiltered default).</label></li>
+<li><label><input type="checkbox" checked></input><strong>Standard Curve
+Picker</strong>: covers <strong>all</strong> antigens (each via its
+selected pool fit); <strong>folded by default</strong> with a “review
+only — only priority curves are interpretable” disclaimer.</label></li>
+<li><label><input type="checkbox" checked></input>Linear-range square
+<strong>now also in the Standard-Curve Picker</strong> (Session 9):
+per-antigen green reportable-range rectangle (log10 coords) appended to
+the rug-separator base shapes and swapped on typeahead via
+<code>Plotly.relayout(DIV,&quot;shapes&quot;,…)</code>.</label></li>
 </ul>
 </div>
-<div id="standard-curve-range-matrix-serumdbs-pairing" class="section level3">
-<h3>6. Standard-Curve Range Matrix + Serum/DBS pairing</h3>
+<div id="standard-curve-range-matrix-serumdbs-pairing-done-session-6" class="section level3">
+<h3>6. Standard-Curve Range Matrix + Serum/DBS pairing — DONE (Session
+6)</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Remove sample-ID labels from the top
-axis; <strong>keep well location</strong> visible.</label></li>
-<li><label><input type="checkbox"></input>Hover still shows: antigen, well
-position, sample id, and status (below range / in range / above range /
-no fit).</label></li>
-<li><label><input type="checkbox"></input><strong>Paired Serum-vs-DBS
-comparison</strong> (new folded sub-section/tab): for each person with
-both a <code>_Serum</code> and a <code>_DBS</code> sample, compare their
-MFI (and/or AU) per antigen — e.g. scatter of serum MFI vs DBS MFI with
-a y=x line, or a per-antigen paired view. Folded by default. Specimens
-still listed individually elsewhere; this is an added QC view, not a
-replacement.</label></li>
+<li><label><input type="checkbox" checked></input>Range Matrix rebuilt with
+the <strong>frozen antigen-label</strong> + horizontal-scroll pattern
+(shared <code>_frozen_label_heatmap</code> helper). Top axis shows the
+<strong>well location only</strong> (no sample-ID); hover shows Antigen,
+Well, Sample, Status (Below/In/Above range, No fit). Uses
+<code>sample_id</code> when present, else
+<code>sample_name</code>.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Paired
+Serum-vs-DBS comparison</strong>
+(<code>_make_serum_dbs_comparison</code>): folded sub-section under the
+Range Matrix. Parses <code>{id}_r3_{Serum|DBS}</code>
+(case-insensitive), pairs per person × antigen, and plots Serum MFI vs
+DBS MFI (scattergl) with a y=x reference line and per-point hover.
+Specimens still listed individually elsewhere.</label></li>
 </ul>
 </div>
-<div id="settings-page-make-thresholds-editable" class="section level3">
-<h3>7. Settings page — make thresholds editable</h3>
+<div id="settings-page-make-thresholds-editable-done-session-7" class="section level3">
+<h3>7. Settings page — make thresholds editable — DONE (Session 7)</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Priority-pathogen list (section
-5).</label></li>
-<li><label><input type="checkbox"></input>Background max-MFI threshold
-(default 300).</label></li>
-<li><label><input type="checkbox"></input>Bead-count thresholds (min/warn) —
-already present; verify wired through to the new card copy.</label></li>
-<li><label><input type="checkbox"></input>Problem-fraction (≥X%) threshold for
-flagged antigens/samples — already present; verify.</label></li>
-<li><label><input type="checkbox"></input>Background %CV threshold — already
-present; verify.</label></li>
-<li><label><input type="checkbox"></input>Audit: every threshold used in the
-report must be read from config, not hard-coded, and every description
-string must reflect the live value.</label></li>
+<li><label><input type="checkbox" checked></input>Priority-pathogen list
+(Section 5).</label></li>
+<li><label><input type="checkbox" checked></input>Background max-MFI
+threshold (default 300).</label></li>
+<li><label><input type="checkbox" checked></input>Bead-count thresholds
+(min/warn) — labels clarified (“RED below” / “YELLOW below”); read live
+from config in <code>qc_bead_counts</code>.</label></li>
+<li><label><input type="checkbox" checked></input>Problem-fraction (≥X%)
+threshold — present; read live in pipeline + report.</label></li>
+<li><label><input type="checkbox" checked></input>Background %CV threshold
+— present (reference only).</label></li>
+<li><label><input type="checkbox" checked></input>Recovery tolerance —
+present; drives LLOQ/ULOQ.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Audit</strong>:
+confirmed every threshold is read from config (bead via
+<code>qc_bead_counts</code>, problem-fraction/bg-cv/bg-max/recovery via
+<code>qc_thresholds</code>, priority via <code>panel</code>); none
+hard-coded in the report.</label></li>
+<li><label><input type="checkbox" checked></input><strong>Cleanup</strong>:
+removed the now-unused “Standard Dilutions” field (dilutions are parsed
+from sample names per pool) and replaced it with an explanatory note;
+updated Well-Classification labels/copy for Bangladesh naming; marked
+Background thresholds as “reference (flagging in
+development)”.</label></li>
+<li><label><input type="checkbox" checked></input>Verified Settings
+round-trip with a Flask test client (GET renders, POST persists all
+thresholds + priority list, reset restores defaults).</label></li>
 </ul>
 </div>
-<div id="descriptions-audit-cross-cutting" class="section level3">
-<h3>8. Descriptions audit (cross-cutting)</h3>
+<div id="descriptions-audit-cross-cutting-done-session-8" class="section level3">
+<h3>8. Descriptions audit (cross-cutting) — DONE (Session 8)</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Review <strong>every</strong>
-section’s explanatory text and rewrite to match what the code actually
-computes/shows after the changes above. Remove all Uvira/MPXV-specific
-and stale copy.</label></li>
+<li><label><input type="checkbox" checked></input>Reviewed every section’s
+explanatory text against current behavior. Fixed: NC QC (Bangladesh
+<code>Negative</code> pattern, <code>Background0</code>, pre-2019 NA
+plasma, NC flagging-in-development note); Background QC download desc
+(flags are reference-only); Range-Matrix download desc (auto-selected
+pool; dropped Uvira barcode/patient_id/box_id wording); upload page
+(input-file + barcode map marked optional / not needed for
+Bangladesh).</label></li>
+<li><label><input type="checkbox" checked></input>Confirmed no stale Uvira
+/ MPXV / MagPix / RENAMED / Row-A / Standard1 / 12-plex copy remains in
+report.html, index.html, settings.html.</label></li>
 </ul>
 </div>
 <div id="validation" class="section level3">
@@ -875,15 +928,34 @@ still process (96-well path).</label></li>
 </div>
 <div id="deferred-future-work-noted-not-in-this-scope" class="section level3">
 <h3>10. Deferred / future work (noted, not in this scope)</h3>
-<ul class="task-list">
-<li><label><input type="checkbox"></input>PC Replicate Variability section —
-to be worked on later.</label></li>
-<li><label><input type="checkbox"></input>Negative Control levels section — to
-be worked on later.</label></li>
+<ul>
+<li><label><input type="checkbox" checked></input><strong>PC Replicate
+Variability</strong> — BUILT (Session 12). Standards are run in
+duplicate; <code>qc_pc_replicates</code> computes the %CV between the
+two replicate wells per (pool × antigen × dilution), flags points &gt;
+<code>pc_cv_threshold</code> (default 0.20, editable in Settings), and
+the report shows a “PC replicate variability” subsection (cards + folded
+flagged-points table) with a <code>pc_replicates_*.csv</code>
+download.</label></li>
+<li>[~] Negative Control levels section — <strong>reworked to the legacy
+MPOX style</strong> (Session 9): per-antigen “NC MFI across plates”
+small-multiples (current plate red) + folded “NC details for this plate”
+(mean-MFI-by-analyte bar + Well/Analyte/MFI table). Deeper NC flagging
+(thresholds, drift) still TBD.</li>
 <li><label><input type="checkbox"></input>Decide background-IQR out-of-range
 flagging rule.</label></li>
 <li><label><input type="checkbox"></input>Decide final flag rules for the
 Background QC table.</label></li>
+<li><label><input type="checkbox"></input><strong>Standard-Curve Picker
+performance at full panel scale.</strong> Generating the full
+~200-antigen report is slow (minutes); the picker builds a very large
+multi-trace Plotly figure (all antigens × pools + historical overlays).
+With a priority list set everything is fast. Optimize later (e.g. limit/
+lazy traces, or build the picker only for a capped set). Logged Session
+5.</label></li>
+<li><label><input type="checkbox" checked></input>Add the green
+linear-range square inside the Picker’s own curve panel — DONE Session
+9.</label></li>
 </ul>
 <hr />
 </div>
@@ -952,17 +1024,382 @@ by parsing the pathogen name and tie-breaking by best fit (default on).
 Team can later override per antigen and confirm the prefix→pathogen
 rules in Settings.</p>
 <p><strong>Still open (non-blocking):</strong> 1. <strong>Pool →
-priority-antigen mapping (exact lists)</strong>: auto-mapping now runs
-by default (name + best-fit). Team to confirm/override the
-prefix→pathogen rules and the priority-display list later in Settings.
-2. <strong>Individual dengue controls (Plate 2)</strong>: are the 28
-individual dengue controls “specimens” or “controls” for QC display?
-(Characterization samples, not a standard series. Default: treat as
-specimens unless told otherwise.)</p>
+priority-antigen mapping (exact lists)</strong>: <strong>Decision
+(Session 13): default mode is <code>per_pool</code> — fit &amp; show a
+curve for EVERY (pool × antigen), NO matching or
+auto-selection.</strong> Auto-select remains available as a Settings
+option. Caveat (documented in the report): pools have different dilution
+ranges (Dengue 1:1k–16M, ORPAL 1:100–102k, OSP/cTxB 1:1–16k, HlyE
+ng/mL), so RAU is anchored per pool and not comparable across pools;
+specimen RAU/range use a single configurable scoring pool. Once the team
+confirms the pool→antigen mapping, switch to a per-antigen intended
+calibrator. 2. <strong>Individual dengue controls (Plate 2)</strong>:
+are the 28 individual dengue controls “specimens” or “controls” for QC
+display? (Characterization samples, not a standard series. Default:
+treat as specimens unless told otherwise.)</p>
 <hr />
 </div>
 <div id="session-history" class="section level2">
 <h2>Session History</h2>
+<div id="session-14-2026-06-02-regex-pool-assignment-rules-in-settings" class="section level3">
+<h3>Session 14 — 2026-06-02 (Regex pool-assignment rules in
+Settings)</h3>
+<ul>
+<li>Documented how <code>auto_select</code> works (antigen-name pathogen
+group → pools whose name targets that group → best-fit tie-break →
+fallback).</li>
+<li>Added a <strong>Settings “Pool assignment rules”</strong> textarea:
+<code>&quot;&lt;regex&gt; =&gt; &lt;pool&gt;&quot;</code>, one per line, first
+match wins. In <code>select_pool_per_antigen</code> the order is now:
+<ol style="list-style-type: decimal">
+<li>exact <code>pool_antigen_overrides</code>, (2) <strong>user regex
+rules</strong> (<code>_parse_pool_rules</code>),</li>
+<li>built-in pathogen heuristic, (4) best-fit fallback. Lets the lab
+define the antigen→pool mapping explicitly without code (and sidesteps
+the keyword heuristic’s edge cases). Config
+<code>panel.pool_assignment_rules</code> + app.py parse.</li>
+</ol></li>
+<li>Verified: a rule <code>ARB_DENV.* =&gt; Orpal pool</code> forces all
+DENV antigens to ORPAL; <code>RES_Ade.* =&gt; Dengue pool</code> assigns
+antigens the heuristic wouldn’t match; settings round-trip + reset
+OK.</li>
+</ul>
+</div>
+<div id="session-13-2026-06-02-per-pool-curve-mode-no-matchingauto-select" class="section level3">
+<h3>Session 13 — 2026-06-02 (Per-pool curve mode — no
+matching/auto-select)</h3>
+<ul>
+<li><strong>Decision reversed</strong>: do NOT auto-select a pool per
+antigen for the interim. New default
+<strong><code>pool_mode = &quot;per_pool&quot;</code></strong>: a 4PL is fit and
+shown for EVERY (pool × antigen), with no pathogen matching and no
+best-fit pick.
+<ul>
+<li>Standard-Curve Summary → one row per (pool × antigen) (Pool column;
+%-in-range omitted since it’s a single-pool metric).</li>
+<li>All-Curves Overview → one curve grid <strong>per pool</strong>
+(legacy ITM-style), each with its hover / rug / linear-range
+square.</li>
+<li>Picker / cross-run / Range Matrix / RAU → scored against a single
+<strong>scoring pool</strong> (<code>panel.scoring_pool</code>; blank →
+the pool with the most fit_ok antigens, via
+<code>default_scoring_pool</code>). Per-pool AU columns remain in
+specimens CSV; clean results uses the scoring pool.</li>
+</ul></li>
+<li><strong>Settings</strong>: added <code>pool_mode</code> (per_pool |
+auto_select) dropdown + <code>scoring_pool</code> field; wired through
+<code>app.py</code>; verified round-trip + reset → per_pool.</li>
+<li>Refactor: <code>compute_in_range_table</code> /
+<code>compute_concentrations</code> / <code>_build_clean_results</code>
+now take an explicit <code>pool_map</code>; <code>build_pool_map</code>
+applies the mode. <code>auto_select</code> mode preserved (banner
+explains each mode).</li>
+<li>Fixed a <code>html</code> name-shadowing bug
+(<code>html = template.render</code> shadowed the
+<code>import html</code> used by the per-pool heading escape) → render
+var renamed.</li>
+<li>Verified both modes render on the pilot (per-pool: 5 pool grids +
+per-(pool× antigen) summary; auto_select: single grid + Pool
+column).</li>
+<li><strong>Bug fix</strong>: in per-pool mode every pool’s interactive
+grid was emitted with the same Plotly div id
+(<code>fig-curve-grid</code>), so only the first pool’s grid rendered
+and the rest were blank. Threaded a unique <code>div_id</code> per pool
+(<code>fig-curve-grid-{i}</code>) through <code>_make_curve_grid</code>
+→ all pool grids now render.</li>
+</ul>
+</div>
+<div id="session-12-2026-06-02-pc-replicate-qc-pool-group-fix-threshold-restore" class="section level3">
+<h3>Session 12 — 2026-06-02 (PC replicate QC + pool-group fix +
+threshold restore)</h3>
+<ul>
+<li>Confirmed standards run in <strong>duplicate</strong> (2 wells per
+pool × dilution).</li>
+<li>Restored <code>PC_CV_THRESHOLD</code> (default 0.20) — now a real,
+consumed threshold —
+<ul>
+<li>Settings field + POST handler.</li>
+</ul></li>
+<li>New <strong><code>qc_pc_replicates</code></strong> module: %CV
+between duplicate standard wells per (pool × antigen × dilution);
+per-point table + per-(pool × antigen) summary. Wired into the pipeline
+(<code>pc_replicates_*.csv</code> export) and a “PC replicate
+variability” subsection in the report (cards + folded flagged-points
+table + download). Verified end-to-end + settings round-trip.</li>
+<li><strong>Bug fix</strong>: <code>_antigen_group</code> was tagging
+Borrelia <code>TBD_OspA</code>/<code>OspC</code> as <em>cholera</em> via
+a bare “OSP” substring. Cholera now keys on the <code>CHO_</code> prefix
+/ cholera-specific tokens (CtxB/Inaba/Ogawa/cholera/vibrio); verified
+TBD_Osp* → None, CHO_Inaba_OSP → cholera.</li>
+<li>Clarified the pool-column question: full-panel selected-pool
+distribution is 150 Dengue / 44 Orpal / 2 Anti-OSP&amp;cTxB / 1 HlyE / 1
+combined — the cholera/ typhoid pools map only to their targets; the
+rest fall back to the broadly- reactive pooled sera. (Earlier “only
+Dengue/Orpal” was a 12-antigen preview artifact.)</li>
+</ul>
+</div>
+<div id="session-11-2026-06-01-docs-downloads-master-csv-cleanup" class="section level3">
+<h3>Session 11 — 2026-06-01 (Docs + downloads + master CSV +
+cleanup)</h3>
+<ul>
+<li>Rewrote README.md + SPECIFICATION.md for Bangladesh (202-plex /
+384-well / High PMT / multi-pool; sections, pools, auto pool-selection,
+outputs, build).</li>
+<li>Fixed all per-plate CSV download links
+(<code>download_specimens</code> now serves from both
+<code>specimens/</code> and <code>reports/</code>) — verified 9/9 return
+200.</li>
+<li>Added clean master <code>results_&lt;plate&gt;.csv</code>
+(<code>_build_clean_results</code>: well × antigen with pool, MFI,
+<strong>RAU</strong>, status, censored, Serum/DBS matrix) and made
+<code>/export/all</code> lead with a concatenated
+<strong>results</strong> sheet; fixed NC history filename. Verified the
+workbook via a Flask test client.</li>
+<li>Code cleanup: removed dead <code>_make_nc_heatmap</code>,
+<code>get_kit_control_names</code>,
+<code>KIT_CONTROLS</code>/<code>ALL_BEADS</code>,
+<code>PC_CV_THRESHOLD</code>, <code>STANDARD_DILUTIONS</code>, the dead
+<code>standard_dilutions</code> settings handler, and unused
+<code>replicate_qc</code>/<code>kit_controls</code> report params. All
+modules import cleanly.</li>
+<li>This completes the planned scope (Sections 0–11). Remaining items
+are the deferred/in-development ones in Section 10 (Background/NC
+flagging rules, PC replicate variability, picker performance, team
+pool→antigen mapping).</li>
+</ul>
+</div>
+<div id="session-10-2026-06-01-picker-rug-alignment-nc-controls-split" class="section level3">
+<h3>Session 10 — 2026-06-01 (Picker rug alignment + NC controls
+split)</h3>
+<ul>
+<li><strong>Picker rug/curve alignment</strong>: curve and rug panels
+now pinned to the SAME explicit per-antigen log10 y-range
+(<code>_y_range_for</code>, computed from standards + current/historical
+specimen MFIs), set on load and via
+<code>Plotly.relayout({yaxis.range, yaxis2.range})</code> on each pick —
+guarantees a given MFI lands at the same height in both panels.</li>
+<li><strong>Picker linear-range square</strong>: reimplemented as a
+per-antigen filled (“toself”) trace toggled by the existing visibility
+scheme (the layout-shape + relayout approach wasn’t rendering);
+<code>n_per_analyte</code> 2P+6 → 2P+7.</li>
+<li><strong>NC reworked per user decisions</strong>: Negative 0 and
+Negative 49 kept <strong>separate</strong> (<code>_nc_control</code>
+parses the control; duplicate wells averaged within each control).
+Across-plate panels = static grid over <strong>all</strong> antigens,
+one coloured line per control, current-plate markers ringed. NC bar =
+grouped bars per control. NC table gained a <strong>Control</strong>
+column. Clarified the “dots = plates” point (preview used synthetic
+plates).</li>
+<li>Verified on Plate 1: 4 NC wells → Negative 0 / Negative 49; panels,
+grouped bar, and table all split by control.</li>
+</ul>
+</div>
+<div id="session-9-2026-06-01-picker-linear-range-square-nc-rework" class="section level3">
+<h3>Session 9 — 2026-06-01 (Picker linear-range square + NC rework)</h3>
+<ul>
+<li><strong>Picker linear-range square</strong>: added a per-antigen
+green reportable-range rectangle to the Standard-Curve Picker (log10
+coords on the log axes), appended to the static rug-separator shapes and
+swapped per antigen via <code>Plotly.relayout(DIV,&quot;shapes&quot;,…)</code>;
+description updated.</li>
+<li><strong>NC QC reworked to the legacy MPOX style</strong>: replaced
+the two purple heatmaps with (1) per-antigen “Negative Control MFI
+across plates” small-multiples (<code>_make_nc_history_plot</code> now a
+subplot grid; line + markers across plates, current plate red; bounded
+to priority antigens, capped at 48), and (2) a folded “NC details for
+this plate” containing a mean-NC-MFI-by-analyte bar
+(<code>_make_nc_bar</code>, scrollable) + a Well/Analyte/MFI table
+(<code>_format_nc_table</code>). Banner rewritten accordingly.</li>
+<li>Verified: picker carries shapes + relayout; NC panels/bar/table
+render; old <code>fig-nc-heatmap</code> removed.</li>
+<li>Remaining: README/SPEC rewrite for the Bangladesh context.</li>
+</ul>
+</div>
+<div id="session-8-2026-06-01-section-8-descriptions-audit" class="section level3">
+<h3>Session 8 — 2026-06-01 (Section 8: Descriptions audit)</h3>
+<ul>
+<li>Swept all report/upload copy for accuracy and stale Uvira/MPXV
+references:
+<ul>
+<li>NC QC banner rewritten (Bangladesh <code>Negative</code> pattern,
+<code>Background0</code>, pre-2019 NA plasma; “deeper NC QC in
+development” note; updated “no NC” copy).</li>
+<li>Downloads: Background QC desc (flags reference-only), Range-Matrix
+desc (auto-selected pool; removed barcode/patient_id/box_id Uvira
+wording).</li>
+<li>Upload page: input-file + barcode-map fields marked optional / not
+needed (wells classified from the sample name; IDs in
+<code>{id}_r3_{Serum|DBS}</code>).</li>
+</ul></li>
+<li>Verified report renders and a grep sweep finds no remaining
+Uvira/MPXV/MagPix/RENAMED/Row-A/Standard1/12-plex copy.</li>
+<li>Next: rewrite README.md + SPECIFICATION.md for the Bangladesh
+202-plex / 384- well / multi-pool context (Section 0 leftover).</li>
+</ul>
+</div>
+<div id="session-7-2026-06-01-section-7-settings-audit" class="section level3">
+<h3>Session 7 — 2026-06-01 (Section 7: Settings audit)</h3>
+<ul>
+<li>Confirmed all flag thresholds are editable AND read live from
+config: bead RED/YELLOW (via <code>qc_bead_counts</code>),
+problem-fraction, background %CV, background max-MFI, recovery tolerance
+(via <code>qc_thresholds</code>), priority antigens (via
+<code>panel</code>). Nothing hard-coded in the report path.</li>
+<li>Cleaned the Settings page: removed the unused “Standard Dilutions”
+field (dilutions now parsed per-pool from sample names) → replaced with
+a note; rewrote Well-Classification labels/help for Bangladesh naming
+(<code>Background0</code> / <code>Pilot Control:</code> /
+<code>Negative</code> / <code>{id}_r3_{Serum|DBS}</code>); clarified
+bead labels (“RED below”/“YELLOW below”); marked the two Background
+thresholds as reference-only (flagging still in development).</li>
+<li>Verified the full Settings round-trip with a Flask test client (GET
+renders, POST persists every threshold + the priority list, reset
+restores defaults).</li>
+<li>Next: Section 8 (descriptions audit across all sections), then
+README / SPEC rewrite for the Bangladesh context.</li>
+</ul>
+</div>
+<div id="session-6-2026-06-01-section-6-range-matrix-serumdbs" class="section level3">
+<h3>Session 6 — 2026-06-01 (Section 6: Range Matrix + Serum/DBS)</h3>
+<ul>
+<li>Added shared <strong><code>_frozen_label_heatmap</code></strong>
+helper (frozen antigen-label pane + horizontal-scroll well pane); the
+Range Matrix now uses it — bare well-location top axis, hover = Antigen
+/ Well / Sample / Status. (Bead matrix keeps its own equivalent inline
+version.)</li>
+<li><strong><code>_make_serum_dbs_comparison</code></strong>: folded
+Serum-vs-DBS scatter (scattergl) under the Range Matrix — pairs
+<code>{id}_r3_{Serum|DBS}</code> per person × antigen, y=x reference,
+per-point hover. Hidden when no matched pairs exist.</li>
+<li>Clarified earlier preview confusion (Section 5): the “handful of
+antigens” was a fast-preview artifact (only ~10–24 antigens fit to dodge
+the 45 s tool cap); the real pipeline fits all ~200 (198/200 get a
+usable fit). Logged a picker performance follow-up (full-panel report is
+slow).</li>
+<li>Verified: range matrix frozen panes + enriched hover; serum/dbs
+section builds and pairs on the pilot specimens.</li>
+<li><strong>Follow-up (Section 6):</strong> upgraded both the bead
+matrix and the range matrix to full <strong>freeze panes</strong> —
+promoted the helper to <code>_freeze_pane_heatmap</code> (frozen corner
++ frozen column header for well positions + frozen row header for
+antigens + scrolling body), with a small JS shim syncing the body’s
+horizontal scroll → column header and vertical scroll → row header. Now
+both the antigen names AND the well positions stay visible while
+scrolling either way. Bead matrix retains its well-type group
+separators.</li>
+<li>Next: Section 7 (Settings completeness — confirm all flag thresholds
+editable) and Section 8 (descriptions audit), then README/SPEC
+rewrite.</li>
+</ul>
+</div>
+<div id="session-5-2026-06-01-section-5-standard-curves" class="section level3">
+<h3>Session 5 — 2026-06-01 (Section 5: Standard curves)</h3>
+<ul>
+<li><strong>Priority-pathogen setting</strong>:
+<code>panel.priority_antigens</code> (default empty = all) added to
+config, <code>settings.html</code>, <code>app.py</code> POST, and
+<code>get_priority_antigens</code>.</li>
+<li><strong><code>_build_selected_fits</code></strong>: per-antigen fit
+from its auto-selected pool (pool injected), shaped as a single-pool
+dict; one <code>selected_fits</code> feeds Summary / Overview / Picker.
+Priority list derived (panel order; empty = all).</li>
+<li><strong>Standard-Curve Summary</strong>: now priority-filtered, with
+a <strong>Pool</strong> column and a “fit for all antigens / curves
+shown for priority” note.</li>
+<li><strong>All-Curves Overview</strong> rebuilt: interactive Plotly
+small-multiples (<code>_make_curve_grid_interactive</code>) for ≤ 48
+panels — hover, current-plate status-coloured <strong>rug</strong>,
+green <strong>linear-range square</strong>, red 4PL line, blue observed
+points, red-triangle out-of-tolerance standards, ✕ dropped point.
+<code>_make_curve_grid_static</code> keeps the matplotlib grid (now with
+the square) for larger/unfiltered sets. Linear-range geometry via
+<code>_linear_range_box</code>.</li>
+<li><strong>Standard-Curve Picker</strong> folded by default with a
+“review only” disclaimer; now spans all antigens via their selected-pool
+fits.</li>
+<li>Verified: default (all) shows the Pool column + note; priority
+filter narrows the Summary/Overview to the chosen antigens; interactive
+grid carries the square + rug + out-of-tolerance markers; picker
+collapsed with disclaimer.</li>
+<li>Follow-up: add the linear-range square inside the picker curve too
+(deferred); PC Replicate Variability + NC levels still later (Section 9
+/ general).</li>
+<li>Next: Section 6 (Range Matrix axis change + Serum/DBS paired
+sub-section), then Section 7/8 (settings completeness + descriptions
+audit).</li>
+</ul>
+</div>
+<div id="session-4-2026-06-01-section-3-finalize-section-4-background-qc" class="section level3">
+<h3>Session 4 — 2026-06-01 (Section 3 finalize + Section 4: Background
+QC)</h3>
+<ul>
+<li>Finalized Section 3 (bead matrix frozen labels + sizing) per user
+approval.</li>
+<li><strong>Section 4 — Background QC overhaul:</strong>
+<ul>
+<li>Max-MFI default 100 → <strong>300</strong> everywhere (config,
+qc_background, pipeline, report fallback, settings.html).</li>
+<li><code>qc_background_levels</code> now returns the <strong>individual
+Background-well MFIs</strong> plus the current-plate <strong>IQR
+(Q1/Q3)</strong>; mean/sd/cv/max retained for the plot + history.
+Flagging columns kept for reference only (display deferred).</li>
+<li><strong>Overview plot</strong>: new <code>_bg_overview_iqr</code> —
+≥3 plates shows previous-plate IQR bars (current excluded) +
+current-plate dot, outside-IQR dots flagged red; &lt;3 plates keeps the
+dot scatter. <code>_make_background_overview_plot</code> branches on
+plate count.</li>
+<li><strong>Description rewritten</strong> (clear, accurate; no stale
+mean/max copy; states flagging is in development).</li>
+<li><strong>Per-antigen table</strong>: folded by default, scrollable;
+columns Analyte / n wells / Individual MFIs / SD / %CV / IQR current
+plate / IQR previous plates. Mean/Max/flag columns removed.</li>
+<li>Cards now neutral (no premature pass/fail).</li>
+<li>Verified: single-plate report renders (table + columns + note);
+≥3-plate IQR overview + previous-plate IQR column verified with a
+synthetic history.</li>
+</ul></li>
+<li>Next: Section 5 (standard curves — multi-pool priority display,
+interactive All-Curves Overview with rug + linear-range square, folded
+picker).</li>
+</ul>
+</div>
+<div id="session-3-2026-06-01-section-3-bead-count" class="section level3">
+<h3>Session 3 — 2026-06-01 (Section 3: Bead Count)</h3>
+<ul>
+<li>Reordered report: <strong>Plate Overview → Bead Count → Background
+QC → …</strong> (swapped the template <code>&lt;details&gt;</code>
+blocks, renumbered section comments 1–9, and reordered the figure builds
+in <code>report.py</code> so <code>bead_heatmap</code> is built before
+<code>bg_overview</code> — preserves the “Plotly.js embeds on first
+call” DOM invariant).</li>
+<li>Rewrote the four Bead Count cards in plain language (counts vs
+&lt;30 / 30–49 thresholds and the ≥X% flag, all from settings); fixed to
+a 4-column row.</li>
+<li>Bead-count heatmap: dropped the sample-ID text from the top axis
+(well location only); hover now shows Antigen / Well / Sample / Bead
+count / Tier.</li>
+<li>Left “red / yellow cell” wording only where it correctly names the
+heatmap tiers (the detail list + download descriptions), per the colour
+legend.</li>
+<li>Verified on Plate 1: DOM order correct, new card copy present, hover
+enriched.</li>
+<li>Plate Overview review fixes from last round also confirmed (compact
+6-card row, top-centered plate-map legend, trimmed map
+description).</li>
+<li><strong>Review fixes (Section 3):</strong> the wide bead heatmap was
+stretching the whole page — fixed with <code>min-width:0</code> on the
+<code>1fr</code> content grid track (and on the scroll pane). Reworked
+the matrix into a <strong>frozen left antigen-label pane +
+horizontally-scrolling heatmap</strong> (per user choice “antigens left,
+freeze them”), shrank fonts to 7px and cells to 10×9px, and fixed the
+large label↔︎cell gap (left-margin sizing) so long antigen names aren’t
+clipped.</li>
+<li>Section 3 finalized and approved.</li>
+<li>Next: Section 4 (Background QC overhaul — max-MFI default 300,
+rewritten description, IQR overview plot, folded/scrollable table with
+individual MFIs + current/previous-plate IQR columns).</li>
+</ul>
+</div>
 <div id="session-2-2026-06-01-section-2-plate-overview-rebuild" class="section level3">
 <h3>Session 2 — 2026-06-01 (Section 2: Plate Overview rebuild)</h3>
 <ul>

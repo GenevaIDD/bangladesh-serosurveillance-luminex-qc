@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .parse_xponent import parse_xponent_csv
@@ -11,6 +13,7 @@ from .classify import classify_wells
 from .qc_beads import qc_bead_counts, bead_problem_summary
 from .qc_nc import qc_nc_levels
 from .qc_background import qc_background_levels
+from .qc_pc_replicates import qc_pc_replicates
 from .qc_standard_curve import (
     fit_standard_curves,
     compute_concentrations,
@@ -18,6 +21,8 @@ from .qc_standard_curve import (
     compute_in_range_table,
     compute_pct_in_range_per_antigen,
     range_problem_summary,
+    build_pool_map,
+    _pool_slug,
 )
 from .settings import get_excluded_analytes
 from .qc_history import load_history, append_history, save_history
@@ -125,16 +130,21 @@ def run_pipeline(
     # — were removed in Session 4: Uvira plates have no PC duplicates, no
     # MagPix kit-control beads, and the row-A "Background" wells are
     # already classified as NC; their MFI is reported alongside specimens.)
-    specimen_results = compute_concentrations(data, fits, config=config)
+    # Antigen → pool mapping for specimen scoring. In the default per-pool
+    # mode this is a single scoring pool for every antigen (no per-antigen
+    # auto-selection); in auto_select mode it's the pathogen match + best fit.
+    pool_map = build_pool_map(fits, antigens=None, config=config)
+    specimen_results = compute_concentrations(data, fits, config=config, pool_map=pool_map)
     data = compute_net_mfi(data)
     if "net_mfi" in data.columns:
         specimen_results["net_mfi"] = data.loc[specimen_results.index, "net_mfi"]
 
     # 9b. Section-3 deliverables: per-(antigen × sample) range table
-    # and the per-antigen "% samples in linear range" summary. Each antigen
-    # is scored against its auto-selected pool's curve.
+    # and the per-antigen "% samples in linear range" summary, scored against
+    # the mapped pool.
     excluded_analytes = get_excluded_analytes(config)
-    in_range = compute_in_range_table(data, fits, excluded_analytes=excluded_analytes, config=config)
+    in_range = compute_in_range_table(data, fits, excluded_analytes=excluded_analytes,
+                                      config=config, pool_map=pool_map)
     pct_in_range = compute_pct_in_range_per_antigen(in_range, excluded_analytes=excluded_analytes)
 
     # 9c. NC well levels (empty when the plate has no NC samples).
@@ -157,8 +167,12 @@ def run_pipeline(
     bg_levels = qc_background_levels(
         data,
         cv_threshold=float(qc_thresh.get("bg_cv_threshold", 0.25)),
-        max_mfi_threshold=float(qc_thresh.get("bg_max_mfi", 100)),
+        max_mfi_threshold=float(qc_thresh.get("bg_max_mfi", 300)),
         excluded_analytes=excluded_analytes,
+    )
+    # PC replicate variability — %CV between duplicate standard wells.
+    pc_replicates = qc_pc_replicates(
+        data, cv_threshold=float(qc_thresh.get("pc_cv_threshold", 0.20)),
     )
 
     # 10. Plate summary
@@ -250,6 +264,7 @@ def run_pipeline(
         in_range=in_range,
         pct_in_range=pct_in_range,
         nc_levels=nc_levels,
+        pc_replicates=pc_replicates,
         history_std=history_std,
         history_nc=history_nc,
         history_fit=history_fit,
@@ -298,6 +313,16 @@ def run_pipeline(
 
         export_df.to_csv(csv_out, index=False, encoding="utf-8")
 
+    # 13b. Clean per-plate results CSV — the tidy, analysis-ready table
+    # (one row per specimen well × antigen) with the selected pool, RAU/AU,
+    # and range status. This is what the master export concatenates.
+    clean = _build_clean_results(metadata, in_range, specimen_results, fits, config, pool_map)
+    if clean is not None and not clean.empty:
+        clean.to_csv(
+            output_dir / f"results_{metadata['plate_id']}.csv",
+            index=False, encoding="utf-8",
+        )
+
     # 14. Export Section-3 deliverables: per-(antigen × sample) IN/OUT-of-
     # range table and per-antigen %-in-range summary.
     if not in_range.empty:
@@ -322,6 +347,13 @@ def run_pipeline(
     if bg_levels is not None and not bg_levels.empty:
         bg_levels.to_csv(
             output_dir / f"background_qc_{metadata['plate_id']}.csv",
+            index=False, encoding="utf-8",
+        )
+    # PC replicate variability — per (pool × antigen × dilution) %CV.
+    pc_pts = pc_replicates.get("points") if pc_replicates else None
+    if pc_pts is not None and not pc_pts.empty:
+        pc_pts.to_csv(
+            output_dir / f"pc_replicates_{metadata['plate_id']}.csv",
             index=False, encoding="utf-8",
         )
     # Section-8 problem CSVs: per-antigen and per-sample summaries for
@@ -357,6 +389,93 @@ def run_pipeline(
         )
 
     return report_path
+
+
+_MATRIX_RE = re.compile(r"_r\d+_(serum|dbs)$", re.IGNORECASE)
+
+
+def _matrix_series(sample_ids: pd.Series) -> pd.Series:
+    """Serum/DBS matrix parsed from the sample name."""
+    disp = {"serum": "Serum", "dbs": "DBS"}
+    return (sample_ids.astype(str).str.extract(_MATRIX_RE, expand=False)
+            .str.lower().map(disp))
+
+
+def _build_clean_results(metadata, in_range, specimen_results, fits, config, pool_map=None) -> pd.DataFrame:
+    """Clean, analysis-ready per-(specimen well × antigen) master results table.
+
+    The shape depends on the scoring mode (``panel.pool_mode``):
+
+    - **per_pool** (default — "fit every pool × antigen, no auto-selecting"):
+      a *wide* table with one row per (well × antigen) and a RAU + status
+      column pair for **every** control pool, e.g. ``RAU (Dengue pool)`` /
+      ``status (Dengue pool)``. Antigens a pool never calibrated read
+      ``NO_FIT``. This avoids the misleading single-pool collapse (where every
+      antigen looked like it came from one pool).
+
+    - **auto_select**: a *tidy* single-pool table — plate_id, well, sample_id,
+      matrix, analyte, ``pool`` (the auto-selected calibrating pool), mfi, RAU,
+      status, censored.
+
+    Common columns: plate_id, well, sample_id, matrix (Serum/DBS), analyte, mfi.
+    """
+    if in_range is None or in_range.empty:
+        return pd.DataFrame()
+
+    base = in_range[["well", "sample_name", "analyte", "mfi"]].copy()
+    base = base.rename(columns={"sample_name": "sample_id"})
+    base["matrix"] = _matrix_series(base["sample_id"])
+    base.insert(0, "plate_id", metadata.get("plate_id", ""))
+
+    pool_mode = (config or {}).get("panel", {}).get("pool_mode", "per_pool")
+    sr = specimen_results if (specimen_results is not None and not specimen_results.empty) else None
+
+    # ---- per_pool mode: wide table, RAU + status under every pool ----------
+    if pool_mode != "auto_select" and fits:
+        out = base[["plate_id", "well", "sample_id", "matrix", "analyte", "mfi"]].copy()
+        for pool in sorted(fits.keys()):
+            slug = _pool_slug(pool)
+            rau_col, lloq_col, uloq_col = f"rau_{slug}", f"below_lloq_{slug}", f"above_uloq_{slug}"
+            rau = pd.Series(np.nan, index=out.index)
+            status = pd.Series("NO_FIT", index=out.index)
+            if sr is not None and rau_col in sr.columns:
+                merged = out[["well", "analyte"]].merge(
+                    sr[["well", "analyte", rau_col,
+                        *(c for c in (lloq_col, uloq_col) if c in sr.columns)]],
+                    on=["well", "analyte"], how="left")
+                rau = merged[rau_col]
+                has = rau.notna().to_numpy()
+                below = (merged[lloq_col].fillna(False).to_numpy()
+                         if lloq_col in merged else np.zeros(len(merged), bool))
+                above = (merged[uloq_col].fillna(False).to_numpy()
+                         if uloq_col in merged else np.zeros(len(merged), bool))
+                status = np.where(~has, "NO_FIT",
+                                  np.where(below, "BELOW_RANGE",
+                                           np.where(above, "ABOVE_RANGE", "IN_RANGE")))
+            out[f"RAU ({pool})"] = pd.Series(rau).astype(float).round(2).to_numpy()
+            out[f"status ({pool})"] = status
+        return out
+
+    # ---- auto_select mode: tidy single (selected) pool table ---------------
+    out = base.copy()
+    out["status"] = in_range["status"].to_numpy()
+    selected = pool_map if pool_map is not None else build_pool_map(fits, None, config)
+    out["pool"] = out["analyte"].map(selected).fillna("—")
+    if sr is not None and "rau" in sr.columns:
+        out = out.merge(sr[["well", "analyte", "rau"]].rename(columns={"rau": "RAU"}),
+                        on=["well", "analyte"], how="left")
+        if {"below_lloq", "above_uloq"}.issubset(sr.columns):
+            cen = sr[["well", "analyte", "below_lloq", "above_uloq"]].copy()
+            cen["censored"] = "none"
+            cen.loc[cen["below_lloq"], "censored"] = "left"
+            cen.loc[cen["above_uloq"], "censored"] = "right"
+            out = out.merge(cen[["well", "analyte", "censored"]], on=["well", "analyte"], how="left")
+    if "RAU" not in out.columns:
+        out["RAU"] = float("nan")
+    if "censored" not in out.columns:
+        out["censored"] = "none"
+    return out[["plate_id", "well", "sample_id", "matrix", "analyte", "pool",
+                "mfi", "RAU", "status", "censored"]]
 
 
 def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> pd.DataFrame:

@@ -320,91 +320,93 @@
 <summary>Background QC</summary>
 <div class="inner">
   {% if bg_levels.present %}
-  <div class="stat-row">
-    <div class="stat {{ 'flag-on' if bg_levels.n_cv_flag else 'flag-off' }}">
-      <div class="num">{{ bg_levels.n_cv_flag }}</div>
-      <div class="lbl">Antigens with Background %CV &gt; {{ bg_cv_pct }}%</div>
-    </div>
-    <div class="stat {{ 'flag-on' if bg_levels.n_max_flag else 'flag-off' }}">
-      <div class="num">{{ bg_levels.n_max_flag }}</div>
-      <div class="lbl">Antigens with any Background MFI &gt; {{ bg_max_mfi }}</div>
-    </div>
-    <div class="stat">
-      <div class="num">{{ bg_levels.rows | length }}</div>
+  <div class="stat-row" style="grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px;">
+    <div class="stat" style="padding:10px 12px;">
+      <div class="num">{{ bg_levels.n_antigens }}</div>
       <div class="lbl">Antigens with Background data</div>
+    </div>
+    <div class="stat" style="padding:10px 12px;">
+      <div class="num">{{ plate_counts.background }}</div>
+      <div class="lbl">Background (blank) wells on this plate</div>
+    </div>
+    <div class="stat" style="padding:10px 12px;">
+      <div class="num">{{ bg_levels.n_prev_plates }}</div>
+      <div class="lbl">Previous plates in history (basis for the IQR comparison)</div>
     </div>
   </div>
 
   <div class="banner" style="margin-top:14px;">
-    <b>How Background QC works.</b> Background wells are the plate
-    blanks — wells where no specimen was loaded (Row A / A11 &amp; A12
-    on the pilot). For each antigen we look at every Background
-    well's MFI and ask three things:
-    <ol style="margin:6px 0 0 22px; padding:0;">
-      <li><b>Mean Background MFI.</b> The average non-specific signal
-        for that antigen. A useful baseline; not flagged on its own.</li>
-      <li><b>%CV across Background wells.</b> Standard deviation
-        divided by the mean, expressed as a percentage. Measures how
-        <em>consistent</em> the background is well-to-well. If %CV is
-        high, the antigen's background signal is noisy and any
-        downstream specimen result for that antigen is less
-        trustworthy. Antigens are flagged
-        <span class="badge badge-red">CV</span> when %CV exceeds
-        <b>{{ bg_cv_pct }}%</b> (editable on the Settings page).</li>
-      <li><b>Max Background MFI.</b> The single highest MFI seen in
-        any Background well for that antigen. A high value suggests
-        contamination, carry-over, or cross-reactivity from the bead
-        itself. Antigens are flagged
-        <span class="badge badge-orange">MAX</span> when any
-        Background well exceeds <b>{{ bg_max_mfi }} MFI</b>
-        (editable on the Settings page).</li>
-    </ol>
-    Antigens with neither flag get <span class="badge badge-green">OK</span>.
+    <b>How Background QC works.</b> Background wells are the plate blanks —
+    wells with no specimen (sample name <code>Background0</code>;
+    {{ plate_counts.background }} wells on this plate). For each antigen we
+    summarise the signal across those wells and track it over time:
+    <ul style="margin:6px 0 0 18px; padding:0;">
+      <li><b>Spread within this plate.</b> The individual Background-well
+        MFIs, their <b>SD</b>, and <b>%CV</b> (SD ÷ mean) show how consistent
+        the blank signal is well-to-well. A high %CV means the antigen's
+        background is noisy on this plate.</li>
+      <li><b>This plate vs history.</b> The overview below compares this
+        plate's mean Background MFI for each antigen against the spread seen
+        on previous plates, so you can spot antigens reading unusually high
+        or low this run.</li>
+    </ul>
+    A reference max-MFI threshold (<b>{{ bg_max_mfi }}</b>, editable on the
+    Settings page) is tracked, but <b>formal Background pass/fail flagging is
+    still in development</b> — no antigens are flagged as failing here yet.
   </div>
 
   {% if bg_overview_present %}
   <h3 style="margin-top:18px;">Background MFI overview (all plates)</h3>
   <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
-    Mean Background MFI per antigen, one point per plate-run. Antigens
-    appear in panel order (the order they were exported in the xPONENT
-    CSV header) so a given x-position always refers to the same bead
-    region across plates. Click a plate in the legend to hide / show
-    it.
+    Mean Background MFI per antigen, in panel order (the xPONENT CSV header
+    order), so each x-position is the same bead region across plates.
+    {% if bg_levels.n_prev_plates >= 2 %}
+    With ≥ 3 plates total, each grey bar spans the <b>interquartile range
+    (Q1–Q3)</b> of the <em>previous</em> plates' means and the dot is this
+    plate's mean; dots <span style="color:#e74c3c;">outside the IQR</span>
+    are marked for review (provisional — flagging rules still in development).
+    {% else %}
+    One point per plate-run while fewer than 3 plates have been processed;
+    the IQR-band view turns on once a third plate is added. Click a plate in
+    the legend to hide / show it.
+    {% endif %}
   </p>
   {{ bg_overview_html | safe }}
   {% endif %}
 
-  <h3 style="margin-top:18px;">Per-antigen Background QC table</h3>
-  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
-    One row per antigen.  Sort or scroll to find specific flags.
-  </p>
-  <div class="scroll-tbl">
-    <table>
-      <thead>
-        <tr>
-          <th>Analyte</th><th>n wells</th><th>Mean MFI</th><th>SD</th>
-          <th>%CV</th><th>Max MFI</th><th>Flags</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in bg_levels.rows %}
-        <tr class="{% if r.excluded %}muted{% endif %}">
-          <td>{{ r.analyte }}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
-          <td>{{ r.n_wells }}</td>
-          <td>{{ r.mean_mfi }}</td>
-          <td>{{ r.sd_mfi }}</td>
-          <td>{{ r.cv_pct }}</td>
-          <td>{{ r.max_mfi }}</td>
-          <td>
-            {% if r.cv_flag %}<span class="badge badge-red">CV</span>{% endif %}
-            {% if r.max_flag %}<span class="badge badge-orange">MAX</span>{% endif %}
-            {% if not r.cv_flag and not r.max_flag %}<span class="badge badge-green">OK</span>{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <details style="margin-top:18px;">
+    <summary><b>Per-antigen Background QC table</b> ({{ bg_levels.n_antigens }} antigens) — click to expand</summary>
+    <p style="margin:8px 0 8px; color:#7f8c8d; font-size:13px;">
+      One row per antigen: the individual Background-well MFIs, their SD and
+      %CV, the IQR of this plate's Background wells, and the IQR of the mean
+      Background MFI across previous plates. Scroll horizontally / vertically
+      for the full panel. (Pass/fail flags are deferred — still in development.)
+    </p>
+    <div style="max-width:100%; max-height:560px; overflow:auto; border:1px solid #e1e4e8; border-radius:4px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Analyte</th><th>n wells</th><th>Individual MFIs</th>
+            <th>SD</th><th>%CV</th>
+            <th>IQR current plate (Q1–Q3)</th><th>IQR previous plates (Q1–Q3)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in bg_levels.rows %}
+          <tr class="{% if r.excluded %}muted{% endif %}">
+            <td>{{ r.analyte }}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+            <td>{{ r.n_wells }}</td>
+            <td style="font-size:12px;">{{ r.mfis }}</td>
+            <td>{{ r.sd_mfi }}</td>
+            <td>{{ r.cv_pct }}</td>
+            <td>{{ r.iqr_current }}</td>
+            <td>{{ r.iqr_previous }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
   {% else %}
   <div class="banner">No Background wells on this plate.</div>
   {% endif %}
@@ -435,30 +437,37 @@
     </div>
   </div>
 
+  {% if pool_selection and pool_selection.n_pools > 1 and pool_mode == "per_pool" %}
+  <p style="margin:6px 0 0; color:#7f8c8d; font-size:12px;">
+    These below/above flags are computed against the single <b>scoring pool</b>
+    ({{ scoring_pool or "first pool" }}) — see the note below. An antigen that a
+    different pool calibrates is still judged here against the scoring pool's
+    curve, so treat its flag with care.
+  </p>
+  {% endif %}
+
   {% if pool_selection and pool_selection.n_pools > 1 %}
   <div class="banner" style="margin-top:14px;">
-    <b>Multiple control pools — how each antigen is scored.</b> This plate
-    carries <b>{{ pool_selection.n_pools }}</b> control pools, each a separate
-    dilution series:
-    <span>{{ pool_selection.pools | join(", ") }}</span>.
-    A 4PL standard curve is fit for <em>every</em> antigen against
-    <em>every</em> pool, but a specimen can only be scored against one curve
-    per antigen. The tool picks that curve automatically:
-    <ul style="margin:6px 0 0 18px; padding:0;">
-      <li>It reads the <b>pathogen from the antigen name</b> (e.g.
-        <code>ARB_DENV*</code> → dengue, <code>CHO_*</code>/OSP/CtxB → cholera,
-        <code>*HlyE*</code> → typhoid) and matches it to the pool(s) meant to
-        calibrate that pathogen.</li>
-      <li>When more than one pool targets the same pathogen (e.g. the Dengue
-        pool and ORPAL both cover dengue), it keeps the <b>best-fitting curve</b>
-        — the one that passes Fit-OK and has the highest R².</li>
-      <li>Antigens whose pathogen isn't one of the calibrated targets fall back
-        to the best-fitting pool available.</li>
-    </ul>
-    Antigens chosen per pool on this plate:
-    <span>{% for r in pool_selection.rows %}{{ r.pool }} ({{ r.n_antigens }}){% if not loop.last %}; {% endif %}{% endfor %}</span>.
-    This mapping is the default and will be overridable on the Settings page
-    once the pathogen rules are signed off.
+    {% if pool_mode == "per_pool" %}
+    <b>Multiple control pools — fit per pool.</b> This plate carries
+    <b>{{ pool_selection.n_pools }}</b> control pools, each its own dilution
+    series: <span>{{ pool_selection.pools | join(", ") }}</span>. A 4PL is fit
+    for <em>every antigen against every pool</em> — there is <b>no</b>
+    antigen→pool matching or auto-selection. The table below has one row per
+    (pool × antigen); the All-Curves Overview shows one grid per pool.
+    <br>Specimen <b>RAU / range</b> are computed against a single
+    <b>scoring pool</b> ({{ scoring_pool or "first pool" }}, editable on the
+    Settings page); per-pool AU columns are in the specimens CSV. Because each
+    pool uses its own dilution series, RAU is anchored per pool and not directly
+    comparable across pools. You can switch to automatic pool-selection on the
+    Settings page.
+    {% else %}
+    <b>Multiple control pools — auto-selected per antigen.</b> A 4PL is fit for
+    every antigen against every pool ({{ pool_selection.pools | join(", ") }});
+    each antigen is scored against the pool matched to its pathogen, tie-broken
+    by best fit (see the <b>Pool</b> column). Switch to per-pool on the Settings
+    page to show every pool's curve instead.
+    {% endif %}
   </div>
   {% endif %}
 
@@ -479,14 +488,38 @@
   </div>
 
   <p style="margin-top:14px;">
+    {% if pool_mode == "per_pool" %}
+    One row per <b>(control pool × antigen)</b> — a 4PL is fit for every antigen
+    against every pool. The <b>% in range</b> column is left blank here because
+    it is a single-pool scoring metric; specimens are scored in the Range Matrix
+    against the scoring pool.
+    {% else %}
     One row per antigen. <b>%-in-range</b> is the fraction of specimens
     whose MFI falls between the antigen's LLOQ and ULOQ on the 4PL.
+    {% endif %}
   </p>
+  <div class="banner" style="margin-top:10px;">
+    Showing
+    {% if priority_is_all %}<b>all {{ n_priority_antigens }}</b> antigens
+    (no priority list set — define priority antigens on the Settings page to
+    focus on the curves meant to be interpreted){% else %}the
+    <b>{{ n_priority_antigens }}</b> priority antigen(s) of {{ n_panel_antigens }}
+    on the panel (set on the Settings page){% endif %}.
+    {% if pool_mode == "per_pool" %}
+    Each antigen appears once per control pool (see the <b>Pool</b> column); a
+    4PL is fit for every antigen × pool, with no matching or auto-selection. Use
+    the Standard-Curve Picker below to review any of them.
+    {% else %}
+    Each antigen is shown against its auto-selected control pool (see the
+    <b>Pool</b> column). Curves are still fit for every antigen — use the
+    Standard-Curve Picker below to review any of them.
+    {% endif %}
+  </div>
   <div class="scroll-tbl">
     <table>
       <thead>
         <tr>
-          <th>Analyte</th><th>Fit OK</th><th>n pts</th>
+          <th>Analyte</th><th>Pool</th><th>Fit OK</th><th>n pts</th>
           <th>a (min asym)</th><th>b (slope)</th>
           <th>c (IC50)</th><th>d (max asym)</th>
           <th>LLOQ dil.</th><th>ULOQ dil.</th>
@@ -498,6 +531,7 @@
         {% for row in curve_summary %}
         <tr class="{% if row.excluded %}muted{% endif %}">
           <td>{{ row.analyte }}{% if row.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+          <td style="font-size:12px;">{{ row.pool }}</td>
           <td>{% if row.fit_ok %}<span class="badge badge-ok">OK</span>{% else %}<span class="badge badge-warn">FAIL</span>{% endif %}</td>
           <td>{{ row.n_points }}</td>
           <td>{{ row.a }}</td><td>{{ row.b }}</td>
@@ -569,6 +603,48 @@
     </div>
   </details>
   {% endif %}
+
+  {% if pc_repl.present %}
+  <h3 style="margin-top:20px;">PC replicate variability</h3>
+  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
+    Each standard dilution point is run in <b>duplicate</b>. This checks the
+    <b>%CV between the two replicate wells</b> at every (pool × antigen ×
+    dilution) point — high values mean a noisy standard before the curve fit
+    averages the duplicates away.
+  </p>
+  <div class="stat-row" style="grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px;">
+    <div class="stat {{ 'flag-on' if pc_repl.n_flagged else 'flag-off' }}" style="padding:10px 12px;">
+      <div class="num">{{ pc_repl.n_flagged }}</div>
+      <div class="lbl">Standard points flagged (replicate %CV &gt; {{ pc_repl.threshold_pct }}%)</div>
+    </div>
+    <div class="stat" style="padding:10px 12px;">
+      <div class="num">{{ pc_repl.n_points }}</div>
+      <div class="lbl">Duplicate standard points assessed</div>
+    </div>
+    <div class="stat" style="padding:10px 12px;">
+      <div class="num">{{ pc_repl.threshold_pct }}%</div>
+      <div class="lbl">Replicate %CV threshold (editable in Settings)</div>
+    </div>
+  </div>
+  {% if pc_repl.flagged %}
+  <details style="margin-top:10px;">
+    <summary>Flagged standard points ({{ pc_repl.flagged | length }}) — worst %CV first</summary>
+    <div class="scroll-tbl" style="max-height:360px;">
+      <table>
+        <thead><tr><th>Pool</th><th>Analyte</th><th>Dilution (1:x)</th><th>n reps</th><th>Mean MFI</th><th>%CV</th></tr></thead>
+        <tbody>
+          {% for r in pc_repl.flagged %}
+          <tr><td style="font-size:12px;">{{ r.pool }}</td><td>{{ r.analyte }}</td>
+            <td>{{ r.dilution }}</td><td>{{ r.n_reps }}</td><td>{{ r.mean_mfi }}</td><td>{{ r.cv_pct }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% else %}
+  <div class="banner" style="margin-top:8px;">All duplicate standard points are within the replicate %CV threshold. ✓</div>
+  {% endif %}
+  {% endif %}
 </div>
 </details>
 
@@ -577,28 +653,70 @@
 <summary>All Curves Overview</summary>
 <div class="inner">
   <p style="margin-top:0; color:#7f8c8d; font-size:13px;">
-    Every 4PL fit at a glance. Panel-title colour:
+    {% if pool_mode == "per_pool" %}
+    One grid <b>per control pool</b>; within each, the 4PL fit for every
+    {% if priority_is_all %}antigen{% else %}<b>priority</b> antigen{% endif %}
+    against that pool (no matching/auto-selection).
+    {% else %}
+    The 4PL fit for each
+    {% if priority_is_all %}antigen{% else %}<b>priority</b> antigen{% endif %}
+    (its auto-selected pool's curve).
+    {% endif %}
+    Panel-title colour:
     <span style="color:#27ae60; font-weight:600;">green = Fit OK</span> ·
     <span style="color:#e74c3c; font-weight:600;">red = Fit failed</span> ·
     <span style="color:#95a5a6; font-weight:600;">grey = excluded</span>.
-    See the Standard-Curve Summary above for the exact pass criteria.
+    Blue dots = observed standards; <span style="color:#e74c3c;">red triangles</span>
+    = standard points out of recovery tolerance; ✕ = a dropped point; the
+    <span style="color:#27ae60;">green square</span> marks the linear /
+    reportable range; coloured ticks on the right are this plate's specimens
+    (<span class="badge badge-r-below">BELOW</span>
+    <span class="badge badge-r-in">IN</span>
+    <span class="badge badge-r-above">ABOVE</span>
+    <span class="badge badge-r-nofit">NO_FIT</span>).
+    <br><b>Panels showing only dots</b> — no red curve line and no green range
+    square — are (pool × antigen) pairs whose 4PL did not converge (the title is
+    red). That is expected for a pool that doesn't calibrate the antigen: its
+    dilution series is flat or noisy, so no curve can be fit.
+    Hover any element for detail.
+    {% if priority_is_all and n_priority_antigens > 48 %}
+    <br><em>This panel is the static overview because all {{ n_priority_antigens }}
+    antigens are shown — set priority antigens on the Settings page (≤ 48) to get
+    the interactive version with hover and the specimen rug.</em>
+    {% endif %}
   </p>
   {{ curve_grid_html | safe }}
 </div>
 </details>
 
 <!-- =================== 6. Standard-Curve Picker =================== -->
-<details class="section" id="sec-curve-picker" open>
-<summary>Standard-Curve Picker</summary>
+<details class="section" id="sec-curve-picker">
+<summary>Standard-Curve Picker <span style="font-weight:400; color:#7f8c8d;">(review tool — click to expand)</span></summary>
 <div class="inner">
-  <p style="margin-top:0; color:#7f8c8d; font-size:13px;">
+  <div class="banner warn" style="margin-top:0;">
+    <b>For review only.</b> Pick any antigen on the panel to inspect its raw fit.
+    {% if pool_mode == "per_pool" %}
+    Each antigen is shown against the single <b>scoring pool</b>
+    ({{ scoring_pool or "first pool" }}) — this picker does <b>not</b> switch
+    pools, so an antigen the scoring pool doesn't calibrate will look like a poor
+    fit here. To see a different pool's curve for an antigen, use the per-pool
+    grids in the All-Curves Overview above.
+    {% else %}
+    Each antigen is shown against its <b>auto-selected pool</b> (the one used for
+    scoring). Not every antigen is meant to be interpreted — draw QC conclusions
+    only from antigens calibrated by a relevant control pool.
+    {% endif %}
+  </div>
+  <p style="margin-top:12px; color:#7f8c8d; font-size:13px;">
     Pick an antigen by typing in the search box (autocomplete from the
     full panel).
   </p>
   <ul style="margin: 6px 0 12px 18px; padding: 0; color:#7f8c8d; font-size:13px; line-height:1.55;">
     <li>
       <b style="color:#34495e;">Left panel</b> — the standard curve with
-      the current 4PL fit (blue) and any past-plate fits in grey.
+      the current 4PL fit (blue) and any past-plate fits in grey. The
+      <span style="color:#27ae60;">green square</span> marks the linear /
+      reportable range (same as the All-Curves Overview), refreshing per antigen.
     </li>
     <li>
       <b style="color:#34495e;">Right panel</b> — a two-column rug.
@@ -646,10 +764,21 @@
     <span class="badge badge-r-in">IN_RANGE</span>
     <span class="badge badge-r-above">ABOVE_RANGE</span>
     <span class="badge badge-r-nofit">NO_FIT</span>.
+    Antigens (rows) are frozen on the left; the top axis shows the
+    <b>well location</b> only — hover any cell for the antigen, well, sample ID,
+    and status. Scroll horizontally for all specimen wells.
     {% if pool_selection and pool_selection.n_pools > 1 %}
+    {% if pool_mode == "per_pool" %}
+    Every antigen is scored against the single <b>scoring pool</b>
+    ({{ scoring_pool or "first pool" }}) — there is no per-antigen pool matching
+    in this mode, so a cell for an antigen that pool doesn't calibrate may read
+    BELOW/ABOVE/NO_FIT for that reason. Switch to auto-select on the Settings
+    page to score each antigen against its pathogen-matched pool.
+    {% else %}
     Each antigen is scored against its <b>auto-selected control pool</b> — the
     pool matched to the antigen's pathogen, tie-broken by best fit (see the
     Standard-Curve Summary above for details).
+    {% endif %}
     {% endif %}
   </p>
   {{ range_heatmap_html | safe }}
@@ -684,6 +813,21 @@
   {% else %}
   <div class="banner" style="margin-top:8px;">Every specimen × antigen cell is IN_RANGE or NO_FIT. ✓</div>
   {% endif %}
+
+  {% if serum_dbs_present %}
+  <details style="margin-top:16px;">
+    <summary><b>Serum vs DBS comparison</b> — click to expand</summary>
+    <p style="margin:8px 0 4px; color:#7f8c8d; font-size:13px;">
+      Each person is run as both a Serum and a Dried Blood Spot (DBS) sample.
+      For every person × antigen with both, the point is plotted at
+      (Serum MFI, DBS MFI). Points on the dotted <b>y = x</b> line agree between
+      matrices; points below it read lower in DBS than in serum. Hover for the
+      person and antigen. (Serum and DBS are still listed as separate specimens
+      everywhere else; this is an added comparison view.)
+    </p>
+    {{ serum_dbs_html | safe }}
+  </details>
+  {% endif %}
 </div>
 </details>
 
@@ -693,55 +837,59 @@
 <div class="inner">
 
   <div class="banner">
-    <b>How Negative Control QC works.</b> A negative control (NC) is a
-    well containing a sample known to be antibody-negative for every
-    antigen on the panel — typically a pooled seronegative serum. On
-    a working plate the NC's MFI should sit near zero for every
-    antigen; any antigen that lights up in the NC is a flag for
-    cross-reactivity in the assay, contamination of the NC sample, or
-    a problem with the bead region itself.
+    <b>How Negative Control QC works.</b> A negative control (NC) is a well of
+    pooled seronegative serum (here, pre-2019 North American plasma) that should
+    read antibody-negative for every antigen. The panel plot below shows the
+    <b>mean NC MFI per antigen, tracked across plates</b>; the current plate's
+    point is <span style="font-weight:600;">ringed</span>.
+    Each negative control (e.g. <b>Negative 0</b> and <b>Negative 49</b>) is its
+    own coloured line — duplicate wells of a control are averaged together, but
+    the two controls are kept separate. A clean NC programme reads low and stable
+    across plates — a point that jumps up flags cross-reactivity, NC
+    contamination, or a bead-region issue.
     <ul style="margin:6px 0 0 18px; padding:0;">
-      <li>NC wells are identified by sample name matching
-        <code>NC*</code>, <code>Negative*</code>, or
-        <code>Control*</code> (editable on the Settings page).</li>
-      <li>The heatmap below shows the MFI of every NC well × antigen
-        pair. Darker purple = higher MFI. A clean NC reads uniformly
-        pale; isolated dark cells are the antigens to investigate.</li>
-      <li>NCs are distinct from <em>Background</em> wells (the plate
-        blanks in Row A). When the plate has no NC, the Background QC
-        section above is the closest substitute — but it can't catch
-        sample-driven issues, only buffer / bead issues.</li>
-      <li>NC MFI is persisted to a cross-plate history JSON, so when
-        you accumulate multiple plates the historical heatmap below
-        surfaces drift over time.</li>
+      <li>NC wells are matched by the Negative-Control pattern (default
+        <code>Negative</code>, i.e. the <code>Pilot Control: Negative …</code>
+        samples; editable on the Settings page).</li>
+      <li>The panels (a static grid) and the per-well detail below both cover
+        every antigen on the plate.</li>
     </ul>
+    <em>Note: deeper NC-level QC (per-antigen thresholds, drift flags) is still
+    in development.</em>
   </div>
 
   {% if nc_present %}
-  <p style="margin-top:14px;">
-    MFI per antigen across the {{ n_nc_wells }} NC well{{ "s" if n_nc_wells != 1 else "" }} on this plate.
-  </p>
-  {{ nc_heatmap_html | safe }}
-  {% else %}
-  <div class="banner" style="margin-top:14px;">
-    <b>No named negative-control wells on this plate.</b> The Background
-    QC section above is the closest substitute. To track a true NC,
-    name a future well <code>NC1</code> / <code>Negative_pool</code>
-    / <code>Control</code>
-    and re-run.
-  </div>
-  {% endif %}
-
   {% if nc_history_present %}
-  <h3 style="margin-top:24px;">NC MFI across plates</h3>
+  <h3 style="margin-top:18px;">Negative Control MFI across plates</h3>
   <p style="margin-top:0; color:#7f8c8d; font-size:13px;">
-    Mean NC MFI per antigen, one row per plate.  The current plate is
-    labelled <code>(current)</code>; older plates are listed above.
-    Darker purple = higher MFI.  A clean NC programme reads uniformly
-    pale across every plate; consistently dark columns surface
-    antigens that creep up over time.
+    One panel per antigen; <b>one coloured line per negative control</b>
+    (e.g. Negative 0, Negative 49 — see the legend), tracing the mean NC MFI
+    over plates (chronological). The <b>current plate's</b> point on each line
+    is <span style="font-weight:600;">ringed (○)</span>.
   </p>
   {{ nc_history_html | safe }}
+  {% endif %}
+
+  <details style="margin-top:16px;">
+    <summary><b>NC details for this plate</b> — individual well MFI values (click to expand)</summary>
+    <div style="margin-top:8px;">{{ nc_bar_html | safe }}</div>
+    <div class="scroll-tbl" style="margin-top:10px; max-height:360px;">
+      <table>
+        <thead><tr><th>Well</th><th>Control</th><th>Analyte</th><th>MFI</th></tr></thead>
+        <tbody>
+          {% for r in nc_table %}
+          <tr><td>{{ r.well }}</td><td>{{ r.control }}</td><td>{{ r.analyte }}</td><td>{{ r.mfi }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% else %}
+  <div class="banner" style="margin-top:14px;">
+    <b>No negative-control wells detected on this plate.</b> NC wells are
+    matched by the Negative-Control pattern (default <code>Negative</code>) —
+    check the well naming or the pattern on the Settings page.
+  </div>
   {% endif %}
 </div>
 </details>
@@ -750,6 +898,30 @@
 <details class="section" id="sec-downloads" open>
 <summary>Downloads</summary>
 <div class="inner">
+
+  <div class="dl-group">
+    <h4>Clean results (master)</h4>
+    <div class="dl-row">
+      <a class="btn btn-primary" href="/download/specimens/results_{{ plate_id }}.csv">results_*.csv</a>
+      <div class="desc">
+        The clean, analysis-ready master table — one row per specimen well ×
+        antigen with <code>sample_id</code>, <code>matrix</code> (Serum/DBS) and
+        <code>mfi</code>.
+        {% if pool_mode == "per_pool" %}
+        In per-pool mode it then carries a <code>RAU (&lt;pool&gt;)</code> +
+        <code>status (&lt;pool&gt;)</code> pair for <b>every</b> control pool
+        (<code>NO_FIT</code> where a pool doesn't calibrate that antigen), so you
+        can choose the right pool per antigen yourself.
+        {% else %}
+        In auto-select mode it then carries the selected <code>pool</code>,
+        <code>RAU</code> (AU from that pool's curve), <code>status</code>
+        (IN/BELOW/ABOVE/NO_FIT), and <code>censored</code>.
+        {% endif %}
+        The same content is concatenated across plates in the master
+        <em>Export All Processed Data</em> workbook (results sheet).
+      </div>
+    </div>
+  </div>
 
   {% if nc_present %}
   <div class="dl-group">
@@ -771,8 +943,9 @@
       <a class="btn" href="/download/specimens/background_qc_{{ plate_id }}.csv">background_qc_*.csv</a>
       <div class="desc">
         One row per antigen with <code>n_wells</code>, mean / SD / %CV /
-        max MFI across the Background wells, plus the <code>cv_flag</code>
-        and <code>max_flag</code> booleans that drive the report's flags.
+        max MFI across the Background wells. <code>cv_flag</code> /
+        <code>max_flag</code> are reference values only — formal Background
+        flagging is still in development.
       </div>
     </div>
   </div>
@@ -813,7 +986,14 @@
         One row per antigen with <code>n_in_range</code> /
         <code>n_below_range</code> / <code>n_above_range</code> /
         <code>n_no_fit</code> counts and the rolled-up
-        <code>pct_in_range</code>.
+        <code>pct_in_range</code> (same scoring-pool basis as the Range Matrix).
+      </div>
+    </div>
+    <div class="dl-row">
+      <a class="btn" href="/download/specimens/pc_replicates_{{ plate_id }}.csv">pc_replicates_*.csv</a>
+      <div class="desc">
+        Per (pool × antigen × dilution) replicate %CV between the duplicate
+        standard wells, with a <code>flag</code> when it exceeds the threshold.
       </div>
     </div>
     <div class="dl-row">
@@ -842,9 +1022,11 @@
         Long-form (specimen well × antigen) with the measured
         <code>mfi</code>, the antigen's <code>mfi_lloq</code> /
         <code>mfi_uloq</code>, and <code>status</code> ∈
-        {IN_RANGE, BELOW_RANGE, ABOVE_RANGE, NO_FIT}. Joined to the
-        layout merge so <code>sample_id</code>, <code>barcode</code>,
-        <code>patient_id</code>, <code>box_id</code> ride along.
+        {IN_RANGE, BELOW_RANGE, ABOVE_RANGE, NO_FIT},
+        {% if pool_mode == "per_pool" %}scored against the single scoring pool
+        ({{ scoring_pool or "first pool" }}){% else %}scored against each
+        antigen's auto-selected control pool{% endif %}. Any sample-identifier
+        columns present (e.g. <code>sample_id</code>) are carried along.
       </div>
     </div>
   </div>

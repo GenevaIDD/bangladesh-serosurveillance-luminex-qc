@@ -96,37 +96,160 @@
     influence laboratory decisions. They remain in tables and plots but
     are visually muted and listed in a banner on the report.
   </p>
+
+  <h3>Priority Antigens <span class="hint">(standard curves to interpret)</span></h3>
+  <label>One analyte name per line. <b>Leave blank to show all antigens</b> (the default).</label>
+  <textarea name="priority_antigens">{{ config.panel.get('priority_antigens', []) | join('\n') }}</textarea>
+  <p style="font-size:0.85em; color:#888; margin-top:4px;">
+    A 4PL standard curve is always fit for <em>every</em> antigen, but only
+    the priority antigens listed here are shown in the Standard-Curve Summary
+    and All-Curves Overview — the antigens whose curves are meaningfully
+    calibrated by a control pool and meant to be interpreted. The full
+    Standard-Curve Picker still lets you review any antigen. Blank = all.
+  </p>
+
+  <h3>Standard-Curve Pool Mode</h3>
+  <div class="row">
+    <div class="field">
+      <label>Mode</label>
+      <select name="pool_mode" style="width:100%; padding:8px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px;">
+        <option value="per_pool" {{ 'selected' if config.panel.get('pool_mode','per_pool') == 'per_pool' }}>Per pool — fit every (pool × antigen), no matching</option>
+        <option value="auto_select" {{ 'selected' if config.panel.get('pool_mode','per_pool') == 'auto_select' }}>Auto-select — one matched/best-fit pool per antigen</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Scoring pool <span class="hint">(per-pool mode: pool used for RAU / range; blank = first)</span></label>
+      <input type="text" name="scoring_pool" value="{{ config.panel.get('scoring_pool','') }}" placeholder="e.g. Dengue pool">
+    </div>
+  </div>
+  <p style="font-size:0.85em; color:#888; margin-top:4px;">
+    <b>Per pool</b> (default): a curve is fit and shown for every control pool
+    × antigen with no antigen→pool matching; specimen RAU / range use the single
+    scoring pool above. <b>Auto-select</b>: each antigen is matched to its
+    pathogen's pool (tie-broken by best fit) and scored against that one.
+  </p>
+
+  <h3>Pool assignment rules <span class="hint">(auto-select mode; optional)</span></h3>
+  <label>One rule per line: <code>&lt;regex&gt; =&gt; &lt;pool name&gt;</code>. First match wins; antigens matching no rule fall back to the built-in pathogen match, then best fit.</label>
+  <textarea name="pool_assignment_rules" placeholder="ARB_DENV.*        =&gt; Dengue pool&#10;CHO_.*|.*CtxB.*   =&gt; Anti-OSP &amp; cTxB pool&#10;.*HlyE.*          =&gt; HlyE">{{ config.panel.get('pool_assignment_rules', []) | join('\n') }}</textarea>
+  <p style="font-size:0.85em; color:#888; margin-top:4px;">
+    The regex is matched against the antigen name; the pool name must match one
+    of the plate's control pools (shown in the report's Standard-Curve Summary).
+    Used only in <b>Auto-select</b> mode. Lets you define the antigen→pool
+    mapping explicitly instead of relying on the built-in keyword heuristic.
+  </p>
+  <details style="font-size:0.85em; color:#666; margin-top:6px;">
+    <summary style="cursor:pointer; color:#e55070;">How the regex works (quick guide)</summary>
+    <ul style="margin:8px 0 0 18px; padding:0; line-height:1.6;">
+      <li>The pattern is matched <b>anywhere within</b> the antigen name, and is
+        <b>case-sensitive</b> (e.g. <code>DENV</code> matches
+        <code>ARB_DENV2_VLP</code>).</li>
+      <li><code>.</code> = any single character; <code>.*</code> = any run of
+        characters (including none). So <code>ARB_DENV.*</code> matches every
+        antigen whose name contains <code>ARB_DENV</code>.</li>
+      <li><code>|</code> = OR. <code>CHO_.*|.*CtxB.*</code> matches names with
+        <code>CHO_</code> <em>or</em> <code>CtxB</code>.</li>
+      <li><code>^</code> = start of the name, <code>$</code> = end. Use
+        <code>^CHO_</code> to match only names that <em>begin</em> with
+        <code>CHO_</code>.</li>
+      <li>Escape special characters with a backslash — e.g. <code>S\.typhi</code>
+        to match a literal dot in <code>BAC_S.typhi_HlyE</code>.</li>
+      <li>Rules are tried <b>top to bottom; the first match wins</b>. Put the
+        most specific rules first.</li>
+    </ul>
+    <div style="margin-top:6px;">Examples:
+      <br><code>ARB_DENV.*&nbsp; =&gt; Dengue pool</code>
+      <br><code>^CHO_.*|.*CtxB.* =&gt; Anti-OSP &amp; cTxB pool</code>
+      <br><code>.*HlyE.*&nbsp; =&gt; HlyE</code>
+    </div>
+  </details>
+
+  <details style="font-size:0.85em; color:#666; margin-top:10px;">
+    <summary style="cursor:pointer; color:#e55070;">How antigens are matched to pools (full detail)</summary>
+    <p style="margin:8px 0 4px;">
+      This matching applies <b>only in Auto-select mode</b>. For each antigen the
+      tool decides which control pool's curve to score it against by working down
+      this list and stopping at the <b>first</b> step that yields a pool:
+    </p>
+    <ol style="margin:4px 0 0 18px; padding:0; line-height:1.6;">
+      <li><b>Exact override</b> — a per-antigen entry in
+        <code>panel.pool_antigen_overrides</code> in <code>config.yaml</code>
+        (advanced; not editable above). Wins outright, provided that pool
+        produced a fit for the antigen.</li>
+      <li><b>Your regex rules</b> (the box above) — the first rule whose pattern
+        matches the antigen name, provided that pool fit the antigen.</li>
+      <li><b>Built-in pathogen keyword match</b> — the tool reads the pathogen
+        from the antigen's name and keeps the pools that target it (table below)
+        and that actually fit the antigen.</li>
+      <li><b>Best-fit fallback</b> — if nothing above matches, any pool that
+        produced a usable fit for that antigen.</li>
+    </ol>
+    <p style="margin:8px 0 4px;"><b>Built-in keyword map</b> (used in step 3):</p>
+    <ul style="margin:4px 0 0 18px; padding:0; line-height:1.6;">
+      <li><b>Dengue</b> — antigen name contains <code>DENV</code> or
+        <code>DENGUE</code> → pools whose name contains <code>dengue</code> or
+        <code>orpal</code>.</li>
+      <li><b>Cholera</b> — antigen starts with <code>CHO_</code> or contains
+        <code>CtxB</code> / <code>Inaba</code> / <code>Ogawa</code> /
+        <code>cholera</code> / <code>vibrio</code> → pools whose name contains
+        <code>osp</code>, <code>ctxb</code>, or <code>cholera</code>.</li>
+      <li><b>Typhoid</b> — antigen contains <code>HlyE</code> or
+        <code>typhi</code> → pools whose name contains <code>hlye</code>.</li>
+    </ul>
+    <p style="margin:8px 0 0;">
+      <b>When more than one pool matches</b> (e.g. both <code>Dengue pool</code>
+      and <code>Orpal pool</code> target dengue), exactly one is still used — the
+      <b>best-fitting</b> curve, ranked by: a curve was fit → it passed fit QC
+      (<code>fit_ok</code>) → higher R². An antigen with no usable fit in any pool
+      is left <b>NO_FIT</b>. The chosen pool appears in the report's
+      Standard-Curve Summary <b>Pool</b> column, so you can confirm the result and
+      add a regex rule (or override) where the keyword guess is wrong.
+    </p>
+    <p style="margin:6px 0 0;">
+      In <b>Per pool</b> mode none of this runs — every antigen is scored against
+      the single scoring pool above, and the master export lists RAU under every
+      pool so you can choose per antigen downstream.
+    </p>
+  </details>
 </div>
 
 <!-- Well Classification -->
 <h2>Well Classification</h2>
 <div class="card">
-  <label>Positive Control (Standard) Patterns <span class="hint">(regex, comma-separated)</span></label>
+  <p style="font-size:0.85em; color:#888; margin:0 0 8px;">
+    Wells are classified from the <code>Sample</code> name in the CSV
+    (matched with these regexes, in order: Background → NC → PC →
+    specimen). Defaults fit the Bangladesh naming
+    (<code>Background0</code>, <code>Pilot Control: …</code>,
+    <code>Pilot Control: Negative …</code>, <code>{id}_r3_{Serum|DBS}</code>).
+  </p>
+  <label>Positive Control / Standard Patterns <span class="hint">(regex, comma-separated; the pooled control series, e.g. <code>^Pilot Control:</code>)</span></label>
   <input type="text" name="pc_patterns" value="{{ config.well_classification.pc_patterns | join(', ') }}">
 
-  <label>Background Patterns <span class="hint">(regex, comma-separated; plate blanks like Row-A Background wells)</span></label>
+  <label>Background Patterns <span class="hint">(regex, comma-separated; plate blanks, e.g. <code>^Background</code>)</span></label>
   <input type="text" name="background_patterns" value="{{ config.well_classification.get('background_patterns', ['^Background']) | join(', ') }}">
 
-  <label>Negative Control Patterns <span class="hint">(regex, comma-separated; named NC sample, separate from Background)</span></label>
+  <label>Negative Control Patterns <span class="hint">(regex, comma-separated; e.g. <code>Negative</code>)</span></label>
   <input type="text" name="nc_patterns" value="{{ config.well_classification.nc_patterns | join(', ') }}">
 
   <p style="font-size:0.85em; color:#888;">
-    Background and NC are distinct concepts: Background wells are the
-    plate blanks (reported alongside the curve); NC wells are a named
-    seronegative sample that gets its own QC section. Anything not
-    matching any pattern is treated as a specimen.
+    NC is checked before PC because NC and PC samples share the
+    <code>Pilot Control:</code> prefix, so the more specific
+    <code>Negative</code> match wins. Anything matching none of the
+    patterns is treated as a specimen.
   </p>
 </div>
 
 <!-- Standard Curve -->
 <h2>Standard Curve</h2>
 <div class="card">
-  <label>Standard Dilutions <span class="hint">(comma-separated, ordered Standard1 → Standard{N})</span></label>
-  <input type="text" name="standard_dilutions"
-         value="{% if config.standard.dilutions != 'auto' %}{{ config.standard.dilutions | join(', ') }}{% endif %}">
-  <p style="font-size:0.85em; color:#888; margin-top:4px;">
-    Default is the Uvira 10-point 4-fold series (62.5 → 16,384,000).
-    Standard1 maps to the first value, Standard2 to the second, etc.
+  <p class="panel-summary" style="margin:0;">
+    <strong>Dilutions are parsed automatically</strong> from each control
+    sample name — <code>1:N</code> for the pooled series (e.g.
+    <code>Pilot Control: Dengue pool 1:4000</code>) and <code>N ng/mL</code>
+    for HlyE. A 4PL is fit per (control pool × antigen) using that pool's own
+    series, so there is no fixed dilution list to configure here. Single-point
+    controls (e.g. Cholera High/Low) are shown as reference markers, not fit.
   </p>
 </div>
 
@@ -146,16 +269,20 @@
 <div class="card">
   <div class="row">
     <div class="field">
-      <label>Bead Count — Red Below</label>
+      <label>Bead count — RED below <span class="hint">(e.g. 30; cells under this are red)</span></label>
       <input type="number" name="bead_count_min" value="{{ config.qc_thresholds.bead_count_min }}" min="1">
     </div>
     <div class="field">
-      <label>Bead Count — Yellow Up To <span class="hint">(green above)</span></label>
+      <label>Bead count — YELLOW below <span class="hint">(e.g. 50; green at/above this)</span></label>
       <input type="number" name="bead_count_warn" value="{{ config.qc_thresholds.get('bead_count_warn', 50) }}" min="1">
     </div>
     <div class="field">
-      <label>Recovery Tolerance <span class="hint">(e.g. 0.30 = &plusmn;30%)</span></label>
+      <label>Recovery Tolerance <span class="hint">(standard-curve LLOQ/ULOQ; 0.30 = &plusmn;30%)</span></label>
       <input type="number" name="recovery_tolerance" value="{{ config.qc_thresholds.recovery_tolerance }}" step="0.01" min="0" max="1">
+    </div>
+    <div class="field">
+      <label>PC Replicate %CV <span class="hint">(flag a standard point if its duplicate %CV exceeds; 0.20 = 20%)</span></label>
+      <input type="number" name="pc_cv_threshold" value="{{ config.qc_thresholds.get('pc_cv_threshold', 0.20) }}" step="0.01" min="0" max="2">
     </div>
   </div>
 
@@ -165,20 +292,23 @@
       <input type="number" name="problem_fraction_threshold" value="{{ config.qc_thresholds.get('problem_fraction_threshold', 0.20) }}" step="0.01" min="0" max="1">
     </div>
     <div class="field">
-      <label>Background %CV Threshold <span class="hint">(flag antigen if Background %CV exceeds)</span></label>
+      <label>Background %CV <span class="hint">(reference threshold)</span></label>
       <input type="number" name="bg_cv_threshold" value="{{ config.qc_thresholds.get('bg_cv_threshold', 0.25) }}" step="0.01" min="0" max="5">
     </div>
     <div class="field">
-      <label>Background Max-MFI Flag <span class="hint">(flag antigen if any Background MFI exceeds)</span></label>
-      <input type="number" name="bg_max_mfi" value="{{ config.qc_thresholds.get('bg_max_mfi', 100) }}" min="0">
+      <label>Background Max-MFI <span class="hint">(reference threshold; default 300)</span></label>
+      <input type="number" name="bg_max_mfi" value="{{ config.qc_thresholds.get('bg_max_mfi', 300) }}" min="0">
     </div>
   </div>
   <p style="font-size:0.85em; color:#888; margin-top:4px;">
-    The problem-fraction threshold is the cutoff used in the bead-count
-    and range summary cards: an antigen is flagged when at least this
-    fraction of its wells (resp. samples) is problematic. Same number is
-    applied to bead-count problems and to BELOW_RANGE / ABOVE_RANGE
-    counts.
+    <b>Bead count</b> tiers (RED/YELLOW/GREEN) and the <b>problem-fraction</b>
+    threshold drive the Bead Count cards: an antigen (resp. specimen) is flagged
+    when at least this fraction of its wells (resp. antigens) is red or yellow.
+    The same fraction is applied to BELOW_RANGE / ABOVE_RANGE counts in the
+    Standard-Curve Summary. <b>Recovery tolerance</b> sets the standard-curve
+    reportable range (LLOQ/ULOQ). The two <b>Background</b> values are tracked
+    for reference only — formal Background pass/fail flagging is still in
+    development, so they do not currently mark antigens as failing.
   </p>
 
   <label style="margin-top:20px;">

@@ -1,222 +1,271 @@
-# Uvira Luminex QC Tool
-
-<p align="center">
-  <img src="gdd_antibody_square_tighter.png" alt="Uvira Luminex QC" width="128">
-</p>
-
-<p align="center">
-  <strong>Automated quality control for 200-plex Luminex immunoassays on Intelliflex</strong><br>
-  <em>Geneva Disease Dynamics Group &middot; University of Geneva</em>
-</p>
-
-<p align="center">
-  <a href="SPECIFICATION.md">Full Specification</a>
-</p>
-
 ---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Bangladesh Serosurveillance Luminex QC Tool
+
+<p align="center">
+
+<img src="gdd_antibody_square_tighter.png" alt="Bangladesh Serosurveillance Luminex QC" width="128"/>
+
+</p>
+
+<p align="center">
+
+<strong>Automated quality control for the 202-plex Luminex immunoassay
+(Intelliflex, 384-well, High PMT) — Bangladesh National
+Serosurveillance</strong><br> <em>Geneva Disease Dynamics Group ·
+University of Geneva</em>
+
+</p>
+
+<p align="center">
+
+<a href="SPECIFICATION.md">Full Specification</a>
+
+</p>
+
+------------------------------------------------------------------------
 
 ## Overview
 
-Standalone desktop tool for QC of 200-plex Luminex immunoassays run on a Luminex **Intelliflex** instrument. Upload an xPONENT CSV export (plus an optional input-file CSV and barcode-map XLSX) and get back an interactive HTML report with:
+Standalone desktop tool for QC of the Bangladesh National
+Serosurveillance **202-plex** Luminex immunoassay, run on a Luminex
+**Intelliflex** instrument in **High PMT** mode on a **384-well** plate.
+Upload an xPONENT plate-result CSV and get back a self-contained
+interactive HTML report with:
 
-- **4-Parameter Logistic (4PL) standard curve fitting** for every antigen on the plate, with `fit_ok` criteria (R² ≥ 0.95 on log10, IC50 in range, Hill slope 0.3–5, dynamic range ≥ 3×).
-- **Standard-Curve Range Matrix** — every specimen × antigen classified as `IN_RANGE` / `BELOW_RANGE` / `ABOVE_RANGE` / `NO_FIT`, in a colour-blind-safe palette.
-- **Standard-Curve Picker** — type to search any of the 200 antigens; the curve, status-counted specimen rug, and historical-plate overlays all swap interactively.
-- **Bead-Count Matrix** — Red / Yellow / Green tier heatmap with dotted-line separators between Standards / Background / NC / specimen well groups, and "≥ X% problematic" summary cards on both axes.
-- **Negative Control QC** — heatmap of NC well MFI per antigen plus a cross-plate drift heatmap.
-- **Background QC** — mean / SD / %CV / max-MFI per antigen across the Row-A Background wells, with configurable CV and max-MFI flags. Mirrors the legacy MPOX NC checks when no named NC sample is present.
-- **Excluded-analyte soft-flagging** — bead regions known to have been added in error stay in every table and plot but are visually muted.
-- **Cross-plate history** — standard curves, NC MFI, fit parameters, and specimen MFI are persisted to JSON per output directory. Subsequent plates render past plates' fits + specimens as grey overlays in the curve picker (legend-toggleable).
-- **Downloads** — every QC axis exports a per-plate CSV (range table, bead-problem lists per axis, NC levels, Background QC, etc.) for downstream analysis.
-- **Settings page** — pattern matching for PC / Background / NC wells, problem-fraction threshold, bead-count tiers, BG CV / max-MFI cutoffs, soft-flag list, and the standard dilution series, all persisted to YAML.
+-   **Plate Overview** — a metadata table (Plate ID, Batch, Run date,
+    Operator, Instrument, Operating mode, CSV file) and count cards
+    (total / PC / NC / specimen / background wells, antigens), plus a
+    **shape-coded 384-well plate map** (○ PC, ✕ NC, ■ specimen, ▫
+    background) with hover and freeze-pane scroll.
+-   **Bead Count** — a freeze-pane antigen × well tier heatmap (red \<
+    30, yellow 30–49, green ≥ 50) and "≥ X % flagged" summary cards.
+-   **Background QC** — per-antigen spread of the blank wells
+    (individual MFIs, SD, %CV) and a cross-plate **IQR-vs-current**
+    overview (the current plate's mean against the interquartile range
+    of previous plates).
+-   **Multi-pool 4PL standard curves** — a 4PL is fit for **every
+    antigen against every control pool**. By default (per-pool mode) there
+    is no matching: specimen RAU / range are scored against a single
+    **scoring pool**, and the master export carries RAU under every pool.
+    An optional auto-select mode instead scores each antigen against the
+    pool that calibrates it (matched by pathogen, tie-broken by best fit).
+-   **Standard-Curve Summary + All-Curves Overview** for the priority
+    antigens, with the linear/reportable range drawn as a green square,
+    out-of-tolerance standards as red triangles, and a current-plate
+    specimen rug.
+-   **Standard-Curve Picker** — type to inspect any antigen's curve,
+    rug, and cross-plate overlays (review tool; folded by default).
+-   **Standard-Curve Range Matrix** — every specimen × antigen
+    classified IN / BELOW / ABOVE range / NO_FIT, with a folded
+    **Serum-vs-DBS** comparison.
+-   **Negative Control QC** — per-antigen NC MFI tracked across plates,
+    with each negative control (Negative 0, Negative 49) kept separate.
+-   **Downloads** — per-plate CSVs plus a clean master "results" table
+    with RAU.
 
-No Python installation or internet connection required — runs as a self-contained macOS `.app` or Windows `.exe`.
+No Python installation or internet connection required — runs as a
+self-contained macOS `.app` or Windows `.exe`.
+
+## Download & install
+
+Download the latest build from the
+[**Releases**](https://github.com/GenevaIDD/bangladesh-serosurveillance-luminex-qc/releases)
+page (no Python or internet connection needed to run it).
+
+**macOS** — download `Bangladesh-Serosurveillance-Luminex-QC-macOS.zip`:
+
+1. Double-click the zip to unzip; you'll get **Bangladesh Serosurveillance
+   Luminex QC.app**. Move it to `Applications` (optional).
+2. The app is ad-hoc signed, so on first launch macOS will warn it's from an
+   unidentified developer. **Right-click the app → Open → Open** (only needed
+   the first time). If it's still blocked, open Terminal and run:
+   ```bash
+   xattr -cr "/Applications/Bangladesh Serosurveillance Luminex QC.app"
+   open "/Applications/Bangladesh Serosurveillance Luminex QC.app"
+   ```
+3. Your browser opens automatically at the upload page.
+
+**Windows** — download `Bangladesh-Serosurveillance-Luminex-QC-Windows.zip`:
+
+1. Right-click the zip → **Extract All** to a folder.
+2. Open the extracted `Bangladesh-Serosurveillance-Luminex-QC` folder and
+   double-click **Bangladesh-Serosurveillance-Luminex-QC.exe**.
+3. On first run, Windows SmartScreen may show "Windows protected your PC" —
+   click **More info → Run anyway** (only needed the first time).
+4. Your browser opens automatically at the upload page.
+
+**Using it:** on the upload page, select one or more xPONENT plate-result CSVs
+and click **Generate Report**. Reports and CSVs are saved under
+`~/bangladesh-serosurveillance-luminex-qc-results/` (see [Output](#output)).
+To quit, use the **Quit Application** button on the home page.
+
+> If the Releases page is empty, no build has been published yet — see
+> [Development](#development) to build locally, or push a `vX.Y.Z` tag to
+> trigger the automated build/release workflow.
 
 ## Assay panel
 
-The Uvira pilot panel is **200 antigens** plus the row-A Background wells, with families:
+The production panel is **202 antigens** (pilot plates ran fewer beads
+because some bead-antigen reagents were in short supply). The panel is
+**re-derived from the `Median` block header of each xPONENT CSV on every
+ingest**, so the per-plate panel is always authoritative; the default
+list in `src/config.py` is a display/fallback only. Families include
+`ARB_`, `FLU_`, `HCoV_`/`SARS_`, `HEP_`, `HHV_`, `MAL_`, `NTD_`, `POX_`,
+`RES_`, `STI_`, `TBD_`, `VPD_`, `CHO_`, `BAC_`, `ENT_`, `HAN_`, `OTH_`,
+`TOXO_`, `CTRL_`.
 
-| Family prefix | Examples |
-|---|---|
-| `ARB_` | DENV1–4, ZIKV, YFV, JEV, WNV, CHIKV, RVFV, USUV, … |
-| `FLU_` | H1N1 / H3N2 / H5N1 / B HA + NP across many strains |
-| `HCoV_` / `SARS_` | 229E, NL63, OC43, HKU1, SARS-CoV-2 Wuhan + Omicron |
-| `HEP_` | HBV, HCV, HEV, HepA |
-| `HHV_` | CMV, EBV, HSV1/2, VZV, HHV6B/7 |
-| `MAL_` | Pf / Pv / Pm / Po MSP, CSP, AMA1, … |
-| `NTD_` | Leishmania, Bm14, cp23, pgp3, VSP3/5, … |
-| `POX_` | MpoxV HA, A44R, E8L; Vaccinia |
-| `RES_` | RSVA/B, Rhinovirus, mumps, measles, hMPV, … |
-| `STI_` | HPV16/18, Chlamydia, Gonorrhea |
-| `TBD_` | Borrelia / Lyme antigens |
-| `VPD_` | Pertussis, Diphtheria, Tetanus, measles, rubella, NmB |
-| Plus | `BAC_`, `CHO_`, `CTRL_`, `ENT_`, `HAN_`, `OTH_`, `TOXO_` |
+## Plate layout & controls
 
-The full panel is derived from the `Median` block header of each xPONENT CSV on every ingest, so the per-plate panel is always authoritative. The configured default list in `src/config.py` is a fallback for display only.
+384-well plate (rows A–P × columns 1–24). Wells are classified from the
+`Sample` name in the CSV (no Intelliflex input file is required):
 
-## Quick Start
+| Type | Sample name | Notes |
+|------------------------|------------------------|------------------------|
+| Background | `Background0` | Plate blanks |
+| Negative control (NC) | `Pilot Control: Negative 0 / 49 , 1:1000` | Pooled pre-2019 North American plasma; two controls, each in duplicate |
+| PC / standard | `Pilot Control: <pool> <dilution>` | Multiple pooled controls, each its own dilution series |
+| Specimen | `{id}_r3_{Serum\|DBS}` | Each person run as both Serum and DBS |
 
-### Download
+**Control pools** each carry their dilution in the sample name (`1:N`,
+or `N ng/mL` for HlyE) and calibrate specific pathogens:
 
-Download the latest release for your platform from the [Releases](https://github.com/GenevaIDD/uvira-luminex-qc/releases) page:
+-   **Anti-OSP & cTxB (± HlyE) pool** → cholera (OSP / CtxB) — and
+    typhoid HlyE in the combined pool
+-   **HlyE** → *S. typhi* HlyE (concentration series)
+-   **Dengue pool** + **ORPAL pool** → DENV antigens
+-   **Cholera High / Low** → single-point range markers (not fit)
 
-- **macOS**: `Uvira Luminex QC.app`
-- **Windows**: `Uvira-Luminex-QC/` folder with `.exe`
+### Antigen → pool scoring (`pool_mode`, set in Settings)
 
-### Run
+A 4PL is fit for every (pool × antigen). Two modes control how specimens
+are then scored:
 
-1. **macOS**: Double-click `Uvira Luminex QC.app`. If macOS blocks it, right-click → Open, or run in Terminal:
-   ```bash
-   xattr -cr "Uvira Luminex QC.app"
-   open "Uvira Luminex QC.app"
-   ```
+-   **per_pool (default)** — "fit every pool × antigen, no matching." RAU
+    and range status are computed against a single **scoring pool** (by
+    default the pool with the most passing fits; set `scoring_pool` to
+    override). The Summary table and All-Curves Overview show one row /
+    grid per pool, and the master export lists RAU + status under *every*
+    pool so you can pick the right one per antigen.
+-   **auto_select** — each antigen is scored against the pool meant to
+    calibrate it: the tool parses the antigen's pathogen from its name and
+    matches it to the targeting pool(s); when more than one pool targets
+    the same pathogen (e.g. Dengue pool vs ORPAL), the **best-fitting
+    curve** wins (params present → fit_ok → highest R²). Antigens with no
+    name match fall back to the best-fitting pool. You can refine the
+    matching with a regex rules field and exact per-antigen overrides in
+    Settings.
 
-2. **Windows**: Double-click `Uvira-Luminex-QC.exe` inside the extracted folder.
+## QC checks
 
-3. Your browser opens automatically to the upload page.
+### Bead counts
 
-4. Upload the three files (the last two are optional but recommended) and click **Generate Report**.
+`bead_count_min` (red below, default 30) and `bead_count_warn` (yellow
+below / green at-or-above, default 50). Antigens and specimens are
+flagged when ≥ `problem_fraction_threshold` (default 20 %) of their
+cells are red or yellow.
 
-### Input Files
+### Standard-curve fit quality
 
-| File | Required | Description |
-|------|----------|-------------|
-| **xPONENT CSV** | Yes | Intelliflex plate-run export (`PlateRunResults_*.csv`) with `Median`, `Count`, and the other DataType blocks. MagPix CSVs also parse for legacy use. |
-| **Input-file CSV** | Optional | Intelliflex plate input file (`*_inputfile.csv`) mapping wells to plate-well type, barcode, and dilution. When provided the report shows the on-plate barcode for every specimen. |
-| **Barcode-map XLSX** | Optional | One of the Box-N `RENAMED-Box{N}_Uvira_*.xlsx` files. Joins barcode → patient_id and box_id so the report carries patient IDs and the picker labels plates by box. |
-
-## QC Checks
-
-### Standard Curve Fit Quality
-
-Each antigen's 10-point 4-fold standard curve is fit to a 4PL:
-
-```
-y = d + (a - d) / (1 + (x / c)^b)
-```
-
-`fit_ok = True` only when all four of the following pass:
-
-| Check | Criterion | Rationale |
-|-------|-----------|-----------|
-| R² | ≥ 0.95 on log10(MFI) | Goodness of fit (log-residual fit; matches standard immunoassay practice) |
-| IC50 | Within tested dilution range × 3 | Inflection point inside the curve's reach |
-| Hill slope | 0.3 ≤ b ≤ 5.0 | Prevents flat or step-function fits |
-| Dynamic range | upper / lower asymptote ≥ 3× | Adequate signal separation |
-
-If the initial fit fails, a leave-one-out retry drops a single standard point and re-tries (configurable on the Settings page).
+Each antigen's 4PL fit is `fit_ok` only when all of: R² ≥ 0.95 (log10),
+IC50 inside the tested dilution range (×3 margin), Hill slope 0.3–5.0,
+dynamic range ≥ 3×. A failing fit can retry by dropping a single outlier
+point (configurable).
 
 ### Range classification
 
-Per (specimen × antigen):
+Per (specimen × antigen): `IN_RANGE` / `BELOW_RANGE` / `ABOVE_RANGE` /
+`NO_FIT`, using the antigen's selected-pool curve. LLOQ / ULOQ come from
+a ±30 % (configurable) Obs/Exp recovery check.
 
-- `IN_RANGE` — MFI between LLOQ-MFI and ULOQ-MFI on that antigen's 4PL.
-- `BELOW_RANGE` — MFI < LLOQ-MFI.
-- `ABOVE_RANGE` — MFI > ULOQ-MFI.
-- `NO_FIT` — that antigen has no usable curve (fit failed or no reportable range).
+### Background QC
 
-LLOQ / ULOQ come from a ±30 % (configurable) Obs/Exp recovery check on the standard points.
+Per-antigen SD / %CV across the blank wells, the individual MFIs, and
+the current-plate vs previous-plate IQR. The max-MFI (default 300) and
+%CV are tracked as reference thresholds — **formal Background pass/fail
+flagging is still in development**.
 
-### Summary thresholds
+### Negative control
 
-The bead-count and range summaries flag antigens / specimens that exceed a **problem-fraction threshold** (default 20 %, editable on the Settings page). Both axes get a downloadable CSV listing exactly which (antigen × sample) pairs caused each flag.
-
-### Other QC
-
-- **Bead counts** — `bead_count_min` (red below) and `bead_count_warn` (yellow below) thresholds.
-- **Excluded analytes** — soft-flag list editable on the Settings page (defaults to `FLU_B_HA_Maryland_1959`, `FLU_B_NP_Brisbane_2008`, `VPD_Tet_tox`).
-- **Background QC** — per-antigen mean / SD / %CV / max-MFI across the Row-A Background wells. Antigens with %CV > 25 % (`bg_cv_threshold`) or max-MFI > 100 (`bg_max_mfi`) are flagged.
-- **NC QC** — when a future plate adds a sample named `NC*`, `Negative*`, or `Control*`, its MFI is rendered as a heatmap and persisted to a cross-plate history JSON.
+NC wells (matching `Negative`) are tracked per antigen across plates,
+with each negative control kept separate (duplicate wells averaged
+within each control). Deeper NC-level flagging is in development.
 
 ## Output
 
-All persistent data is stored under `~/uvira-luminex-qc-results/`:
+All persistent data is stored under
+`~/bangladesh-serosurveillance-luminex-qc-results/`:
 
-```
-~/uvira-luminex-qc-results/
-  <output dir>/
-    QC_<plate_id>.html              # main interactive report
-    specimens_<plate_id>.csv        # per-(specimen × antigen) MFI + AU
-    in_range_<plate_id>.csv         # IN/BELOW/ABOVE/NO_FIT status per (specimen × antigen)
-    pct_in_range_<plate_id>.csv     # per-antigen %-in-range summary
-    bead_problems_<plate_id>.csv    # red/yellow bead-count list
-    bead_problem_antigens_*.csv     # antigens with ≥ X% problematic wells
-    bead_problem_samples_*.csv      # samples with ≥ X% problematic antigens
-    range_problem_antigens_*.csv    # antigens with ≥ X% below/above
-    range_problem_samples_*.csv     # samples with ≥ X% below/above
-    background_qc_<plate_id>.csv    # Background QC per antigen
-    nc_levels_<plate_id>.csv        # only when an NC well is present
-    history/                        # cross-plate JSON (auto-updated)
-      fit_history_PC.json
-      std_curve_history_PC.json
-      specimen_mfi_history.json
-      nc_well_history.json
-  uploads/                          # uploaded CSVs / xlsx kept for re-runs
-  plate_registry.json               # plate order + upload manifest
-  config.yaml                       # user overrides
+```         
+  reports/
+    QC_<plate_id>.html              # interactive report
+    results_<plate_id>.csv          # clean master (per_pool: RAU+status per pool; auto_select: single-pool tidy)
+    in_range_<plate_id>.csv         # IN/BELOW/ABOVE/NO_FIT per (specimen × antigen)
+    pct_in_range_<plate_id>.csv     # per-antigen %-in-range
+    bead_problems_*.csv / bead_problem_{antigens,samples}_*.csv
+    range_problem_{antigens,samples}_*.csv
+    background_qc_<plate_id>.csv
+    nc_levels_<plate_id>.csv
+  specimens/
+    specimens_<plate_id>.csv        # raw + per-pool AU columns
+  history/                          # cross-plate JSON (per-pool fit/curve, background, specimen, NC)
+  uploads/                          # uploaded CSVs kept for Regenerate All
+  config.yaml                       # user settings overrides
 ```
 
-Uploaded CSVs are retained so that **Regenerate All** can re-run the pipeline without re-upload.
+The home page **Export All Processed Data (.xlsx)** combines every plate
+into a workbook. Its headline `results` sheet is the clean master table:
+in the default **per_pool** mode it carries RAU + range status under
+**every** control pool (so each antigen's cholera / dengue / typhoid
+pool RAU sit side by side, `NO_FIT` where a pool doesn't calibrate it);
+in **auto_select** mode it's the tidy single selected-pool table. The
+`specimens`, `standard_curve_params`, `standard_curve_data`, and
+`nc_levels` sheets follow.
+
+## Settings
+
+Editable on the Settings page (persisted to `config.yaml`):
+well-classification patterns, **priority antigens** (curves shown in the
+Summary/Overview; blank = all), excluded analytes, bead-count
+thresholds, problem-fraction threshold, background %CV and max-MFI
+reference thresholds, recovery tolerance, and the single-outlier drop
+toggle.
 
 ## Development
 
-### Prerequisites
-
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) (recommended) or pip
-
-### Setup
-
-```bash
-git clone https://github.com/GenevaIDD/uvira-luminex-qc.git
-cd uvira-luminex-qc
+``` bash
+git clone https://github.com/GenevaIDD/bangladesh-serosurveillance-luminex-qc.git
+cd bangladesh-serosurveillance-luminex-qc
 uv sync
+uv run python -m src.main          # dev server
 ```
 
-### Run in dev mode
+Build standalone apps:
 
-```bash
-uv run python -m src.main
+``` bash
+# macOS
+uv run python -m PyInstaller bangladesh-serosurveillance-luminex-qc.spec --clean -y
+codesign --force --deep --sign - "dist/Bangladesh Serosurveillance Luminex QC.app"
+# Windows
+python -m PyInstaller bangladesh-serosurveillance-luminex-qc-win.spec --clean -y
 ```
 
-### Build standalone app
+## Tech stack
 
-**macOS:**
-```bash
-uv run python -m PyInstaller uvira-luminex-qc.spec --clean -y
-codesign --force --deep --sign - "dist/Uvira Luminex QC.app"
-```
-
-**Windows:**
-```bash
-python -m PyInstaller uvira-luminex-qc-win.spec --clean -y
-```
-
-### Regenerate app icons
-
-```bash
-uv run python scripts/make_icon.py
-```
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Data | pandas ≥ 2.0 |
-| Curve fitting | scipy ≥ 1.11 (`curve_fit` on log10 MFI) |
-| Visualization | plotly ≥ 5.18 + matplotlib (for the small-multiples curve grid) |
-| Web UI | Flask ≥ 3.0 |
-| Reports | Jinja2 ≥ 3.1 |
-| Configuration | PyYAML ≥ 6.0 |
-| Excel I/O | openpyxl ≥ 3.1 |
-| Packaging | PyInstaller ≥ 6.0 |
+pandas, scipy (`curve_fit` on log10 MFI), plotly + matplotlib, Flask,
+Jinja2, PyYAML, openpyxl, PyInstaller.
 
 ## Contact
 
-**Andrew Azman** — [andrew.azman@unige.ch](mailto:andrew.azman@unige.ch)
-
-Geneva Disease Dynamics Group, Institute of Global Health, University of Geneva
+**Andrew Azman** —
+[andrew.azman\@unige.ch](mailto:andrew.azman@unige.ch) Geneva Disease
+Dynamics Group, Institute of Global Health, University of Geneva
 
 ## License
 
-This project is developed for internal use by the Geneva Disease Dynamics Group (and friends).
+Developed for internal use by the Geneva Disease Dynamics Group (and
+friends).

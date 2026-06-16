@@ -379,6 +379,46 @@ def _pool_slug(pool_name: str) -> str:
     return pool_name.replace(" ", "_")
 
 
+def default_scoring_pool(fits: dict, config: dict | None = None) -> str | None:
+    """The single pool used for RAU/range in per-pool mode.
+
+    Uses ``panel.scoring_pool`` when set to a valid pool; otherwise picks the
+    pool with the most ``fit_ok`` antigens (the broadest calibrator), falling
+    back to the first pool. This is a global default, not per-antigen
+    auto-selection.
+    """
+    if not fits:
+        return None
+    pools = list(fits.keys())
+    scoring = (config or {}).get("panel", {}).get("scoring_pool", "") or ""
+    if scoring in pools:
+        return scoring
+    best, best_n = pools[0], -1
+    for pool in pools:
+        n_ok = sum(1 for a in fits[pool] if fits[pool][a].get("fit_ok"))
+        if n_ok > best_n:
+            best, best_n = pool, n_ok
+    return best
+
+
+def build_pool_map(fits: dict, antigens: list[str] | None, config: dict | None) -> dict[str, str]:
+    """Antigen → pool mapping used for specimen scoring (RAU / range).
+
+    - ``pool_mode == "auto_select"`` → per-antigen pathogen match + best fit.
+    - ``pool_mode == "per_pool"`` (default) → a single scoring pool for every
+      antigen (``default_scoring_pool``). No per-antigen matching.
+    """
+    if not fits:
+        return {}
+    if antigens is None:
+        antigens = sorted({a for pf in fits.values() for a in pf})
+    cfg = (config or {}).get("panel", {})
+    if cfg.get("pool_mode", "per_pool") == "auto_select":
+        return select_pool_per_antigen(fits, antigens=antigens, config=config)
+    scoring = default_scoring_pool(fits, config)
+    return {a: scoring for a in antigens} if scoring else {}
+
+
 def _r_squared_log(x, y, params) -> float | None:
     """R² of the 4PL fit on log10(MFI) — matches the optimizer's objective."""
     try:
@@ -411,16 +451,46 @@ def _r_squared_log(x, y, params) -> float | None:
 
 
 def _antigen_group(name: str) -> str | None:
-    """Map an antigen name to a pathogen group, or None if not a target group."""
+    """Map an antigen name to a pathogen group, or None if not a target group.
+
+    Cholera is keyed on the ``CHO_`` family prefix or cholera-specific tokens
+    (CtxB / Inaba / Ogawa / cholera / vibrio) — NOT on a bare "OSP" substring,
+    which would wrongly catch Borrelia ``OspA`` / ``OspC`` (TBD_ family).
+    """
     n = (name or "").upper()
     if "DENV" in n or "DENGUE" in n:
         return "dengue"
     if "HLYE" in n or "TYPHI" in n:
         return "typhoid"
-    if "OSP" in n or "CTXB" in n or "CTX_B" in n or "INABA" in n or "OGAWA" in n \
-            or n.startswith("CHO_") or "CHOLERA" in n or "VIBRIO" in n:
+    if (n.startswith("CHO_") or "CTXB" in n or "CTX_B" in n or "INABA" in n
+            or "OGAWA" in n or "CHOLERA" in n or "VIBRIO" in n):
         return "cholera"
     return None
+
+
+def _parse_pool_rules(rules, pools: list[str]) -> list[tuple]:
+    """Parse user pool-assignment rules into (compiled_regex, pool_name).
+
+    Rules are strings ``"<regex> => <pool name>"`` (one per entry). The pool
+    name must match (case-insensitive) one of the plate's pools; invalid
+    regexes or unknown pools are skipped. Order is preserved (first match wins).
+    """
+    import re as _re
+    out: list[tuple] = []
+    pool_lookup = {p.lower().strip(): p for p in pools}
+    for raw in (rules or []):
+        if not isinstance(raw, str) or "=>" not in raw:
+            continue
+        pat_str, _, pool_str = raw.partition("=>")
+        pat_str, pool_str = pat_str.strip(), pool_str.strip()
+        pool = pool_lookup.get(pool_str.lower())
+        if not pat_str or pool is None:
+            continue
+        try:
+            out.append((_re.compile(pat_str), pool))
+        except _re.error:
+            continue
+    return out
 
 
 def _pool_groups(pool_name: str) -> set[str]:
@@ -453,10 +523,20 @@ def select_pool_per_antigen(
         antigens = sorted({a for pf in fits.values() for a in pf})
 
     overrides = {}
+    rules: list[tuple] = []
     if config is not None:
         overrides = config.get("panel", {}).get("pool_antigen_overrides", {}) or {}
+        rules = _parse_pool_rules(config.get("panel", {}).get("pool_assignment_rules", []), pools)
 
     pool_grp = {pool: _pool_groups(pool) for pool in pools}
+
+    def _rule_pool(antigen: str) -> str | None:
+        """First user regex rule whose pattern matches the antigen → its pool
+        (only if that pool produced a fit). None if no rule matches."""
+        for pat, pool in rules:
+            if pat.search(antigen) and fits.get(pool, {}).get(antigen, {}).get("params") is not None:
+                return pool
+        return None
 
     def _fit_rank(pool: str, antigen: str):
         """Sort key: prefer params present, fit_ok, then higher R²."""
@@ -469,12 +549,18 @@ def select_pool_per_antigen(
 
     selected: dict[str, str] = {}
     for antigen in antigens:
-        # Manual override wins if the named pool has a fit for this antigen.
+        # 1) Exact per-antigen override wins.
         ov = overrides.get(antigen)
         if ov in fits and fits[ov].get(antigen, {}).get("params") is not None:
             selected[antigen] = ov
             continue
+        # 2) User-defined regex rule (Settings), first match wins.
+        rp = _rule_pool(antigen)
+        if rp is not None:
+            selected[antigen] = rp
+            continue
 
+        # 3) Built-in pathogen-name heuristic, then best-fit fallback.
         grp = _antigen_group(antigen)
         # Candidate pools by name match (when the antigen has a known group).
         candidates = [p for p in pools if grp and grp in pool_grp[p]] if grp else []
@@ -489,7 +575,8 @@ def select_pool_per_antigen(
     return selected
 
 
-def compute_concentrations(df: pd.DataFrame, fits: dict, config: dict | None = None) -> pd.DataFrame:
+def compute_concentrations(df: pd.DataFrame, fits: dict, config: dict | None = None,
+                           pool_map: dict | None = None) -> pd.DataFrame:
     """Apply 4PL inversion to compute AU (Arbitrary Units) for specimen wells.
 
     The AU scale is anchored so that the first (lowest) standard dilution
@@ -563,7 +650,8 @@ def compute_concentrations(df: pd.DataFrame, fits: dict, config: dict | None = N
     # is meant to calibrate that antigen (auto-selected), not blindly from the
     # first pool.
     if multi_pool:
-        selected = select_pool_per_antigen(fits, antigens=None, config=config)
+        selected = pool_map if pool_map is not None else \
+            select_pool_per_antigen(fits, antigens=None, config=config)
         specimens["rau"] = np.nan
         specimens["extrapolated"] = False
         specimens["below_lloq"] = False
@@ -648,6 +736,7 @@ def compute_in_range_table(
     fits: dict,
     excluded_analytes: list[str] | None = None,
     config: dict | None = None,
+    pool_map: dict | None = None,
 ) -> pd.DataFrame:
     """Per-(specimen well × antigen) IN_RANGE / OUT_OF_RANGE table.
 
@@ -675,11 +764,13 @@ def compute_in_range_table(
             columns=["well", "sample_name", "analyte", "mfi", "mfi_lloq",
                      "mfi_uloq", "status", "excluded"]
         )
-    # Each antigen is scored against the standard curve of the pool that
-    # is meant to calibrate it (auto-selected by pathogen name, tie-broken
-    # by best fit). See select_pool_per_antigen.
+    # Each antigen is scored against one pool's curve. The mapping is
+    # supplied explicitly (``pool_map``) — e.g. a single scoring pool in
+    # per-pool mode, or the auto-selection in auto_select mode. Falls back
+    # to the auto-selection when no map is given.
     all_antigens = sorted({a for pf in fits.values() for a in pf})
-    selected = select_pool_per_antigen(fits, antigens=all_antigens, config=config)
+    selected = pool_map if pool_map is not None else \
+        select_pool_per_antigen(fits, antigens=all_antigens, config=config)
 
     specimens = df[df["well_type"] == "specimen"].copy()
     if specimens.empty:
