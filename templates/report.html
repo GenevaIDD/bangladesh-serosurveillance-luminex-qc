@@ -899,28 +899,13 @@
 <summary>Downloads</summary>
 <div class="inner">
 
-  <div class="dl-group">
-    <h4>Clean results (master)</h4>
-    <div class="dl-row">
-      <a class="btn btn-primary" href="/download/specimens/results_{{ plate_id }}.csv">results_*.csv</a>
-      <div class="desc">
-        The clean, analysis-ready master table — one row per specimen well ×
-        antigen with <code>sample_id</code>, <code>matrix</code> (Serum/DBS) and
-        <code>mfi</code>.
-        {% if pool_mode == "per_pool" %}
-        In per-pool mode it then carries a <code>RAU (&lt;pool&gt;)</code> +
-        <code>status (&lt;pool&gt;)</code> pair for <b>every</b> control pool
-        (<code>NO_FIT</code> where a pool doesn't calibrate that antigen), so you
-        can choose the right pool per antigen yourself.
-        {% else %}
-        In auto-select mode it then carries the selected <code>pool</code>,
-        <code>RAU</code> (AU from that pool's curve), <code>status</code>
-        (IN/BELOW/ABOVE/NO_FIT), and <code>censored</code>.
-        {% endif %}
-        The same content is concatenated across plates in the master
-        <em>Export All Processed Data</em> workbook (results sheet).
-      </div>
-    </div>
+  <div class="banner" style="margin-top:0;">
+    <b>Looking for the clean analysis table?</b> The tidy "results" master (one
+    row per specimen well × antigen with RAU
+    {% if pool_mode == "per_pool" %}under every control pool{% else %}from each
+    antigen's selected pool{% endif %}) is the <b>results</b> sheet of the
+    <em>Export All Processed Data</em> workbook on the home page — it combines
+    every plate. The per-plate files below are the raw/QC tables for this plate.
   </div>
 
   {% if nc_present %}
