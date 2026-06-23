@@ -47,7 +47,6 @@ from .qc_standard_curve import (
     four_pl, range_problem_summary, select_pool_per_antigen, default_scoring_pool,
 )
 from .qc_beads import bead_problem_summary
-from .qc_background import qc_background_levels
 
 
 # ---------------------------------------------------------------------------
@@ -70,11 +69,11 @@ def generate_report(
     history_fit: dict | pd.DataFrame | None = None,
     history_specimens: pd.DataFrame | None = None,
     history_background: pd.DataFrame | None = None,
+    history_pc: pd.DataFrame | None = None,
     output_path: Path | None = None,
     plate_order: list | None = None,
     config: dict | None = None,
     layout_info: dict | None = None,
-    pc_replicates: dict | None = None,
 ) -> Path:
     """Render the QC report HTML and write it to ``output_path``."""
     _reset_plotlyjs_embed_flag()
@@ -161,13 +160,56 @@ def generate_report(
     #   1. Plate Overview → 2. Bead Count → 3. Background QC → …
     plate_layout_html = _make_plate_layout_overview(data)
     bead_heatmap_html = _make_bead_heatmap(bead_qc, excluded, well_types=well_types_map)
-    bg_overview_html = _make_background_overview_plot(
-        history_background, current_plate_id=metadata.get("plate_id"), excluded=excluded
-    )
-    # NC QC covers ALL antigens (not just priority).
-    nc_history_html = _make_nc_history_plot(
-        history_nc, current_plate_id=metadata.get("plate_id"), antigens=None)
-    nc_history_present = bool(nc_history_html)
+
+    # ----- Background QC -----
+    # Unified with PC/NC: current-plate Background wells (per well) + each past
+    # plate's mean Background MFI (one pseudo-well per plate), fed through the
+    # same cross-plate overview + stats helpers so all three sections match.
+    cur_pid = metadata.get("plate_id")
+    bgw = (data[data["well_type"] == "background"][["analyte", "well", "mfi"]].copy()
+           if (not data.empty and "well_type" in data.columns)
+           else pd.DataFrame(columns=["analyte", "well", "mfi"]))
+    bgw["plate_id"] = cur_pid
+    if (isinstance(history_background, pd.DataFrame) and not history_background.empty
+            and "mean_mfi" in history_background.columns):
+        _hb = history_background[history_background["plate_id"] != cur_pid][
+            ["plate_id", "analyte", "mean_mfi"]].dropna(subset=["mean_mfi"]).copy()
+        _hb = _hb.rename(columns={"mean_mfi": "mfi"})
+        _hb["well"] = "(plate mean)"
+        n_prev_bg = int(_hb["plate_id"].nunique())
+    else:
+        _hb = pd.DataFrame(columns=["plate_id", "analyte", "mfi", "well"])
+        n_prev_bg = 0
+    bg_hist = pd.concat([bgw, _hb], ignore_index=True)
+    bg_overview_html = _cross_plate_mfi_overview(
+        bg_hist, panel_order, cur_pid, "Mean Background MFI (log scale)",
+        "fig-bg-overview", excluded)
+    bg_stats, bg_well_cols = _format_control_stats(bg_hist, panel_order, cur_pid, excluded)
+    bg_levels_ctx = {"present": bool(bg_stats), "n_antigens": len(bg_stats),
+                     "n_prev_plates": n_prev_bg, "rows": bg_stats, "well_cols": bg_well_cols}
+
+    # ----- Positive Control QC (single-point Cholera High/Low) -----
+    # Cross-plate overview + stats per control, modelled on Background QC.
+    pc_hist = (history_pc.copy()
+               if isinstance(history_pc, pd.DataFrame) and not history_pc.empty
+               else pd.DataFrame())
+    if not pc_hist.empty and "control_label" in pc_hist.columns:
+        pc_hist["control"] = pc_hist["control_label"]
+    pc_controls = _control_qc_sections(
+        pc_hist, panel_order, metadata.get("plate_id"), excluded,
+        "Single-point PC MFI (log scale)", "pc-sp")
+    pc_present = bool(pc_controls)
+
+    # ----- Negative Control QC -----
+    # One cross-plate overview + stats per NC control (Negative 0/49).
+    nc_hist = (history_nc.copy()
+               if isinstance(history_nc, pd.DataFrame) and not history_nc.empty
+               else pd.DataFrame())
+    if not nc_hist.empty and "sample_name" in nc_hist.columns:
+        nc_hist["control"] = nc_hist["sample_name"].apply(_nc_control)
+    nc_controls = _control_qc_sections(
+        nc_hist, panel_order, metadata.get("plate_id"), excluded,
+        "NC MFI (log scale)", "nc-ctrl")
     # ----- Standard-Curve Summary + All-Curves Overview -----
     # per_pool (default): a curve for EVERY (pool × antigen) — one grid per
     # pool, summary rows per (pool × antigen); no matching/auto-selection.
@@ -214,10 +256,7 @@ def generate_report(
     )
     range_heatmap_html = _make_in_range_heatmap(in_range, excluded)
     serum_dbs_html = _make_serum_dbs_comparison(in_range)
-    nc_bar_html = _make_nc_bar(nc_levels, antigens=None)
-    nc_table = _format_nc_table(nc_levels)
 
-    pc_repl = _format_pc_replicates(pc_replicates)
     bead_problems = _format_problem_list(bead_qc.get("problems", pd.DataFrame()))
     range_problems = _format_range_problems(in_range, excluded)
     nc_present = nc_levels is not None and not nc_levels.empty
@@ -229,12 +268,6 @@ def generate_report(
     )
     range_summary = range_problem_summary(
         in_range, fraction_threshold=problem_frac, excluded_analytes=excluded
-    )
-    bg_levels = qc_background_levels(
-        data,
-        cv_threshold=bg_cv_thr,
-        max_mfi_threshold=bg_max_thr,
-        excluded_analytes=excluded,
     )
 
     base_dir = Path(__file__).parent.parent
@@ -262,7 +295,6 @@ def generate_report(
         bead_problems=bead_problems,
         bead_problem_counts=_tier_counts(bead_qc.get("problems", pd.DataFrame())),
         curve_summary=curve_summary,
-        pc_repl=pc_repl,
         pool_selection=pool_selection,
         pool_mode=pool_mode,
         scoring_pool=scoring_pool or "",
@@ -276,18 +308,14 @@ def generate_report(
         serum_dbs_html=serum_dbs_html,
         serum_dbs_present=bool(serum_dbs_html),
         range_problems=range_problems,
-        nc_bar_html=nc_bar_html,
-        nc_table=nc_table,
-        nc_history_html=nc_history_html,
-        nc_history_present=nc_history_present,
+        nc_controls=nc_controls,
+        pc_controls=pc_controls,
+        pc_present=pc_present,
         nc_present=nc_present,
         n_nc_wells=n_nc_wells,
         bead_summary=_format_bead_summary(bead_summary),
         range_summary=_format_range_summary(range_summary),
-        bg_levels=_format_bg_levels(
-            bg_levels, history_background=history_background,
-            current_plate_id=metadata.get("plate_id"),
-        ),
+        bg_levels=bg_levels_ctx,
         bg_overview_html=bg_overview_html,
         bg_overview_present=bool(bg_overview_html),
         problem_threshold_pct=int(round(problem_frac * 100)),
@@ -381,15 +409,21 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
             count = matrix.iat[i, j]
             label = sample_labels.get(w, "") or "—"
             count_str = "—" if pd.isna(count) else f"{int(count)}"
+            _tier_label = {"red": "Critically Low Bead Count",
+                           "yellow": "Low Bead Count",
+                           "green": "Adequate Bead Count"}.get(
+                str(tier_matrix.iat[i, j]).lower(), str(tier_matrix.iat[i, j]))
             text[i, j] = (
                 f"<b>{an}</b><br>Well: {w}<br>Sample: {label}<br>"
-                f"Bead count: {count_str}<br>Tier: {tier_matrix.iat[i, j].upper()}"
+                f"Bead count: {count_str}<br>Tier: {_tier_label}"
             )
 
+    # Colour-blind-safe tiers (Okabe–Ito): vermillion = low/fail,
+    # amber = warn, bluish-green = OK.
     colorscale = [
-        [0.0, "#e74c3c"], [0.34, "#e74c3c"],   # red
-        [0.34, "#f1c40f"], [0.67, "#f1c40f"],   # yellow
-        [0.67, "#27ae60"], [1.0, "#27ae60"],    # green
+        [0.0, _CB_VERMILLION], [0.34, _CB_VERMILLION],
+        [0.34, _CB_AMBER], [0.67, _CB_AMBER],
+        [0.67, _CB_GREEN], [1.0, _CB_GREEN],
     ]
     boundaries = _group_boundaries(well_cols, well_types) if well_types else None
     # Shared freeze-panes layout: frozen antigen rows (left) + frozen well-
@@ -400,10 +434,20 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
     )
 
 
-# Specimen range-status colours (shared with the picker rug).
+# Colour-blind-safe palette (Okabe–Ito) used across the report. These hues are
+# distinguishable under deuteranopia / protanopia / tritanopia; where colour
+# encodes pass/fail we also vary marker SHAPE so colour is never the only cue.
+_CB_BLUE = "#0072B2"        # within range / OK
+_CB_VERMILLION = "#D55E00"  # out of range / fail (paired with a diamond/shape)
+_CB_AMBER = "#E69F00"       # warning / intermediate
+_CB_GREEN = "#009E73"       # good / pass (bluish-green, not red-green ambiguous)
+_CB_GREY = "#999999"        # neutral / historical reference
+
+# Specimen range-status colours (shared with the picker rug) — Okabe–Ito,
+# colour-blind safe.
 _STATUS_COLORS = {
-    "BELOW_RANGE": "#4477AA", "IN_RANGE": "#44AA99",
-    "ABOVE_RANGE": "#EE7733", "NO_FIT": "#CCBB44",
+    "BELOW_RANGE": "#0072B2", "IN_RANGE": "#009E73",
+    "ABOVE_RANGE": "#D55E00", "NO_FIT": "#999999",
 }
 # Above this many panels the interactive grid gets too heavy, so we fall
 # back to the static image. Setting priority antigens keeps it interactive.
@@ -465,7 +509,7 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
     for an in analytes:
         fit = pool_fits[an]
         color = ("#95a5a6" if an in excluded
-                 else "#27ae60" if fit.get("fit_ok") else "#e74c3c")
+                 else _CB_GREEN if fit.get("fit_ok") else _CB_VERMILLION)
         short = an if len(an) <= 22 else an[:20] + "…"
         titles.append(f"<span style='color:{color}'>{short}</span>")
 
@@ -506,7 +550,7 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
             xs = np.geomspace(max(xd.min(), 1e-9), xd.max(), 100)
             ys = four_pl(xs, *params)
             fig.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines", line=dict(color="#e74c3c", width=1.4),
+                x=xs, y=ys, mode="lines", line=dict(color=_CB_VERMILLION, width=1.4),
                 name="4PL fit", legendgroup="fit",
                 showlegend="fit" not in shown_legend, hoverinfo="skip",
             ), row=rr_, col=cc_); shown_legend.add("fit")
@@ -522,7 +566,7 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
         if bad_x:
             fig.add_trace(go.Scatter(
                 x=bad_x, y=bad_y, mode="markers",
-                marker=dict(color="#e74c3c", size=7, symbol="triangle-up"),
+                marker=dict(color=_CB_VERMILLION, size=7, symbol="triangle-up"),
                 name="Out of tolerance", legendgroup="oot",
                 showlegend="oot" not in shown_legend,
                 hovertemplate="Dilution 1:%{x:.0f}<br>MFI %{y:.0f}<br>out of tolerance<extra></extra>",
@@ -568,7 +612,7 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
             x0, x1, y0, y1 = box
             fig.add_shape(
                 type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
-                line=dict(color="#27ae60", width=1, dash="dash"),
+                line=dict(color=_CB_GREEN, width=1, dash="dash"),
                 fillcolor="rgba(39,174,96,0.12)", layer="below",
                 row=rr_, col=cc_,
             )
@@ -604,18 +648,18 @@ def _make_curve_grid_static(pool_fits: dict, excluded: set[str], cols: int = 10)
         std = fit.get("mean_data")
         params = fit.get("params")
         title_color = ("#95a5a6" if an in excluded
-                       else "#27ae60" if fit.get("fit_ok") else "#e74c3c")
+                       else _CB_GREEN if fit.get("fit_ok") else _CB_VERMILLION)
         if std is not None and not std.empty:
             box = _linear_range_box(fit)
             if box is not None:
                 x0, x1, y0, y1 = box
                 ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0,
-                             facecolor="#27ae60", alpha=0.12, edgecolor="#27ae60",
+                             facecolor=_CB_GREEN, alpha=0.12, edgecolor=_CB_GREEN,
                              linewidth=0.6, linestyle="--", zorder=1))
             ax.scatter(std["dilution"], std["mfi"], s=10, color="#2c7fb8", zorder=3)
             if params is not None:
                 xs = np.geomspace(std["dilution"].min(), std["dilution"].max(), 80)
-                ax.plot(xs, four_pl(xs, *params), color="#e74c3c", linewidth=1.2, zorder=2)
+                ax.plot(xs, four_pl(xs, *params), color=_CB_VERMILLION, linewidth=1.2, zorder=2)
             ax.set_xscale("log"); ax.set_yscale("log")
         ax.tick_params(labelsize=5, length=2, pad=1)
         title = an if len(an) <= 20 else an[:18] + "…"
@@ -779,12 +823,7 @@ def _make_curve_picker(
     STATUS_ORDER = ["BELOW_RANGE", "IN_RANGE", "ABOVE_RANGE", "NO_FIT"]
     STATUS_LABEL = {"BELOW_RANGE": "BELOW", "IN_RANGE": "IN",
                     "ABOVE_RANGE": "ABOVE", "NO_FIT": "NO FIT"}
-    STATUS_RUG_COLOR = {
-        "BELOW_RANGE": "#4477AA",
-        "IN_RANGE":    "#44AA99",
-        "ABOVE_RANGE": "#EE7733",
-        "NO_FIT":      "#CCBB44",
-    }
+    STATUS_RUG_COLOR = dict(_STATUS_COLORS)
     HIST_GREY = "#b0b6bd"
     # Rug x-positions in the second subplot. Current-plate specimens
     # stack in a single column at x=0 (colour-coded by status). Each
@@ -1093,14 +1132,14 @@ def _make_curve_picker(
             fig.add_trace(go.Scatter(
                 x=[rx0, rx1, rx1, rx0, rx0], y=[ry0, ry0, ry1, ry1, ry0],
                 mode="lines", fill="toself", fillcolor="rgba(39,174,96,0.14)",
-                line=dict(color="#27ae60", width=1.2, dash="dash"),
+                line=dict(color=_CB_GREEN, width=1.2, dash="dash"),
                 name="Linear range", legendgroup="current", showlegend=False,
                 hoverinfo="skip", visible=vis,
             ), row=1, col=1)
         else:
             fig.add_trace(go.Scatter(
                 x=[], y=[], mode="lines", fill="toself",
-                line=dict(color="#27ae60", width=1.2, dash="dash"),
+                line=dict(color=_CB_GREEN, width=1.2, dash="dash"),
                 name="Linear range", legendgroup="current",
                 showlegend=False, hoverinfo="skip", visible=vis,
             ), row=1, col=1)
@@ -2010,32 +2049,6 @@ def _build_curve_summary(
     return rows
 
 
-def _format_pc_replicates(pc_replicates: dict | None) -> dict:
-    """Shape the PC replicate-CV QC for the template: summary counts + the
-    flagged (pool × antigen × dilution) points (worst CV first)."""
-    if not pc_replicates or pc_replicates.get("points") is None \
-            or pc_replicates["points"].empty:
-        return {"present": False, "n_points": 0, "n_flagged": 0,
-                "threshold_pct": int(round((pc_replicates or {}).get("threshold", 0.20) * 100)),
-                "flagged": []}
-    pts = pc_replicates["points"]
-    flagged = pts[pts["flag"]].sort_values("cv", ascending=False)
-    rows = [{
-        "pool": r.pool, "analyte": r.analyte,
-        "dilution": _fmt(r.dilution, 0),
-        "n_reps": int(r.n_reps),
-        "mean_mfi": _fmt(r.mean_mfi, 0),
-        "cv_pct": _fmt(r.cv * 100 if pd.notna(r.cv) else None, 1),
-    } for r in flagged.itertuples(index=False)]
-    return {
-        "present": True,
-        "n_points": int(pc_replicates.get("n_points", len(pts))),
-        "n_flagged": int(pc_replicates.get("n_flagged_points", len(rows))),
-        "threshold_pct": int(round(pc_replicates.get("threshold", 0.20) * 100)),
-        "flagged": rows,
-    }
-
-
 def _format_problem_list(problems: pd.DataFrame) -> list[dict]:
     if problems is None or problems.empty:
         return []
@@ -2131,70 +2144,6 @@ def _format_range_summary(range_summary: dict) -> dict:
     }
 
 
-def _format_bg_levels(
-    bg: pd.DataFrame,
-    history_background: pd.DataFrame | None = None,
-    current_plate_id: str | None = None,
-) -> dict:
-    """Rows for the per-antigen Background QC table.
-
-    Columns (in display order): Analyte, n wells, individual MFIs, SD, %CV,
-    IQR current plate (Q1–Q3 of this plate's Background wells), IQR previous
-    plates (Q1–Q3 of the per-plate mean Background MFI across earlier plates,
-    current excluded). Mean/Max MFI and the MAX flag are intentionally
-    dropped; formal flagging is deferred (see Section 4 note).
-    """
-    if bg is None or bg.empty:
-        return {"rows": [], "present": False, "n_antigens": 0,
-                "n_prev_plates": 0}
-
-    # Previous-plate IQR per antigen, from the cross-plate Background history
-    # (per-(plate × antigen) mean MFI), excluding the current plate.
-    prev_iqr: dict[str, tuple[float, float]] = {}
-    n_prev_plates = 0
-    if (history_background is not None
-            and isinstance(history_background, pd.DataFrame)
-            and not history_background.empty
-            and "mean_mfi" in history_background.columns):
-        h = history_background.dropna(subset=["mean_mfi"]).copy()
-        if current_plate_id is not None and "plate_id" in h.columns:
-            h = h[h["plate_id"] != current_plate_id]
-        if not h.empty:
-            n_prev_plates = int(h["plate_id"].nunique()) if "plate_id" in h.columns else 0
-            for a, g in h.groupby("analyte"):
-                vals = g["mean_mfi"].dropna().astype(float).values
-                if vals.size:
-                    prev_iqr[a] = (float(np.percentile(vals, 25)),
-                                   float(np.percentile(vals, 75)))
-
-    def _iqr_str(lo, hi) -> str:
-        if lo is None or hi is None or pd.isna(lo) or pd.isna(hi):
-            return "—"
-        return f"{lo:.1f}–{hi:.1f}"
-
-    rows = []
-    for r in bg.itertuples(index=False):
-        mfis = list(getattr(r, "mfis", []) or [])
-        mfis_str = ", ".join(f"{v:.1f}" for v in mfis) if mfis else "—"
-        plo, phi = prev_iqr.get(r.analyte, (None, None))
-        rows.append({
-            "analyte": r.analyte,
-            "n_wells": int(r.n_wells),
-            "mfis": mfis_str,
-            "sd_mfi": _fmt(r.sd_mfi, 1),
-            "cv_pct": _fmt(r.cv * 100 if pd.notna(r.cv) else None, 1),
-            "iqr_current": _iqr_str(getattr(r, "iqr_lo", None), getattr(r, "iqr_hi", None)),
-            "iqr_previous": _iqr_str(plo, phi),
-            "excluded": bool(r.excluded),
-        })
-    return {
-        "rows": rows,
-        "present": True,
-        "n_antigens": len(rows),
-        "n_prev_plates": n_prev_plates,
-    }
-
-
 def _problem_rows(df: pd.DataFrame, key: str, list_col: str,
                   extra: tuple[str, ...] = ()) -> list[dict]:
     if df is None or df.empty:
@@ -2214,227 +2163,292 @@ def _problem_rows(df: pd.DataFrame, key: str, list_col: str,
     return out
 
 
-def _bg_overview_iqr(
-    df: pd.DataFrame,
-    order_keys: list[str],
-    an_index: dict[str, int],
-    current_plate_id: str,
-    excluded: set[str],
+def _cross_plate_mfi_overview(
+    hist: pd.DataFrame,
+    antigens: list[str] | None,
+    current_plate_id: str | None,
+    value_label: str,
+    div_id: str,
+    excluded: set[str] | None = None,
 ) -> str:
-    """≥3-plate Background overview: previous-plate IQR band + current dot.
+    """Cross-plate MFI overview for one control (Background, PC, or NC).
 
-    For each antigen, draw a vertical line spanning the Q1–Q3 of the mean
-    Background MFI across all *previous* plates (current excluded), then
-    overlay the current plate's mean as a dot. Dots outside the IQR are
-    coloured red (provisional flag).
+    x = antigen (panel order), y = MFI (log scale). The historical reference is
+    built from each *past* plate's mean for the control:
+
+    - **≥ 3 past plates** — a grey bar spans the historical Q1–Q3 (IQR) with a
+      median tick; this plate's mean is a dot, coloured **blue within the IQR**
+      and **red (diamond) above/below it** as a provisional flag.
+    - **< 3 past plates** — each past plate's mean is a faint grey dot (no IQR
+      yet) and this plate's mean is a neutral blue dot.
+
+    The current dot's hover lists this plate's individual well MFIs. (Per-plate
+    historical points are intentionally omitted from the plot — the per-antigen
+    numbers are in the stats table below.)
     """
-    prev = df[df["plate_id"] != current_plate_id]
+    excluded = set(excluded or [])
+    if (hist is None or not isinstance(hist, pd.DataFrame) or hist.empty
+            or "mfi" not in hist.columns):
+        return ""
+    df = hist.dropna(subset=["mfi"]).copy()
+    if df.empty:
+        return ""
+    df["mfi"] = df["mfi"].astype(float)
+
+    present = set(df["analyte"])
+    order_keys = [a for a in (antigens or []) if a in present]
+    for a in df["analyte"].drop_duplicates().tolist():
+        if a not in order_keys:
+            order_keys.append(a)
+    an_index = {a: i for i, a in enumerate(order_keys)}
+
     cur = df[df["plate_id"] == current_plate_id]
+    past = df[df["plate_id"] != current_plate_id]
+    past_means = (past.groupby(["plate_id", "analyte"])["mfi"].mean().reset_index()
+                  if not past.empty else pd.DataFrame(columns=["plate_id", "analyte", "mfi"]))
+    n_past_plates = int(past["plate_id"].nunique()) if not past.empty else 0
+    iqr_mode = n_past_plates >= 3
 
     def _floor(v):
-        return max(float(v), 0.1)  # keep positive for the log axis
+        return max(float(v), 0.1)
 
-    iqr_x, iqr_y = [], []           # IQR line segments (None-separated)
-    q_hover_x, q_hover_y, q_text = [], [], []  # invisible markers carrying IQR hover
-    in_x, in_y, in_txt = [], [], []     # current dot within IQR
-    out_x, out_y, out_txt = [], [], []  # current dot outside IQR (flag)
+    iqr_x, iqr_y = [], []
+    med_x, med_y, med_t = [], [], []
+    pastdot_x, pastdot_y, pastdot_t = [], [], []   # past-plate means (only when < 3 plates)
+    in_x, in_y, in_t = [], [], []     # current mean within IQR
+    out_x, out_y, out_t = [], [], []  # current mean outside IQR (flag)
+    neu_x, neu_y, neu_t = [], [], []  # current mean, no IQR yet (neutral)
 
-    cur_by_an = cur.groupby("analyte")["mean_mfi"].mean()
+    cur_groups = cur.groupby("analyte") if not cur.empty else None
     for a in order_keys:
         i = an_index[a]
-        pv = prev.loc[prev["analyte"] == a, "mean_mfi"].dropna().astype(float)
-        if pv.empty:
-            continue
-        q1 = _floor(np.percentile(pv.values, 25))
-        q3 = _floor(np.percentile(pv.values, 75))
-        med = _floor(np.percentile(pv.values, 50))
-        iqr_x += [i, i, None]
-        iqr_y += [q1, q3, None]
-        q_hover_x.append(i); q_hover_y.append(med)
-        q_text.append(f"<b>{a}</b><br>Previous plates ({pv.size}): "
-                      f"Q1 {q1:.1f} · median {med:.1f} · Q3 {q3:.1f}")
-        if a in cur_by_an.index and pd.notna(cur_by_an[a]):
-            cy = _floor(cur_by_an[a])
-            inside = q1 <= cur_by_an[a] <= q3
-            label = (f"<b>{a}</b><br>Current plate mean: {cur_by_an[a]:.1f}<br>"
-                     f"Previous IQR: {q1:.1f}–{q3:.1f}<br>"
-                     f"{'within IQR' if inside else '⚠ outside IQR'}")
-            if inside:
-                in_x.append(i); in_y.append(cy); in_txt.append(label)
+        pm = (past_means.loc[past_means["analyte"] == a, "mfi"].dropna().astype(float)
+              if not past_means.empty else pd.Series(dtype=float))
+        q1r = q3r = None  # raw Q1/Q3 (match the stats table exactly)
+        if iqr_mode and pm.size >= 1:
+            q1r = float(np.percentile(pm.values, 25))
+            q3r = float(np.percentile(pm.values, 75))
+            medr = float(np.percentile(pm.values, 50))
+            iqr_x += [i, i, None]
+            iqr_y += [_floor(q1r), _floor(q3r), None]
+            # Invisible hover-carrier at the median (no visible tick — the bar
+            # already conveys the spread); hover gives the standardized stats.
+            med_x.append(i); med_y.append(_floor(medr))
+            med_t.append(f"<b>{a}</b><br>Historical IQR ({pm.size} plates):<br>"
+                         f"Q1: {q1r:.1f}; Median: {medr:.1f}; Q3: {q3r:.1f}")
+        elif not iqr_mode:
+            for v in pm.values:
+                pastdot_x.append(i); pastdot_y.append(_floor(v))
+                pastdot_t.append(f"<b>{a}</b><br>Previous plate mean: {v:.1f}")
+        if cur_groups is not None and a in cur_groups.groups:
+            wells = cur_groups.get_group(a)["mfi"].dropna().astype(float).values
+            if len(wells) == 0:
+                continue
+            m = float(np.mean(wells))
+            reps = ", ".join(f"{v:.1f}" for v in wells)
+            head = (f"<b>{a}</b><br>This plate — mean MFI: {m:.1f} "
+                    f"(wells: {reps})")
+            if q1r is not None and q3r is not None:
+                if m > q3r:
+                    pos = "above historical Q3"
+                elif m < q1r:
+                    pos = "below historical Q1"
+                else:
+                    pos = "within historical IQR"
+                lbl = (f"{head}<br>Historical IQR: {q1r:.1f}–{q3r:.1f}<br>"
+                       f"Position: {pos}")
+                if q1r <= m <= q3r:
+                    in_x.append(i); in_y.append(_floor(m)); in_t.append(lbl)
+                else:
+                    out_x.append(i); out_y.append(_floor(m)); out_t.append(lbl)
             else:
-                out_x.append(i); out_y.append(cy); out_txt.append(label)
+                neu_x.append(i); neu_y.append(_floor(m))
+                neu_t.append(f"{head}<br>Historical IQR: not yet (need ≥ 3 plates)")
 
+    # Colour-blind-safe palette (Okabe–Ito): neutral grey history, blue = within
+    # IQR, vermillion + diamond shape = outside IQR (shape gives a non-colour cue).
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=iqr_x, y=iqr_y, mode="lines",
-        line=dict(color="#9aa5b1", width=4), opacity=0.7,
-        name="Previous plates IQR (Q1–Q3)", hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=q_hover_x, y=q_hover_y, mode="markers",
-        marker=dict(size=6, color="#9aa5b1", symbol="line-ew", line=dict(width=0)),
-        name="Previous median", hovertext=q_text, hoverinfo="text", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter(
-        x=in_x, y=in_y, mode="markers", name="Current plate (within IQR)",
-        marker=dict(size=7, color="#2c7fb8", line=dict(width=0.5, color="#1b4965")),
-        hovertext=in_txt, hoverinfo="text",
-    ))
-    fig.add_trace(go.Scatter(
-        x=out_x, y=out_y, mode="markers", name="Current plate (outside IQR — review)",
-        marker=dict(size=8, color="#e74c3c", symbol="diamond",
-                    line=dict(width=0.5, color="#7b241c")),
-        hovertext=out_txt, hoverinfo="text",
-    ))
+    if iqr_x:
+        fig.add_trace(go.Scatter(
+            x=iqr_x, y=iqr_y, mode="lines", line=dict(color=_CB_GREY, width=4),
+            opacity=0.7, name="Previous plates IQR (Q1–Q3)", hoverinfo="skip"))
+        # Invisible hover target over the bar — no visible median tick (the bar
+        # conveys the spread); the standardized stats live in the hover.
+        fig.add_trace(go.Scatter(
+            x=med_x, y=med_y, mode="markers",
+            marker=dict(size=14, color="rgba(0,0,0,0)"),
+            name="Historical IQR", hovertext=med_t, hoverinfo="text", showlegend=False))
+    if pastdot_x:
+        fig.add_trace(go.Scatter(
+            x=pastdot_x, y=pastdot_y, mode="markers",
+            marker=dict(size=5, color=_CB_GREY, opacity=0.7),
+            name="Previous plates (mean)", hovertext=pastdot_t, hoverinfo="text"))
+    if in_x:
+        fig.add_trace(go.Scatter(
+            x=in_x, y=in_y, mode="markers", name="This plate (within IQR)",
+            marker=dict(size=6, color=_CB_BLUE, line=dict(width=0.5, color="#04395e")),
+            hovertext=in_t, hoverinfo="text"))
+    if out_x:
+        fig.add_trace(go.Scatter(
+            x=out_x, y=out_y, mode="markers", name="This plate (outside IQR — review)",
+            marker=dict(size=7, color=_CB_VERMILLION, symbol="diamond",
+                        line=dict(width=0.5, color="#7a3500")),
+            hovertext=out_t, hoverinfo="text"))
+    if neu_x:
+        fig.add_trace(go.Scatter(
+            x=neu_x, y=neu_y, mode="markers", name="This plate (mean of wells)",
+            marker=dict(size=6, color=_CB_BLUE, line=dict(width=0.5, color="#04395e")),
+            hovertext=neu_t, hoverinfo="text"))
 
     n_an = len(order_keys)
     fig.update_layout(
-        margin=dict(l=60, r=30, t=80, b=200),
-        height=560,
+        margin=dict(l=60, r=30, t=80, b=200), height=520,
         xaxis=dict(
             title="Antigen (panel order from xPONENT CSV header)",
             tickmode="array", tickvals=list(range(n_an)),
             ticktext=[(f"<i>{a}</i>" if a in excluded else a) for a in order_keys],
-            tickangle=-90, tickfont=dict(size=6), showgrid=False, automargin=False,
-        ),
-        yaxis=dict(title="Mean Background MFI (log scale)", type="log", gridcolor="#eef1f4"),
+            tickangle=-90, tickfont=dict(size=6), showgrid=False, automargin=False),
+        yaxis=dict(title=value_label, type="log", gridcolor="#eef1f4"),
         legend=dict(orientation="h", x=0, xanchor="left", y=1.06, yanchor="bottom",
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="#d0d7de",
                     borderwidth=1, font=dict(size=10)),
     )
-    return _plotly_html(fig, "fig-bg-overview", height=580)
+    return _plotly_html(fig, div_id, height=540)
 
 
-def _make_background_overview_plot(
-    history_background: pd.DataFrame | None,
-    current_plate_id: str | None = None,
+def _well_sort_key(w):
+    """Sort well IDs by row letter then column number (A1, A2, …, B1, …)."""
+    m = re.match(r"\s*([A-Za-z]+)\s*0*(\d+)", str(w))
+    if m:
+        return (m.group(1).upper(), int(m.group(2)))
+    return (str(w), 0)
+
+
+def _format_control_stats(
+    hist: pd.DataFrame,
+    antigens: list[str] | None,
+    current_plate_id: str | None,
     excluded: set[str] | None = None,
-) -> str:
-    """Scatter of mean Background MFI per antigen, coloured by plate.
+) -> tuple[list[dict], list[str]]:
+    """Per-antigen cross-plate stats rows + the current-plate well columns.
 
-    Antigens on the x-axis (sorted by max mean MFI across plates,
-    descending — so the consistently-high antigens sit on the left).
-    One trace per plate; the current plate is rendered with larger,
-    fully opaque markers to draw the eye.
+    Shared by Background, Positive, and Negative Control QC so all three tables
+    carry identical columns. Each row has a ``wells`` dict (well → this-plate
+    MFI) plus:
 
-    Empty string when history is empty; caller hides the section.
+    - **current** (across this plate's wells): n_wells, mean, SD (ddof=1), %CV
+      (SD/mean×100), IQR (Q1–Q3).
+    - **historical** (across each *past* plate's mean for this control): mean,
+      SD, %CV, IQR, and ``n_past`` = the number of past plates.
+
+    ``well_cols`` is the sorted list of this plate's well IDs (one column each).
     """
-    if (history_background is None
-            or not isinstance(history_background, pd.DataFrame)
-            or history_background.empty
-            or "mean_mfi" not in history_background.columns):
-        return ""
-
     excluded = set(excluded or [])
-    df = history_background.dropna(subset=["mean_mfi"]).copy()
-    if df.empty:
-        return ""
+    if (hist is None or not isinstance(hist, pd.DataFrame) or hist.empty
+            or "mfi" not in hist.columns):
+        return [], []
+    df = hist.dropna(subset=["mfi"]).copy()
+    df["mfi"] = df["mfi"].astype(float)
+    present = set(df["analyte"])
+    order_keys = [a for a in (antigens or []) if a in present]
+    for a in df["analyte"].drop_duplicates().tolist():
+        if a not in order_keys:
+            order_keys.append(a)
 
-    # Antigen order = panel order from the most recently-processed
-    # plate's xPONENT CSV header. Preserves the layout the user sees
-    # on the instrument; no sorting by signal magnitude. Falls back to
-    # first-seen order in history if the current plate isn't in the
-    # frame yet.
-    if current_plate_id and (df["plate_id"] == current_plate_id).any():
-        ordered = df[df["plate_id"] == current_plate_id]["analyte"].drop_duplicates().tolist()
-    else:
-        ordered = df["analyte"].drop_duplicates().tolist()
-    # Append any analytes that only show up on past plates, in their
-    # first-seen order, so they still appear on the axis.
-    all_analytes = df["analyte"].drop_duplicates().tolist()
-    for a in all_analytes:
-        if a not in ordered:
-            ordered.append(a)
-    order_keys = ordered
-    an_index = {a: i for i, a in enumerate(order_keys)}
+    cur = df[df["plate_id"] == current_plate_id]
+    past = df[df["plate_id"] != current_plate_id]
+    past_means = (past.groupby(["plate_id", "analyte"])["mfi"].mean().reset_index()
+                  if not past.empty else pd.DataFrame(columns=["plate_id", "analyte", "mfi"]))
+    has_well = "well" in cur.columns
+    well_cols = (sorted(cur["well"].dropna().astype(str).unique(), key=_well_sort_key)
+                 if (not cur.empty and has_well) else [])
+    cur_an = cur.groupby("analyte") if not cur.empty else None
 
-    # Plate order: chronological by run_date when available.
-    if "run_date" in df.columns:
-        rd_by_plate = (
-            df.groupby("plate_id")["run_date"]
-            .agg(lambda s: s.dropna().iloc[0] if s.dropna().size else "")
-        )
-        plates = sorted(rd_by_plate.index, key=lambda p: (rd_by_plate.get(p, ""), p))
-    else:
-        plates = sorted(df["plate_id"].dropna().astype(str).unique())
+    def _iqr(arr):
+        if arr.size >= 1:
+            return f"{float(np.percentile(arr, 25)):.1f}–{float(np.percentile(arr, 75)):.1f}"
+        return "—"
 
-    # With ≥ 3 plates total, switch from a dot-per-plate scatter to an
-    # "IQR band vs current dot" view: a vertical line spans the
-    # interquartile range (Q1–Q3) of the *previous* plates' mean Background
-    # MFI for each antigen, and the current plate's mean is overlaid as a
-    # dot. Dots outside the historical IQR are flagged (provisional — formal
-    # Background flagging rules are still in development).
-    if len(plates) >= 3 and current_plate_id in plates:
-        return _bg_overview_iqr(df, order_keys, an_index, current_plate_id, excluded)
+    rows = []
+    for a in order_keys:
+        wells_map = {}
+        cvals = pd.Series(dtype=float)
+        if cur_an is not None and a in cur_an.groups:
+            g = cur_an.get_group(a)
+            cvals = g["mfi"].dropna().astype(float)
+            if has_well:
+                wells_map = {str(w): _fmt(float(m), 1)
+                             for w, m in zip(g["well"], g["mfi"]) if pd.notna(m)}
+        n_wells = int(cvals.size)
+        cur_mean = float(cvals.mean()) if n_wells else float("nan")
+        cur_sd = float(cvals.std(ddof=1)) if n_wells > 1 else float("nan")
+        cur_cv = (cur_sd / cur_mean) if (n_wells > 1 and cur_mean > 0) else float("nan")
+        cur_iqr = _iqr(cvals.values) if n_wells else "—"
+        pm = (past_means.loc[past_means["analyte"] == a, "mfi"].dropna().astype(float)
+              if not past_means.empty else pd.Series(dtype=float))
+        n_past = int(pm.size)
+        h_mean = float(pm.mean()) if n_past else float("nan")
+        h_sd = float(pm.std(ddof=1)) if n_past > 1 else float("nan")
+        h_cv = (h_sd / h_mean) if (n_past > 1 and h_mean > 0) else float("nan")
+        h_iqr = _iqr(pm.values) if n_past else "—"
+        # Provisional flag: this plate's mean above/below the historical IQR
+        # (only once ≥ 3 past plates establish an IQR).
+        flag = ""
+        if n_past >= 3 and n_wells:
+            q1v = float(np.percentile(pm.values, 25))
+            q3v = float(np.percentile(pm.values, 75))
+            if cur_mean > q3v:
+                flag = "above"
+            elif cur_mean < q1v:
+                flag = "below"
+        rows.append({
+            "analyte": a,
+            "excluded": a in excluded,
+            "flag": flag,
+            "n_wells": n_wells,
+            "wells": wells_map,
+            "current_mfi": _fmt(cur_mean, 1),
+            "current_sd": _fmt(cur_sd, 1),
+            "current_cv": _fmt(cur_cv * 100 if cur_cv == cur_cv else None, 1),
+            "current_iqr": cur_iqr,
+            "hist_mean": _fmt(h_mean, 1),
+            "hist_sd": _fmt(h_sd, 1),
+            "hist_cv": _fmt(h_cv * 100 if h_cv == h_cv else None, 1),
+            "hist_iqr": h_iqr,
+            "n_past": n_past,
+        })
+    return rows, well_cols
 
-    fig = go.Figure()
-    # Colour palette — Plotly Set2-ish, CB-friendly.
-    palette = ["#4477AA", "#EE7733", "#44AA99", "#CCBB44",
-               "#AA3377", "#66CCEE", "#7f8c8d", "#228833"]
-    for i, plate in enumerate(plates):
-        sub = df[df["plate_id"] == plate]
-        if sub.empty:
-            continue
-        xs = [an_index[a] for a in sub["analyte"] if a in an_index]
-        ys = [m for a, m in zip(sub["analyte"], sub["mean_mfi"]) if a in an_index]
-        if not xs:
-            continue
-        is_current = (plate == current_plate_id)
-        color = palette[i % len(palette)]
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="markers",
-            name=plate + (" (current)" if is_current else ""),
-            marker=dict(
-                size=6 if is_current else 5,
-                color=color,
-                opacity=0.95 if is_current else 0.55,
-                line=dict(width=0.5, color="#2c3e50") if is_current else dict(width=0),
-            ),
-            customdata=list(zip(sub["analyte"], [plate] * len(sub))),
-            hovertemplate=(
-                "<b>%{customdata[0]}</b><br>"
-                "Plate %{customdata[1]}<br>"
-                "Mean Background MFI: %{y:.1f}<extra></extra>"
-            ),
-        ))
 
-    n_an = len(order_keys)
-    # Static, responsive figure — no explicit width, no scrollable
-    # wrapper. With ~200 antigens the tick labels are tiny (6 pt)
-    # rotated -90°; some adjacent labels will still touch but skipping
-    # every Nth label hides information, so we accept it.
-    fig.update_layout(
-        margin=dict(l=60, r=30, t=80, b=200),
-        height=560,
-        xaxis=dict(
-            title="Antigen (panel order from xPONENT CSV header)",
-            tickmode="array",
-            tickvals=list(range(n_an)),
-            ticktext=[
-                (f"<i>{a}</i>" if a in excluded else a) for a in order_keys
-            ],
-            tickangle=-90, tickfont=dict(size=6),
-            showgrid=False,
-            automargin=False,
-        ),
-        yaxis=dict(
-            title="Mean Background MFI (log scale)",
-            type="log",
-            gridcolor="#eef1f4",
-        ),
-        # Horizontal legend along the top — keeps every pixel of the
-        # main panel for the antigen ticks. Plates listed left → right.
-        legend=dict(
-            title=dict(text="Plate (click to toggle):",
-                       font=dict(size=10, color="#7f8c8d")),
-            orientation="h",
-            x=0, xanchor="left", y=1.06, yanchor="bottom",
-            bgcolor="rgba(255,255,255,0.85)",
-            bordercolor="#d0d7de", borderwidth=1,
-            font=dict(size=10),
-        ),
-    )
-    return _plotly_html(fig, "fig-bg-overview", height=580)
+def _control_qc_sections(
+    hist: pd.DataFrame,
+    antigens: list[str] | None,
+    current_plate_id: str | None,
+    excluded: set[str] | None,
+    value_label: str,
+    id_prefix: str,
+) -> list[dict]:
+    """Build one {control, plot_html, stats, well_cols, n_past_plates} block
+    per control.
+
+    ``hist`` must carry a ``control`` column (display label). Controls are
+    rendered in sorted order; each gets a cross-plate overview + stats table.
+    """
+    if (hist is None or not isinstance(hist, pd.DataFrame) or hist.empty
+            or "control" not in hist.columns):
+        return []
+    out = []
+    controls = sorted(c for c in hist["control"].dropna().drop_duplicates())
+    for idx, ctrl in enumerate(controls):
+        sub = hist[hist["control"] == ctrl]
+        plot = _cross_plate_mfi_overview(
+            sub, antigens, current_plate_id, value_label, f"fig-{id_prefix}-{idx}", excluded)
+        stats, well_cols = _format_control_stats(sub, antigens, current_plate_id, excluded)
+        past = sub[sub["plate_id"] != current_plate_id]
+        n_past = int(past["plate_id"].nunique()) if not past.empty else 0
+        out.append({"control": ctrl, "plot_html": plot, "stats": stats,
+                    "well_cols": well_cols, "n_past_plates": n_past})
+    return out
 
 
 def _make_plate_layout_overview(data: pd.DataFrame) -> str:
@@ -2558,138 +2572,6 @@ def _nc_control(sample_name: str) -> str:
 
 def _nc_control_colors(controls: list[str]) -> dict:
     return {c: _NC_CTRL_PALETTE[i % len(_NC_CTRL_PALETTE)] for i, c in enumerate(controls)}
-
-
-def _make_nc_history_plot(history_nc, current_plate_id: str | None = None,
-                          antigens: list[str] | None = None) -> str:
-    """Static per-antigen small-multiples of NC MFI tracked across plates.
-
-    One panel per antigen; one line per NC control (e.g. Negative 0, Negative
-    49 — duplicate wells averaged within each control) traced over plates
-    (chronological). Current-plate markers are ringed. Covers ALL antigens as a
-    static grid (chosen layout). Modelled on the legacy MPOX panel.
-    """
-    if history_nc is None or not isinstance(history_nc, pd.DataFrame) or history_nc.empty:
-        return ""
-    df = history_nc.copy()
-    if "sample_name" in df.columns:
-        df["control"] = df["sample_name"].apply(_nc_control)
-    else:
-        df["control"] = "NC"
-    # Mean MFI per (plate, analyte, control) — averages the duplicate wells.
-    agg = df.groupby(["plate_id", "analyte", "control"], sort=False)["mfi"].mean().reset_index()
-    if agg.empty:
-        return ""
-
-    plate_order = list(agg["plate_id"].drop_duplicates())
-    if "run_date" in df.columns:
-        ranked = (df.groupby("plate_id")["run_date"]
-                  .agg(lambda s: s.dropna().iloc[0] if s.dropna().size else "")
-                  .sort_values())
-        if not ranked.empty:
-            plate_order = [p for p in ranked.index if p in set(plate_order)]
-    p_idx = {p: i for i, p in enumerate(plate_order)}
-    controls = sorted(agg["control"].dropna().unique())
-    ctrl_color = _nc_control_colors(controls)
-
-    ans = list(antigens) if antigens else list(agg["analyte"].drop_duplicates())
-    present = set(agg["analyte"])
-    ans = [a for a in ans if a in present] or list(agg["analyte"].drop_duplicates())
-
-    cur_i = p_idx.get(current_plate_id) if current_plate_id in p_idx else None
-    n = len(ans)
-    cols = 8
-    rows = (n + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.55, rows * 1.05), squeeze=False)
-    for i, an in enumerate(ans):
-        r, c = divmod(i, cols)
-        ax = axes[r][c]
-        sub = agg[agg["analyte"] == an]
-        for ctrl in controls:
-            cs = sub[sub["control"] == ctrl]
-            if cs.empty:
-                continue
-            xs = [p_idx[p] for p in cs["plate_id"] if p in p_idx]
-            ys = [float(v) for p, v in zip(cs["plate_id"], cs["mfi"]) if p in p_idx]
-            pairs = sorted(zip(xs, ys))
-            xs = [a for a, _ in pairs]; ys = [b for _, b in pairs]
-            ax.plot(xs, ys, color=ctrl_color[ctrl], linewidth=0.8, zorder=2)
-            ax.scatter(xs, ys, s=7, color=ctrl_color[ctrl], zorder=3)
-            if cur_i is not None and cur_i in xs:
-                yv = ys[xs.index(cur_i)]
-                ax.scatter([cur_i], [yv], s=22, facecolors="none",
-                           edgecolors="#111", linewidths=0.8, zorder=4)
-        ax.set_title(an if len(an) <= 18 else an[:16] + "…", fontsize=5.5, pad=2)
-        ax.tick_params(labelsize=4, length=2, pad=1)
-        ax.set_xticks([])
-    for j in range(n, rows * cols):
-        r, c = divmod(j, cols)
-        axes[r][c].axis("off")
-    fig.tight_layout(pad=0.3, h_pad=0.5, w_pad=0.3)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
-    plt.close(fig)
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    legend = " &nbsp; ".join(
-        f"<span style='color:{ctrl_color[ctl]}; font-weight:600;'>● {html.escape(ctl)}</span>"
-        for ctl in controls)
-    return (
-        f"<p style='font-size:12px; color:#555; margin:0 0 6px;'>{legend} "
-        f"&nbsp;·&nbsp; <span style='color:#111;'>○ current plate</span></p>"
-        f'<img src="data:image/png;base64,{b64}" alt="NC MFI across plates" '
-        f'style="width:100%; height:auto; display:block;">'
-    )
-
-
-def _make_nc_bar(nc_levels: pd.DataFrame | None, antigens: list[str] | None = None) -> str:
-    """Grouped bar of this plate's mean NC MFI per analyte, one bar per NC
-    control (duplicate wells averaged within each control)."""
-    if nc_levels is None or nc_levels.empty:
-        return ""
-    df = nc_levels.copy()
-    df["control"] = df["sample_name"].apply(_nc_control) if "sample_name" in df.columns else "NC"
-    means = df.groupby(["analyte", "control"], sort=False)["mfi"].mean().reset_index()
-    order = list(antigens) if antigens else list(means["analyte"].drop_duplicates())
-    present = set(means["analyte"])
-    order = [a for a in order if a in present] or list(means["analyte"].drop_duplicates())
-    order = sorted(order)
-    controls = sorted(means["control"].dropna().unique())
-    ctrl_color = _nc_control_colors(controls)
-    piv = means.pivot_table(index="analyte", columns="control", values="mfi", aggfunc="mean")
-    width = max(460, 36 * len(order) + 140)
-    fig = go.Figure()
-    for ctrl in controls:
-        yv = [float(piv.loc[a, ctrl]) if (a in piv.index and ctrl in piv.columns
-                                          and pd.notna(piv.loc[a, ctrl])) else None
-              for a in order]
-        fig.add_trace(go.Bar(x=order, y=yv, name=ctrl, marker_color=ctrl_color[ctrl],
-                             hovertemplate="%{x}<br>" + ctrl + " mean NC MFI %{y:.0f}<extra></extra>"))
-    fig.update_layout(
-        barmode="group", margin=dict(l=50, r=20, t=30, b=130), height=380, width=width,
-        title=dict(text="Mean NC MFI by analyte and control (this plate)", font=dict(size=13)),
-        xaxis=dict(title="Analyte", tickangle=-90, tickfont=dict(size=8)),
-        yaxis=dict(title="MFI", gridcolor="#eef1f4"),
-        plot_bgcolor="white",
-        legend=dict(orientation="h", x=0, y=1.08, font=dict(size=11)),
-    )
-    inner = _plotly_html(fig, "fig-nc-bar", height=380, responsive=False)
-    return ('<div style="max-width:100%; overflow-x:auto; border:1px solid #e1e4e8; '
-            'border-radius:4px; padding:4px;">' + inner + '</div>')
-
-
-def _format_nc_table(nc_levels: pd.DataFrame | None) -> list[dict]:
-    """Rows for the per-(NC well × analyte) detail table, with the control."""
-    if nc_levels is None or nc_levels.empty:
-        return []
-    rows = []
-    for r in nc_levels.itertuples(index=False):
-        rows.append({
-            "well": r.well,
-            "control": _nc_control(getattr(r, "sample_name", "")),
-            "analyte": r.analyte,
-            "mfi": "—" if pd.isna(r.mfi) else f"{float(r.mfi):.0f}",
-        })
-    return rows
 
 
 # ---------------------------------------------------------------------------

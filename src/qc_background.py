@@ -47,7 +47,7 @@ def qc_background_levels(
     """
     cols = [
         "analyte", "n_wells", "mean_mfi", "sd_mfi", "cv", "max_mfi",
-        "mfis", "iqr_lo", "iqr_hi", "cv_flag", "max_flag", "excluded",
+        "mfis", "well_mfis", "iqr_lo", "iqr_hi", "cv_flag", "max_flag", "excluded",
     ]
     if df is None or df.empty or "well_type" not in df.columns:
         return pd.DataFrame(columns=cols)
@@ -71,6 +71,8 @@ def qc_background_levels(
             iqr_hi = float(np.percentile(arr, 75))
         else:
             iqr_lo = iqr_hi = float("nan")
+        well_mfis = {str(w): round(float(m), 1)
+                     for w, m in zip(g["well"], g["mfi"]) if pd.notna(m)}
         rows.append({
             "analyte": analyte,
             "n_wells": n,
@@ -79,6 +81,7 @@ def qc_background_levels(
             "cv": cv,
             "max_mfi": max_mfi,
             "mfis": [round(float(v), 1) for v in arr],
+            "well_mfis": well_mfis,
             "iqr_lo": iqr_lo,
             "iqr_hi": iqr_hi,
             "cv_flag": bool((cv if not np.isnan(cv) else 0) > cv_threshold),

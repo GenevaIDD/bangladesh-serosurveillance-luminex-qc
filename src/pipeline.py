@@ -13,7 +13,7 @@ from .classify import classify_wells
 from .qc_beads import qc_bead_counts, bead_problem_summary
 from .qc_nc import qc_nc_levels
 from .qc_background import qc_background_levels
-from .qc_pc_replicates import qc_pc_replicates
+from .qc_pc_single_point import qc_pc_single_point
 from .qc_standard_curve import (
     fit_standard_curves,
     compute_concentrations,
@@ -170,10 +170,10 @@ def run_pipeline(
         max_mfi_threshold=float(qc_thresh.get("bg_max_mfi", 300)),
         excluded_analytes=excluded_analytes,
     )
-    # PC replicate variability — %CV between duplicate standard wells.
-    pc_replicates = qc_pc_replicates(
-        data, cv_threshold=float(qc_thresh.get("pc_cv_threshold", 0.20)),
-    )
+    # Single-point positive controls (Cholera High / Low) — duplicate-well
+    # MFI per (control × antigen) for the current plate. Tracked across plates
+    # in the Positive Control QC section.
+    pc_single = qc_pc_single_point(data)
 
     # 10. Plate summary
     summary = plate_summary(data)
@@ -250,7 +250,21 @@ def run_pipeline(
     else:
         history_nc = history_nc_existing
 
-    # 9. Generate the Uvira QC report.
+    # Single-point PC history: persist duplicate-well MFI per (plate × control
+    # × analyte × well) so the Positive Control QC section can track each
+    # Cholera High/Low control across plates.
+    pc_sp_history_path = Path(history_dir) / "pc_single_point_history.json"
+    pc_sp_existing = load_history(pc_sp_history_path)
+    new_pc_sp = _build_pc_single_point_history(metadata, pc_single.get("points"))
+    if not new_pc_sp.empty:
+        history_pc = append_history(
+            pc_sp_existing, new_pc_sp, ["plate_id", "control", "analyte", "well"]
+        )
+        save_history(history_pc, pc_sp_history_path)
+    else:
+        history_pc = pc_sp_existing
+
+    # 9. Generate the QC report.
     report_name = f"QC_{metadata['plate_id']}.html"
     report_path = output_dir / report_name
 
@@ -264,9 +278,9 @@ def run_pipeline(
         in_range=in_range,
         pct_in_range=pct_in_range,
         nc_levels=nc_levels,
-        pc_replicates=pc_replicates,
         history_std=history_std,
         history_nc=history_nc,
+        history_pc=history_pc,
         history_fit=history_fit,
         history_specimens=history_specimens,
         history_background=history_background,
@@ -349,11 +363,14 @@ def run_pipeline(
             output_dir / f"background_qc_{metadata['plate_id']}.csv",
             index=False, encoding="utf-8",
         )
-    # PC replicate variability — per (pool × antigen × dilution) %CV.
-    pc_pts = pc_replicates.get("points") if pc_replicates else None
-    if pc_pts is not None and not pc_pts.empty:
-        pc_pts.to_csv(
-            output_dir / f"pc_replicates_{metadata['plate_id']}.csv",
+    # Single-point PC (Cholera High/Low) — duplicate-well MFI per (control ×
+    # antigen) on this plate.
+    pc_sp_pts = pc_single.get("points") if pc_single else None
+    if pc_sp_pts is not None and not pc_sp_pts.empty:
+        pc_sp_out = pc_sp_pts.copy()
+        pc_sp_out.insert(0, "plate_id", metadata["plate_id"])
+        pc_sp_out.to_csv(
+            output_dir / f"pc_single_point_{metadata['plate_id']}.csv",
             index=False, encoding="utf-8",
         )
     # Section-8 problem CSVs: per-antigen and per-sample summaries for
@@ -497,6 +514,20 @@ def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> 
                 row["pool"] = pool_name
             rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _build_pc_single_point_history(metadata: dict, points: pd.DataFrame | None) -> pd.DataFrame:
+    """Per-(plate × control × analyte × well) single-point PC MFI rows for the
+    cross-plate Positive Control QC overview. Empty when the plate has no
+    single-point controls."""
+    if points is None or points.empty:
+        return pd.DataFrame()
+    keep = [c for c in ("control", "control_label", "analyte", "well", "mfi")
+            if c in points.columns]
+    sub = points[keep].copy()
+    sub["plate_id"] = metadata["plate_id"]
+    sub["run_date"] = metadata.get("run_date", "")
+    return sub[["plate_id", "run_date"] + keep]
 
 
 def _build_background_history(metadata: dict, bg_levels: pd.DataFrame) -> pd.DataFrame:

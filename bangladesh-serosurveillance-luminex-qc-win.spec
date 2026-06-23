@@ -31,7 +31,7 @@ a = Analysis(
         "src.qc_standard_curve",
         "src.qc_nc",
         "src.qc_background",
-        "src.qc_pc_replicates",
+        "src.qc_pc_single_point",
         "src.qc_history",
         "src.plate_summary",
         "src.report",

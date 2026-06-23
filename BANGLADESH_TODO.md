@@ -755,3 +755,180 @@ confirm the prefix→pathogen rules in Settings.
   (other than moving legacy docs into `legacy/`).
 - Next session (pending approval): Section 0 rebranding + Section 1 (384-well +
   multi-pool foundation), since all downstream UI work depends on it.
+
+---
+
+## Session 20 — Major report enhancements (PLAN, pending approval)
+
+Grounded in a full code map. **No code changed yet.** Items marked **[DECISION]**
+need a user call before building.
+
+### Phase A — Control QC restructure
+- **A1. New "Positive Control QC" section** (insert *after* Background QC).
+  Single-point controls (Cholera High / Low) are currently parsed in
+  `classify.py` (`pc_single_point=True`, `pc_x_kind="single"`) but then
+  **discarded** — excluded from the 4PL fit and from PC-replicate QC, never
+  rendered. New work:
+  - `qc_pc_single_point(data)` → per (control × antigen) MFI for the current
+    plate (one value per single-point control per analyte).
+  - New history `pc_single_point_history.json`, keyed
+    `[plate_id, control, analyte]`, carrying `plate_id, run_date, control,
+    analyte, mfi`.
+  - **Two cross-plate plots** — one for Cholera Low, one for Cholera High —
+    built on a generalised version of the Background overview (Plotly; x =
+    antigen in panel order, y = MFI log scale; < 3 past plates = one dot/plate,
+    >= 3 = historical Q1-Q3 IQR bar + median tick + current-plate red dot with
+    inside/below/above-IQR hover).
+  - **Duplicates exist** (each single-point control runs in 2 wells/plate). No
+    separate rug strip (200-antigen layout problem + 2 points isn't a
+    distribution). Instead the overview plots **both duplicate wells as
+    individual points** per plate (current = red, historical = faint) over the
+    IQR band — gives every MFI value (current + historical) + duplicate spread +
+    drift in one view.
+  - **Cross-plate stats table per control**: one row per antigen — current MFI
+    (mean of the 2 reps), current-plate **duplicate %CV** (recovers the
+    replicate-agreement signal lost by removing PC-replicate variability),
+    historical mean / SD / %CV / IQR, n past plates.
+  - Description adapted from the supplied example (no other-project specifics).
+- **A2. Remove "PC replicate variability"** entirely: template block,
+  `_format_pc_replicates` (report.py), `qc_pc_replicates` call + `pc_replicates_*.csv`
+  write (pipeline.py), the Downloads button, `src/qc_pc_replicates.py`, and the
+  `.spec` hiddenimports entry.
+
+### Phase B — Negative Control QC rework (placed *after* Positive Control QC)
+- Replace the faceted matplotlib grid with **two Plotly plots**, one per NC
+  control (Negative 0, Negative 49), on the same generalised cross-plate overview
+  as Background/PC. **Plate toggle** via radio buttons (current / all historical /
+  pick a plate) instead of legend-only. No rug.
+- Add the **cross-plate stats table** (same columns as PC).
+- Refresh the description to match.
+
+### Phase C — Standard-Curve Summary / All-Curves / Picker
+- Picker stays folded; ensure an explicit "Click to expand" note.
+- **Rug labels**: smaller + angled so they stay legible as plates accrue; reduce
+  rug-column width (less whitespace); wrap the picker figure in a
+  **horizontally scrollable** container so rugs remain reachable.
+- **Plate toggle**: radio buttons (current / all historical / specific plate).
+- **Standard/pool picker**: add a pool dropdown so the user can view ANY
+  (pool x antigen) fit (we already fit every combination). Fallback: a
+  "search to plot" points-only view when a pool didn't converge for an antigen.
+
+### Phase D — Cross-cutting
+- **D1. Sortable tables**: click-to-sort headers on every report table via a tiny
+  vanilla-JS sorter (no dependency -> works in the downloaded HTML).
+- **D2. Lab Notes section [DECISION-persistence]**: columns Date / Output file /
+  Notes / Usable? (yes-no-maybe) / Freezer box(es) / Actions taken. Static HTML
+  can't save typed input on its own - needs a persistence approach (see questions).
+- **D3. Cross-run MFI scatter**: make collapsible; add the "X of Y specimens
+  appear in history; empty if 0" note.
+- **D4. Standardised plate naming**: one canonical plate-label helper used in
+  EVERY section (overview, background, PC, NC, picker, cross-run). Today the
+  picker/cross-run use a composed `date . run . box` label while others show the
+  raw `plate_id`.
+- **D5. Sample-matching section [DECISION-list ingestion]**: match plate wells to
+  a master sample list (barcode <-> patient_id); show matched count, unmatched
+  barcodes/patient_ids, and repeated-sample flags (this plate + across history).
+  Drives the standardised display names in D4.
+- **D6. "Click to expand"** note on every folded section.
+- **D7. Descriptions audit**: re-verify every section's prose against actual
+  behaviour after these changes.
+- **D8. Offline downloads [DECISION-embedding]**: report plots are already
+  self-contained (inline Plotly + base64 PNGs), but the Download buttons point at
+  Flask routes (`/download/...`) so they 404 in the saved HTML. Fix = embed CSVs
+  as base64 data-URI links (tradeoff: larger HTML).
+- **D9. YAML round-trip test**: pattern fields (`pc/background/nc_patterns`) are
+  comma-split in the UI (fragile if a regex contains a comma) - switch to
+  newline-split; add a save->load->save test, especially for
+  `pool_assignment_rules` / `pool_antigen_overrides` (antigen<->standard matching).
+
+### Suggested sequencing
+1. Phase A + B (control QC; biggest scientific value, shared overview helper).
+2. Phase C (picker usability).
+3. D4 + D5 (naming + sample matching; related).
+4. D1, D3, D6, D7 (UX polish).
+5. D8, D9 (offline + config robustness).
+Lab Notes (D2) slots in once its persistence model is chosen.
+
+### Decisions (resolved with user)
+- **D2 Lab Notes**: *editable fields in the report, manual export* — no
+  server-side persistence. Build editable table cells + a "Download notes as
+  CSV" button (data-URI). Caveat to surface in the UI: notes are **not** saved
+  automatically and are lost on reload unless downloaded.
+- **D8 Offline downloads**: *embed ALL CSVs in the HTML* as base64 data-URIs so
+  every button works in the saved report (accept the larger file size).
+- **D5 Sample list**: *persistent master list, reused across plates* — upload
+  once, stored in the results dir, applied to every plate (re-upload to update).
+  - No separate barcodes in this project: **`patient_id` IS the join key** (the
+    number parsed from the well name before `_r3_`, e.g. `12602`).
+  - Columns: `patient_id` (required, join key), `collection_date`, `visit`,
+    `site`, `comments`.
+  - **Unmatched wells flagged visually** (⚠) so they stand out; matched wells
+    display as standardized `patient_id · <matrix>` (matrix from the well name).
+  - Section reports: matched count, plate `patient_id`s not in the list, and
+    repeated samples (same `patient_id` on >1 well this plate, or across history).
+- **Build order**: start with **Phase A + B (Control QC)**.
+
+### Session 20 progress — Phase A + B DONE
+- New `src/qc_pc_single_point.py` (`qc_pc_single_point`, `control_label`):
+  extracts Cholera High/Low duplicate-well MFIs per (control × antigen).
+- Pipeline: calls it; writes `pc_single_point_<plate>.csv`; persists
+  `pc_single_point_history.json` (key `plate_id, control, analyte, well`);
+  passes `history_pc` to the report. Removed the `qc_pc_replicates` call +
+  `pc_replicates_*.csv` write.
+- `report.py`: new shared `_cross_plate_mfi_overview` (IQR band ≥3 plates, else
+  per-plate dots; current duplicate wells in red; legend-toggle "Past plates
+  (individual)"), `_format_control_stats`, `_control_qc_sections`. Removed
+  `_format_pc_replicates`, `_make_nc_history_plot`, `_make_nc_bar`.
+- Template: new **Positive Control QC** + reworked **Negative Control QC**
+  sections placed right after Background QC (nav updated); per-control overview
+  plot + folded cross-plate stats table; PC-replicate block + download removed.
+- Deleted `src/qc_pc_replicates.py`; both `.spec` hiddenimports now list
+  `src.qc_pc_single_point`.
+- Verified end-to-end on pilot Plate 1: both sections render, Cholera High/Low +
+  Negative 0/49 present, stats tables populated, no PC-replicate remnants, app
+  boots (home/settings 200).
+- **Left for later (noted):** `pc_cv_threshold` (config + Settings field) and
+  `_nc_control_colors` are now orphaned — prune in a cleanup pass. Full
+  200-antigen `run_pipeline` is slow (>45s, mostly the picker) — Phase C will
+  address picker performance.
+
+#### Session 20 refinements (review rounds, all in `report.py` + `report.html`)
+- **Background QC unified** with PC/NC: it now uses the same
+  `_cross_plate_mfi_overview` + `_format_control_stats` (current-plate
+  Background wells + each past plate's mean as a pseudo-well). Removed the old
+  `_make_background_overview_plot`, `_bg_overview_iqr`, `_format_bg_levels`, and
+  the unused `qc_background_levels` import from `report.py`.
+- **Tables (Background / PC / NC) now identical**: Analyte · n wells · one
+  column per well (by position) · current Mean / SD / %CV / IQR · Historical
+  mean / SD / %CV / IQR · (n past plates — PC/NC only, omitted for Background).
+  Driven by the shared `_format_control_stats`.
+- **Plot styling**: dropped the faint individual-well dots and the
+  "Past plates (individual)" trace; current-plate point is the **mean** of the
+  wells, sized down and **flag-coloured** — blue within the historical IQR,
+  orange ♦ above/below it. No visible median tick (median is in the hover).
+- **Row highlighting**: stats rows where this plate's mean is outside the
+  historical IQR are tinted + bar + ▲/▼ marker, with **direction-specific
+  colours** (above Q3 = orange, below Q1 = blue).
+- **Hover standardized** across the three sections — grey bar:
+  `<antigen>` / `Historical IQR (N plates):` / `Q1; Median; Q3`; current dot:
+  `<antigen>` / `This plate — mean MFI: X (wells: …)` / `Historical IQR` /
+  `Position: within / above Q3 / below Q1`. Hover numbers match the table.
+- **Colour-blind-safe palette (Okabe–Ito)** report-wide: blue `#0072B2`,
+  orange `#D55E00`, amber `#E69F00`, bluish-green `#009E73`, grey `#999999`;
+  pass/fail also varies marker SHAPE (♦, ▲/▼). Replaced red/green throughout
+  (control plots, bead heatmap, range-status badges + matrix, picker rug,
+  curve-fit colours). Bead tiers relabelled **Adequate / Low / Critically Low
+  Bead Count** (badges, cards, heatmap hover, and the problem-list table — no
+  more RED/YELLOW text). "vermillion" wording changed to "orange".
+- **Removed the NC per-well detail table** (redundant with the per-well stats
+  columns); dropped `_format_nc_table` and `nc_table`.
+- Re-verified end-to-end on pilot Plate 1 (with a simulated multi-plate history
+  to exercise the ≥3-plate IQR view, both flag directions, and the bead tiers).
+
+#### Still pending (Phase C onward)
+- Phase C: Standard-Curve Picker (pool/standard selector, angled rug labels,
+  horizontal scroll, plate toggle, performance).
+- Phase D: sortable tables, lab notes, collapsible cross-run scatter,
+  standardized plate naming + sample-matching section, "click to expand" notes,
+  descriptions audit, offline (embedded) downloads, YAML round-trip test.
+- Cleanup: prune orphaned `pc_cv_threshold` + `_nc_control_colors`.

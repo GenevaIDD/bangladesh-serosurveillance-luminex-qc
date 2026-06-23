@@ -6,12 +6,17 @@
 <!-- Plotly.js is embedded inline on the first chart below (no CDN; works offline). -->
 <style>
   :root {
-    --green: #27ae60; --red: #e74c3c; --yellow: #f1c40f;
-    --grey: #95a5a6; --blue: #3498db; --orange: #e67e22;
+    /* Colour-blind-safe palette (Okabe–Ito) used throughout the report. */
+    --green: #009E73; --red: #D55E00; --yellow: #E69F00;
+    --grey: #999999; --blue: #0072B2; --orange: #D55E00;
     --neutral: #ecf0f1; --slate: #7f8c8d;
-    /* CB-safe palette used by the range matrix and badges */
-    --r-below: #4477AA; --r-in: #44AA99;
-    --r-above: #EE7733; --r-nofit: #CCBB44;
+    /* Range-matrix / status badges (Okabe–Ito) */
+    --r-below: #0072B2; --r-in: #009E73;
+    --r-above: #D55E00; --r-nofit: #999999;
+    /* Flagged-row highlight (this plate outside the historical IQR).
+       Above Q3 = orange, below Q1 = blue (colour-blind-safe pair). */
+    --flag-above-bg: #fbe6d4; --flag-above-bar: #D55E00;
+    --flag-below-bg: #d9ecf7; --flag-below-bar: #0072B2;
     --sidebar-w: 230px;
   }
   body {
@@ -131,6 +136,15 @@
   th, td { border: 1px solid #e1e4e8; padding: 6px 10px; text-align: left; }
   th { background: #f5f6fa; font-weight: 600; position: sticky; top: 0; }
   tr.muted td { color: #95a5a6; background: #fafbfc; font-style: italic; }
+  /* This-plate-outside-historical-IQR rows: tinted background + left bar +
+     ▲/▼ marker so the flag is conveyed without relying on colour alone.
+     Above Q3 and below Q1 get distinct colours. */
+  tr.row-flag-above td { background: var(--flag-above-bg); }
+  tr.row-flag-above td:first-child { box-shadow: inset 3px 0 0 0 var(--flag-above-bar); font-weight: 600; }
+  tr.row-flag-below td { background: var(--flag-below-bg); }
+  tr.row-flag-below td:first-child { box-shadow: inset 3px 0 0 0 var(--flag-below-bar); font-weight: 600; }
+  .flag-up { color: var(--flag-above-bar); font-weight: 700; }
+  .flag-down { color: var(--flag-below-bar); font-weight: 700; }
   tr.tier-red td.tier-cell { background: var(--red); color: #fff; font-weight: 600; }
   tr.tier-yellow td.tier-cell { background: var(--yellow); color: #2c3e50; font-weight: 600; }
   .status-green { color: var(--green); font-weight: 600; }
@@ -158,13 +172,14 @@
 <nav class="sidebar">
   <h2>Contents</h2>
   <a href="#sec-overview">Plate Overview</a>
-  <a href="#sec-bg">Background QC</a>
   <a href="#sec-bead">Bead-Count Matrix</a>
+  <a href="#sec-bg">Background QC</a>
+  <a href="#sec-pc">Positive Control QC</a>
+  <a href="#sec-nc">Negative Control QC</a>
   <a href="#sec-curve-summary">Standard-Curve Summary</a>
   <a href="#sec-curve-grid">All Curves Overview</a>
   <a href="#sec-curve-picker">Standard-Curve Picker</a>
   <a href="#sec-range">Range Matrix</a>
-  <a href="#sec-nc">Negative Control QC</a>
   <a href="#sec-downloads">Downloads</a>
   <hr style="margin: 14px 4px; border: none; border-top: 1px solid #e1e4e8;">
   <a href="/" class="muted-link">&larr; Back to Menu</a>
@@ -188,7 +203,7 @@
       <tr><th style="text-align:left;">Operating mode</th><td>
         {% if metadata.operating_mode %}
           {% set is_low = 'Low PMT' in metadata.operating_mode %}
-          <span style="font-weight:600; color:{{ '#b8860b' if is_low else '#27ae60' }};">{{ metadata.operating_mode }}</span>
+          <span style="font-weight:600; color:{{ '#b8860b' if is_low else '#009E73' }};">{{ metadata.operating_mode }}</span>
           {% if is_low %}<span class="badge badge-yellow" style="margin-left:6px;" title="Low PMT mode produces ~10x lower MFI than High PMT — confirm this was intentional before comparing to other plates">⚠ Low PMT</span>{% endif %}
         {% else %}—{% endif %}
       </td></tr>
@@ -230,19 +245,19 @@
     </div>
     <div class="stat {{ 'flag-on' if bead_problem_counts.red else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num" style="color:var(--red);">{{ bead_problem_counts.red }}</div>
-      <div class="lbl">Overall cells with bead count &lt; {{ bead_thresholds.red_below }} (red cells)</div>
+      <div class="lbl">Overall cells with bead count &lt; {{ bead_thresholds.red_below }} (critically low bead count)</div>
     </div>
     <div class="stat {{ 'flag-warn' if bead_problem_counts.yellow else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num" style="color:#b58900;">{{ bead_problem_counts.yellow }}</div>
-      <div class="lbl">Overall cells with bead count {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} (yellow cells)</div>
+      <div class="lbl">Overall cells with bead count {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} (low bead count)</div>
     </div>
   </div>
 
   <p style="margin-top:14px;">
-    A cell is one antigen in one well. Tiers by bead count:
-    <span class="badge badge-red">Red &lt; {{ bead_thresholds.red_below }}</span>
-    <span class="badge badge-yellow">Yellow {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }}</span>
-    <span class="badge badge-green">Green ≥ {{ bead_thresholds.yellow_below }}</span>
+    A cell is one antigen in one well. Tiers by bead count (colour-blind-safe):
+    <span class="badge badge-red">Critically Low Bead Count (&lt; {{ bead_thresholds.red_below }})</span>
+    <span class="badge badge-yellow">Low Bead Count ({{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }})</span>
+    <span class="badge badge-green">Adequate Bead Count (≥ {{ bead_thresholds.yellow_below }})</span>
     (thresholds editable on the Settings page).
   </p>
   {{ bead_heatmap_html | safe }}
@@ -291,14 +306,14 @@
 
   {% if bead_problems %}
   <details style="margin-top:8px;">
-    <summary>Every red / yellow cell ({{ bead_problems | length }} rows)</summary>
+    <summary>Every low / critically-low cell ({{ bead_problems | length }} rows)</summary>
     <div class="scroll-tbl">
       <table>
         <thead><tr><th>Tier</th><th>Well</th><th>Sample</th><th>Analyte</th><th>Count</th></tr></thead>
         <tbody>
           {% for p in bead_problems %}
           <tr class="tier-{{ p.tier }}">
-            <td class="tier-cell">{{ p.tier | upper }}</td>
+            <td class="tier-cell">{% if p.tier == 'red' %}Critically Low{% elif p.tier == 'yellow' %}Low{% elif p.tier == 'green' %}Adequate{% else %}{{ p.tier | upper }}{% endif %}</td>
             <td>{{ p.well }}</td>
             <td>{{ p.sample_name }}</td>
             <td>{{ p.analyte }}</td>
@@ -310,7 +325,7 @@
     </div>
   </details>
   {% else %}
-  <div class="banner" style="margin-top:8px;">No bead-count cells fell below the warn threshold. ✓</div>
+  <div class="banner" style="margin-top:8px;">No bead-count cells fell below the adequate threshold. ✓</div>
   {% endif %}
 </div>
 </details>
@@ -336,19 +351,30 @@
   </div>
 
   <div class="banner" style="margin-top:14px;">
-    <b>How Background QC works.</b> Background wells are the plate blanks —
-    wells with no specimen (sample name <code>Background0</code>;
-    {{ plate_counts.background }} wells on this plate). For each antigen we
-    summarise the signal across those wells and track it over time:
+    <b>How Background QC works.</b> Background wells are the plate blanks — wells
+    with no specimen (sample name <code>Background0</code>;
+    {{ plate_counts.background }} wells on this plate). This section tracks the
+    blank signal per antigen, this plate vs. previous plates, and shares its
+    plot, hover, and table layout with the Positive and Negative Control QC
+    sections below.
     <ul style="margin:6px 0 0 18px; padding:0;">
-      <li><b>Spread within this plate.</b> The individual Background-well
-        MFIs, their <b>SD</b>, and <b>%CV</b> (SD ÷ mean) show how consistent
-        the blank signal is well-to-well. A high %CV means the antigen's
-        background is noisy on this plate.</li>
-      <li><b>This plate vs history.</b> The overview below compares this
-        plate's mean Background MFI for each antigen against the spread seen
-        on previous plates, so you can spot antigens reading unusually high
-        or low this run.</li>
+      <li><b>Overview plot.</b> x = antigen (xPONENT panel order); y = MFI
+        (log scale). Once <b>≥ 3 past plates</b> exist, a grey bar spans the
+        historical <b>IQR (Q1–Q3)</b> of each antigen's <em>per-plate mean</em>
+        (hover the bar for Q1 / median / Q3), and this plate's mean is a dot —
+        <span style="color:#0072B2;">blue within the IQR</span>,
+        <span style="color:#D55E00;">orange ♦ above/below it</span> (provisional
+        flag). With <b>&lt; 3 past plates</b> there is no IQR yet: each past
+        plate's mean shows as a grey dot and this plate's mean is blue. Hover any
+        current dot to read this plate's individual well MFIs.</li>
+      <li><b>Table.</b> One row per antigen: <b>n wells</b>; one column per
+        Background <b>well</b> (this plate's MFI); the current-plate
+        <b>Mean / SD / %CV / IQR</b> across those wells; and the
+        <b>Historical mean / SD / %CV / IQR</b> across each previous plate's
+        mean. SD uses n−1; %CV = SD ÷ mean × 100; IQR = Q1–Q3. Rows where this plate's mean falls
+        outside the historical IQR are highlighted —
+        <span class="flag-up">▲ orange</span> above Q3,
+        <span class="flag-down">▼ blue</span> below Q1.</li>
     </ul>
     A reference max-MFI threshold (<b>{{ bg_max_mfi }}</b>, editable on the
     Settings page) is tracked, but <b>formal Background pass/fail flagging is
@@ -357,50 +383,36 @@
 
   {% if bg_overview_present %}
   <h3 style="margin-top:18px;">Background MFI overview (all plates)</h3>
-  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
-    Mean Background MFI per antigen, in panel order (the xPONENT CSV header
-    order), so each x-position is the same bead region across plates.
-    {% if bg_levels.n_prev_plates >= 2 %}
-    With ≥ 3 plates total, each grey bar spans the <b>interquartile range
-    (Q1–Q3)</b> of the <em>previous</em> plates' means and the dot is this
-    plate's mean; dots <span style="color:#e74c3c;">outside the IQR</span>
-    are marked for review (provisional — flagging rules still in development).
-    {% else %}
-    One point per plate-run while fewer than 3 plates have been processed;
-    the IQR-band view turns on once a third plate is added. Click a plate in
-    the legend to hide / show it.
-    {% endif %}
-  </p>
   {{ bg_overview_html | safe }}
   {% endif %}
 
   <details style="margin-top:18px;">
     <summary><b>Per-antigen Background QC table</b> ({{ bg_levels.n_antigens }} antigens) — click to expand</summary>
     <p style="margin:8px 0 8px; color:#7f8c8d; font-size:13px;">
-      One row per antigen: the individual Background-well MFIs, their SD and
-      %CV, the IQR of this plate's Background wells, and the IQR of the mean
-      Background MFI across previous plates. Scroll horizontally / vertically
-      for the full panel. (Pass/fail flags are deferred — still in development.)
+      One row per antigen: n wells, one column per Background well (this plate's
+      MFI), the current-plate Mean / SD / %CV / IQR across those wells, and the
+      Historical mean / SD / %CV / IQR across each previous plate's mean. Scroll
+      horizontally / vertically for the full panel. (Pass/fail flags are
+      deferred — still in development.)
     </p>
     <div style="max-width:100%; max-height:560px; overflow:auto; border:1px solid #e1e4e8; border-radius:4px;">
       <table>
         <thead>
           <tr>
-            <th>Analyte</th><th>n wells</th><th>Individual MFIs</th>
-            <th>SD</th><th>%CV</th>
-            <th>IQR current plate (Q1–Q3)</th><th>IQR previous plates (Q1–Q3)</th>
+            <th>Analyte</th><th>n wells</th>
+            {% for w in bg_levels.well_cols %}<th>Well {{ w }}</th>{% endfor %}
+            <th>Mean</th><th>SD</th><th>%CV</th><th>IQR</th>
+            <th>Historical mean</th><th>Historical SD</th><th>Historical %CV</th><th>Historical IQR</th>
           </tr>
         </thead>
         <tbody>
           {% for r in bg_levels.rows %}
-          <tr class="{% if r.excluded %}muted{% endif %}">
-            <td>{{ r.analyte }}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+          <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% endif %}{% if r.excluded %} muted{% endif %}">
+            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
             <td>{{ r.n_wells }}</td>
-            <td style="font-size:12px;">{{ r.mfis }}</td>
-            <td>{{ r.sd_mfi }}</td>
-            <td>{{ r.cv_pct }}</td>
-            <td>{{ r.iqr_current }}</td>
-            <td>{{ r.iqr_previous }}</td>
+            {% for w in bg_levels.well_cols %}<td>{{ r.wells.get(w, "—") }}</td>{% endfor %}
+            <td>{{ r.current_mfi }}</td><td>{{ r.current_sd }}</td><td>{{ r.current_cv }}</td><td>{{ r.current_iqr }}</td>
+            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td>{{ r.hist_cv }}</td><td>{{ r.hist_iqr }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -409,6 +421,160 @@
   </details>
   {% else %}
   <div class="banner">No Background wells on this plate.</div>
+  {% endif %}
+</div>
+</details>
+
+<!-- =================== 3b. Positive Control QC =================== -->
+<details class="section" id="sec-pc" open>
+<summary>Positive Control QC</summary>
+<div class="inner">
+
+  <div class="banner">
+    <b>How Positive Control QC works.</b> Single-point positive controls (PCs)
+    are samples of known antibody status used to track inter-plate assay
+    performance over time. Unlike the standards (a serial-dilution series fit to
+    a 4PL curve), these are loaded at a single nominal level — here the
+    <b>Cholera High</b> and <b>Cholera Low</b> controls, each run in
+    <b>duplicate wells</b> per plate and not fit to a curve. For any given antigen
+    a control should read at a roughly consistent MFI across runs; the two
+    controls are tracked separately.
+    The plot, hover, and table use the same conventions as Background QC.
+    <ul style="margin:6px 0 0 18px; padding:0;">
+      <li><b>Cross-plate overview (per control).</b> x = antigen (panel order),
+        y = MFI (log scale). Once <b>≥ 3 past plates</b> exist, a grey bar spans
+        the historical <b>IQR (Q1–Q3)</b> of each antigen's per-plate mean
+        (hover the bar for Q1 / median / Q3); this plate's mean (of its duplicate
+        wells) is a dot —
+        <span style="color:#0072B2;">blue within the IQR</span>,
+        <span style="color:#D55E00;">orange ♦ above/below it</span> (provisional
+        flag). With <b>&lt; 3 past plates</b> each past plate's mean is a grey dot
+        and this plate's mean is blue. Hover a current dot to read its individual
+        well MFIs.</li>
+      <li><b>Per-control stats table (collapsed).</b> One row per antigen:
+        <b>n wells</b>; one column per <b>well</b> (this plate's MFI); current
+        <b>Mean / SD / %CV / IQR</b> across the wells; <b>Historical mean / SD /
+        %CV / IQR</b> across each past plate's mean; and <b>n past plates</b>. SD
+        uses n−1; %CV = SD ÷ mean × 100; IQR = Q1–Q3. Rows where this plate's mean falls
+        outside the historical IQR are highlighted —
+        <span class="flag-up">▲ orange</span> above Q3,
+        <span class="flag-down">▼ blue</span> below Q1.</li>
+    </ul>
+    <em>Formal PC pass/fail flagging is still in development — no antigens are
+    flagged as failing here yet.</em>
+  </div>
+
+  {% if pc_present %}
+  {% for c in pc_controls %}
+  <h3 style="margin-top:18px;">{{ c.control }}</h3>
+  {{ c.plot_html | safe }}
+  <details style="margin-top:10px;">
+    <summary><b>{{ c.control }} cross-plate stats</b> ({{ c.stats | length }} antigens) — click to expand</summary>
+    <div class="scroll-tbl" style="max-height:480px;">
+      <table>
+        <thead><tr>
+          <th>Analyte</th><th>n wells</th>
+          {% for w in c.well_cols %}<th>Well {{ w }}</th>{% endfor %}
+          <th>Mean</th><th>SD</th><th>%CV</th><th>IQR</th>
+          <th>Historical mean</th><th>Historical SD</th><th>Historical %CV</th>
+          <th>Historical IQR</th><th>n past plates</th>
+        </tr></thead>
+        <tbody>
+          {% for r in c.stats %}
+          <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% endif %}{% if r.excluded %} muted{% endif %}">
+            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+            <td>{{ r.n_wells }}</td>
+            {% for w in c.well_cols %}<td>{{ r.wells.get(w, "—") }}</td>{% endfor %}
+            <td>{{ r.current_mfi }}</td><td>{{ r.current_sd }}</td><td>{{ r.current_cv }}</td><td>{{ r.current_iqr }}</td>
+            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td>{{ r.hist_cv }}</td>
+            <td>{{ r.hist_iqr }}</td><td>{{ r.n_past }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endfor %}
+  {% else %}
+  <div class="banner" style="margin-top:14px;">
+    <b>No single-point positive controls detected on this plate.</b> These are
+    matched from PC sample names flagged as single-point (e.g.
+    <code>Cholera high/ low: High</code>).
+  </div>
+  {% endif %}
+</div>
+</details>
+
+<!-- =================== 3c. Negative Control QC =================== -->
+<details class="section" id="sec-nc" open>
+<summary>Negative Control QC</summary>
+<div class="inner">
+
+  <div class="banner">
+    <b>How Negative Control QC works.</b> A negative control (NC) is a well of
+    pooled seronegative serum (here, pre-2019 North American plasma) that should
+    read antibody-negative for every antigen. Each NC control (e.g. <b>Negative
+    0</b> and <b>Negative 49</b>) is tracked separately across plates. The plot,
+    hover, and table use the same conventions as Background and Positive Control
+    QC.
+    <ul style="margin:6px 0 0 18px; padding:0;">
+      <li><b>Cross-plate overview (per control).</b> x = antigen (panel order),
+        y = MFI (log scale). Once <b>≥ 3 past plates</b> exist, a grey bar spans
+        the historical <b>IQR (Q1–Q3)</b> of each antigen's per-plate mean
+        (hover the bar for Q1 / median / Q3); this plate's mean is a dot —
+        <span style="color:#0072B2;">blue within the IQR</span>,
+        <span style="color:#D55E00;">orange ♦ above/below it</span> (provisional
+        flag). With <b>&lt; 3 past plates</b> each past plate's mean is a grey dot
+        and this plate's mean is blue. Hover a current dot to read its individual
+        well MFIs.</li>
+      <li><b>Per-control stats table (collapsed).</b> One row per antigen:
+        <b>n wells</b>; one column per <b>well</b> (this plate's MFI); current
+        <b>Mean / SD / %CV / IQR</b> across the wells; <b>Historical mean / SD /
+        %CV / IQR</b> across each past plate's mean; and <b>n past plates</b>.</li>
+    </ul>
+    A clean NC programme reads low and stable across plates — a point that jumps
+    up flags cross-reactivity, NC contamination, or a bead-region issue.
+    <em>Deeper NC-level QC (per-antigen thresholds, drift flags) is still in
+    development.</em>
+  </div>
+
+  {% if nc_present %}
+  {% for c in nc_controls %}
+  <h3 style="margin-top:18px;">{{ c.control }}</h3>
+  {{ c.plot_html | safe }}
+  <details style="margin-top:10px;">
+    <summary><b>{{ c.control }} cross-plate stats</b> ({{ c.stats | length }} antigens) — click to expand</summary>
+    <div class="scroll-tbl" style="max-height:480px;">
+      <table>
+        <thead><tr>
+          <th>Analyte</th><th>n wells</th>
+          {% for w in c.well_cols %}<th>Well {{ w }}</th>{% endfor %}
+          <th>Mean</th><th>SD</th><th>%CV</th><th>IQR</th>
+          <th>Historical mean</th><th>Historical SD</th><th>Historical %CV</th>
+          <th>Historical IQR</th><th>n past plates</th>
+        </tr></thead>
+        <tbody>
+          {% for r in c.stats %}
+          <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% endif %}{% if r.excluded %} muted{% endif %}">
+            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+            <td>{{ r.n_wells }}</td>
+            {% for w in c.well_cols %}<td>{{ r.wells.get(w, "—") }}</td>{% endfor %}
+            <td>{{ r.current_mfi }}</td><td>{{ r.current_sd }}</td><td>{{ r.current_cv }}</td><td>{{ r.current_iqr }}</td>
+            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td>{{ r.hist_cv }}</td>
+            <td>{{ r.hist_iqr }}</td><td>{{ r.n_past }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endfor %}
+  {% else %}
+  <div class="banner" style="margin-top:14px;">
+    <b>No negative-control wells detected on this plate.</b> NC wells are
+    matched by the Negative-Control pattern (default <code>Negative</code>) —
+    check the well naming or the pattern on the Settings page.
+  </div>
   {% endif %}
 </div>
 </details>
@@ -603,48 +769,6 @@
     </div>
   </details>
   {% endif %}
-
-  {% if pc_repl.present %}
-  <h3 style="margin-top:20px;">PC replicate variability</h3>
-  <p style="margin:4px 0 8px; color:#7f8c8d; font-size:13px;">
-    Each standard dilution point is run in <b>duplicate</b>. This checks the
-    <b>%CV between the two replicate wells</b> at every (pool × antigen ×
-    dilution) point — high values mean a noisy standard before the curve fit
-    averages the duplicates away.
-  </p>
-  <div class="stat-row" style="grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px;">
-    <div class="stat {{ 'flag-on' if pc_repl.n_flagged else 'flag-off' }}" style="padding:10px 12px;">
-      <div class="num">{{ pc_repl.n_flagged }}</div>
-      <div class="lbl">Standard points flagged (replicate %CV &gt; {{ pc_repl.threshold_pct }}%)</div>
-    </div>
-    <div class="stat" style="padding:10px 12px;">
-      <div class="num">{{ pc_repl.n_points }}</div>
-      <div class="lbl">Duplicate standard points assessed</div>
-    </div>
-    <div class="stat" style="padding:10px 12px;">
-      <div class="num">{{ pc_repl.threshold_pct }}%</div>
-      <div class="lbl">Replicate %CV threshold (editable in Settings)</div>
-    </div>
-  </div>
-  {% if pc_repl.flagged %}
-  <details style="margin-top:10px;">
-    <summary>Flagged standard points ({{ pc_repl.flagged | length }}) — worst %CV first</summary>
-    <div class="scroll-tbl" style="max-height:360px;">
-      <table>
-        <thead><tr><th>Pool</th><th>Analyte</th><th>Dilution (1:x)</th><th>n reps</th><th>Mean MFI</th><th>%CV</th></tr></thead>
-        <tbody>
-          {% for r in pc_repl.flagged %}
-          <tr><td style="font-size:12px;">{{ r.pool }}</td><td>{{ r.analyte }}</td>
-            <td>{{ r.dilution }}</td><td>{{ r.n_reps }}</td><td>{{ r.mean_mfi }}</td><td>{{ r.cv_pct }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </details>
-  {% else %}
-  <div class="banner" style="margin-top:8px;">All duplicate standard points are within the replicate %CV threshold. ✓</div>
-  {% endif %}
-  {% endif %}
 </div>
 </details>
 
@@ -663,12 +787,12 @@
     (its auto-selected pool's curve).
     {% endif %}
     Panel-title colour:
-    <span style="color:#27ae60; font-weight:600;">green = Fit OK</span> ·
-    <span style="color:#e74c3c; font-weight:600;">red = Fit failed</span> ·
+    <span style="color:#009E73; font-weight:600;">green = Fit OK</span> ·
+    <span style="color:#D55E00; font-weight:600;">orange = Fit failed</span> ·
     <span style="color:#95a5a6; font-weight:600;">grey = excluded</span>.
-    Blue dots = observed standards; <span style="color:#e74c3c;">red triangles</span>
+    Blue dots = observed standards; <span style="color:#D55E00;">orange triangles</span>
     = standard points out of recovery tolerance; ✕ = a dropped point; the
-    <span style="color:#27ae60;">green square</span> marks the linear /
+    <span style="color:#009E73;">green square</span> marks the linear /
     reportable range; coloured ticks on the right are this plate's specimens
     (<span class="badge badge-r-below">BELOW</span>
     <span class="badge badge-r-in">IN</span>
@@ -715,7 +839,7 @@
     <li>
       <b style="color:#34495e;">Left panel</b> — the standard curve with
       the current 4PL fit (blue) and any past-plate fits in grey. The
-      <span style="color:#27ae60;">green square</span> marks the linear /
+      <span style="color:#009E73;">green square</span> marks the linear /
       reportable range (same as the All-Curves Overview), refreshing per antigen.
     </li>
     <li>
@@ -831,69 +955,6 @@
 </div>
 </details>
 
-<!-- =================== 8. Negative Control QC =================== -->
-<details class="section" id="sec-nc" open>
-<summary>Negative Control QC</summary>
-<div class="inner">
-
-  <div class="banner">
-    <b>How Negative Control QC works.</b> A negative control (NC) is a well of
-    pooled seronegative serum (here, pre-2019 North American plasma) that should
-    read antibody-negative for every antigen. The panel plot below shows the
-    <b>mean NC MFI per antigen, tracked across plates</b>; the current plate's
-    point is <span style="font-weight:600;">ringed</span>.
-    Each negative control (e.g. <b>Negative 0</b> and <b>Negative 49</b>) is its
-    own coloured line — duplicate wells of a control are averaged together, but
-    the two controls are kept separate. A clean NC programme reads low and stable
-    across plates — a point that jumps up flags cross-reactivity, NC
-    contamination, or a bead-region issue.
-    <ul style="margin:6px 0 0 18px; padding:0;">
-      <li>NC wells are matched by the Negative-Control pattern (default
-        <code>Negative</code>, i.e. the <code>Pilot Control: Negative …</code>
-        samples; editable on the Settings page).</li>
-      <li>The panels (a static grid) and the per-well detail below both cover
-        every antigen on the plate.</li>
-    </ul>
-    <em>Note: deeper NC-level QC (per-antigen thresholds, drift flags) is still
-    in development.</em>
-  </div>
-
-  {% if nc_present %}
-  {% if nc_history_present %}
-  <h3 style="margin-top:18px;">Negative Control MFI across plates</h3>
-  <p style="margin-top:0; color:#7f8c8d; font-size:13px;">
-    One panel per antigen; <b>one coloured line per negative control</b>
-    (e.g. Negative 0, Negative 49 — see the legend), tracing the mean NC MFI
-    over plates (chronological). The <b>current plate's</b> point on each line
-    is <span style="font-weight:600;">ringed (○)</span>.
-  </p>
-  {{ nc_history_html | safe }}
-  {% endif %}
-
-  <details style="margin-top:16px;">
-    <summary><b>NC details for this plate</b> — individual well MFI values (click to expand)</summary>
-    <div style="margin-top:8px;">{{ nc_bar_html | safe }}</div>
-    <div class="scroll-tbl" style="margin-top:10px; max-height:360px;">
-      <table>
-        <thead><tr><th>Well</th><th>Control</th><th>Analyte</th><th>MFI</th></tr></thead>
-        <tbody>
-          {% for r in nc_table %}
-          <tr><td>{{ r.well }}</td><td>{{ r.control }}</td><td>{{ r.analyte }}</td><td>{{ r.mfi }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </details>
-  {% else %}
-  <div class="banner" style="margin-top:14px;">
-    <b>No negative-control wells detected on this plate.</b> NC wells are
-    matched by the Negative-Control pattern (default <code>Negative</code>) —
-    check the well naming or the pattern on the Settings page.
-  </div>
-  {% endif %}
-</div>
-</details>
-
 <!-- =================== 9. Downloads =================== -->
 <details class="section" id="sec-downloads" open>
 <summary>Downloads</summary>
@@ -942,22 +1003,22 @@
       <div class="desc">
         One row per antigen with its bead-count problem fraction.
         <code>is_problem</code> = True flags antigens where ≥ the
-        threshold of wells are red or yellow; <code>problem_wells</code>
-        lists those wells.
+        threshold of wells are low or warn (below the OK cutoff);
+        <code>problem_wells</code> lists those wells.
       </div>
     </div>
     <div class="dl-row">
       <a class="btn" href="/download/specimens/bead_problem_samples_{{ plate_id }}.csv">bead_problem_samples_*.csv</a>
       <div class="desc">
-        One row per specimen well with how many of its antigens are red
-        or yellow. <code>problem_analytes</code> names the specific
+        One row per specimen well with how many of its antigens are low
+        or warn. <code>problem_analytes</code> names the specific
         antigens that pushed the well over the threshold.
       </div>
     </div>
     <div class="dl-row">
       <a class="btn secondary" href="/download/specimens/bead_problems_{{ plate_id }}.csv">bead_problems_*.csv</a>
       <div class="desc">
-        Long-form list of every red or yellow cell on the matrix (one
+        Long-form list of every low or warn cell on the matrix (one
         row per offending well × antigen) for drill-in.
       </div>
     </div>
@@ -972,13 +1033,6 @@
         <code>n_below_range</code> / <code>n_above_range</code> /
         <code>n_no_fit</code> counts and the rolled-up
         <code>pct_in_range</code> (same scoring-pool basis as the Range Matrix).
-      </div>
-    </div>
-    <div class="dl-row">
-      <a class="btn" href="/download/specimens/pc_replicates_{{ plate_id }}.csv">pc_replicates_*.csv</a>
-      <div class="desc">
-        Per (pool × antigen × dilution) replicate %CV between the duplicate
-        standard wells, with a <code>flag</code> when it exceeds the threshold.
       </div>
     </div>
     <div class="dl-row">
