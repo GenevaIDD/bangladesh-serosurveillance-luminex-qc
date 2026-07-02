@@ -33,9 +33,14 @@ jobs:
         run: codesign --force --deep --sign - "dist/Bangladesh Serosurveillance Luminex QC.app"
 
       - name: Create zip archive
+        # Use ditto (not `zip -r`): it preserves the .app's symlinks, permissions
+        # and code signature. Plain zip flattens the framework symlinks and
+        # corrupts the bundle, which macOS then refuses to open (error -47).
         run: |
           cd dist
-          zip -r "Bangladesh-Serosurveillance-Luminex-QC-macOS.zip" "Bangladesh Serosurveillance Luminex QC.app"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "Bangladesh Serosurveillance Luminex QC.app" \
+            "Bangladesh-Serosurveillance-Luminex-QC-macOS.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
