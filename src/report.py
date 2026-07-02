@@ -690,8 +690,8 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
         titles.append(f"<span style='color:{color}'>{short}</span>")
 
     fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles,
-                        horizontal_spacing=0.04,
-                        vertical_spacing=max(0.02, min(0.06, 1.5 / max(rows, 1))))
+                        horizontal_spacing=0.055,
+                        vertical_spacing=min(0.11, max(0.07, 1.8 / max(rows, 1))))
 
     # Per-antigen current-plate specimen MFIs (for the rug), grouped once.
     spec_by_an: dict[str, pd.DataFrame] = {}
@@ -812,20 +812,29 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
         fig.update_yaxes(type="log", tickfont=dict(size=6), row=rr_, col=cc_)
 
     fig.update_annotations(font_size=8)
-    panel_h = 150
-    top_margin = 66 if hist_idx else 46
+    panel_h = 190
+    bottom_margin = 44
+    # Reserve top-margin room so the buttons + legend sit ABOVE the grid. Their
+    # y is set in PIXELS (converted to paper fraction via the grid height) so the
+    # legend↔button gap is constant regardless of the number of rows — otherwise
+    # short 1-row grids (Cholera/Typhoid) crush them together.
+    top_margin = 104 if hist_idx else 70
+    fig_h = max(320, rows * panel_h + top_margin + bottom_margin)
+    grid_px = max(fig_h - top_margin - bottom_margin, 1)
+    legend_y = 1 + 14 / grid_px
+    buttons_y = 1 + 52 / grid_px
     layout_kw = dict(
-        height=max(260, rows * panel_h + 80),
-        margin=dict(l=40, r=20, t=top_margin, b=30),
+        height=fig_h,
+        margin=dict(l=45, r=20, t=top_margin, b=bottom_margin),
         plot_bgcolor="#fbfcfd",
-        legend=dict(orientation="h", x=0.5, xanchor="center", y=1.0,
+        legend=dict(orientation="h", x=0.5, xanchor="center", y=legend_y,
                     yanchor="bottom", font=dict(size=10)),
     )
     # Show all / hide past-plate curves (default shown), like the other sections.
     if hist_idx:
         layout_kw["updatemenus"] = [dict(
             type="buttons", direction="right", showactive=False,
-            x=0, xanchor="left", y=1.0, yanchor="bottom", pad=dict(t=2, r=2),
+            x=0, xanchor="left", y=buttons_y, yanchor="bottom", pad=dict(t=2, r=2),
             font=dict(size=10),
             buttons=[
                 dict(label="Show all past plates", method="restyle",
@@ -835,7 +844,7 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
             ],
         )]
     fig.update_layout(**layout_kw)
-    return _plotly_html(fig, div_id, height=max(260, rows * panel_h + 80))
+    return _plotly_html(fig, div_id, height=fig_h)
 
 
 def _make_curve_grid_static(pool_fits: dict, excluded: set[str], cols: int = 10) -> str:

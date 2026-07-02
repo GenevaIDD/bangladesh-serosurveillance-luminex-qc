@@ -1299,6 +1299,19 @@ Verified: template + settings parse, config round-trip, two-plate end-to-end —
 all markers present. **Not committed** — next release (v0.2.1/v0.3.0) will bundle
 Phase 7 + the build.yml macOS-runner pin.
 
+### Phase 7a — featured-grid spacing fix (post-v0.2.1, uncommitted)
+- v0.2.1 shipped with the featured grid's Show all/Hide buttons + legend
+  overlapping the first row of panels, and rows too tight (Dengue 2-row case).
+- Fixed in `_make_curve_grid_interactive`: top margin 66→116 (buttons y=1.10,
+  legend y=1.03 stacked above the grid); vertical_spacing 0.06→0.11; panel_h
+  150→190; horizontal_spacing 0.04→0.055; figure height recomputed.
+- Follow-up: on short (1-row) sections (Cholera/Typhoid) buttons still touched
+  the legend because y was fractional (gap shrinks on short grids). Switched
+  button/legend y to **pixel-based** offsets (legend 14 px, button 52 px above
+  the grid, converted to paper fraction via grid height) → constant ~20 px gap
+  for 1/2/4-row grids; button top ~76 px stays inside the 104 px top margin.
+- Visual-only; eyeball on a real report before release. Target: **v0.2.2**.
+
 ### Still pending
 - **build.yml:** pin macOS runner (`macos-14`) before the macos-latest→macOS 26
   migration (~Jun 2026). Low priority.
