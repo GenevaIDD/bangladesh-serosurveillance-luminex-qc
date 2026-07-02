@@ -470,7 +470,7 @@ def create_app() -> Flask:
             except (ValueError, TypeError):
                 pass
         for key in ("recovery_tolerance", "problem_fraction_threshold",
-                    "bg_cv_threshold", "nc_cv_threshold"):
+                    "bg_cv_threshold", "nc_cv_threshold", "hist_cv_threshold"):
             try:
                 qc[key] = float(request.form.get(key, qc.get(key, 0)))
             except (ValueError, TypeError):

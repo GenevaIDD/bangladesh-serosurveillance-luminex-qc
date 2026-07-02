@@ -88,6 +88,7 @@ def generate_report(
     bg_cv_thr = float(qc_thresh.get("bg_cv_threshold", 0.25))
     bg_max_thr = float(qc_thresh.get("bg_max_mfi", 300))
     nc_cv_thr = float(qc_thresh.get("nc_cv_threshold", 0.25))
+    hist_cv_thr = float(qc_thresh.get("hist_cv_threshold", 0.30))
 
     pool_fits = _first_pool(fits)
     plate_id = metadata.get("plate_id", "unknown")
@@ -215,7 +216,8 @@ def generate_report(
         "fig-bg-overview", excluded,
         hline=(float(bg_max_thr), f"Max background ({int(bg_max_thr)} MFI)"))
     bg_stats, bg_well_cols = _format_control_stats(
-        bg_hist, panel_order, cur_pid, cur_rd, excluded, cv_flag_threshold=bg_cv_thr)
+        bg_hist, panel_order, cur_pid, cur_rd, excluded, cv_flag_threshold=bg_cv_thr,
+        hist_cv_flag_threshold=hist_cv_thr)
     # Hidden Background tables: (a) single-well outliers, (e) negative net MFI.
     bg_outliers = _bg_well_outliers(bgw, panel_order, cur_pid, excluded)
     bg_negative_net = _bg_negative_net(data, bgw, cur_pid, excluded)
@@ -225,10 +227,11 @@ def generate_report(
     for r in bg_stats:
         r["has_outlier"] = r["analyte"] in _outlier_ans
     n_high_cv = sum(1 for r in bg_stats if r.get("high_cv"))
+    n_high_hist_cv = sum(1 for r in bg_stats if r.get("high_hist_cv"))
     bg_levels_ctx = {"present": bool(bg_stats), "n_antigens": len(bg_stats),
                      "n_prev_plates": n_prev_bg, "rows": bg_stats,
                      "well_cols": bg_well_cols, "n_high_cv": n_high_cv,
-                     "n_outliers": len(bg_outliers)}
+                     "n_high_hist_cv": n_high_hist_cv, "n_outliers": len(bg_outliers)}
 
     # ----- Positive Control QC (single-point Cholera High/Low) -----
     # Cross-plate overview + stats per control, modelled on Background QC.
@@ -239,7 +242,8 @@ def generate_report(
         pc_hist["control"] = pc_hist["control_label"]
     pc_controls = _control_qc_sections(
         pc_hist, panel_order, cur_pid, cur_rd, excluded,
-        "Single-point PC MFI (log scale)", "pc-sp")
+        "Single-point PC MFI (log scale)", "pc-sp",
+        hist_cv_flag_threshold=hist_cv_thr)
     pc_present = bool(pc_controls)
 
     # ----- Negative Control QC -----
@@ -251,7 +255,8 @@ def generate_report(
         nc_hist["control"] = nc_hist["sample_name"].apply(_nc_control)
     nc_controls = _control_qc_sections(
         nc_hist, panel_order, cur_pid, cur_rd, excluded,
-        "NC MFI (log scale)", "nc-ctrl", cv_flag_threshold=nc_cv_thr)
+        "NC MFI (log scale)", "nc-ctrl", cv_flag_threshold=nc_cv_thr,
+        hist_cv_flag_threshold=hist_cv_thr)
     # ----- Standard-Curve Summary + All-Curves Overview -----
     # per_pool (default): a curve for EVERY (pool × antigen) — one grid per
     # pool, summary rows per (pool × antigen); no matching/auto-selection.
@@ -290,7 +295,11 @@ def generate_report(
         curve_summary = _build_curve_summary(priority_fits, pct_in_range, excluded, rec_tol)
 
     # Featured priority antigens (pathogen-categorized) vs their selected pool.
-    featured_grid_html = _build_featured_grids(panel_order, selected_fits, excluded, in_range)
+    _featured_past = _past_plate_ids(history_specimens, cur_pid, cur_rd) \
+        if isinstance(history_specimens, pd.DataFrame) and not history_specimens.empty else []
+    featured_grid_html = _build_featured_grids(
+        panel_order, selected_fits, excluded, in_range,
+        history_fit=history_fit, past_ids=_featured_past)
     layout_info = layout_info or _derive_layout_info(data)
     current_box_ids = layout_info.get("box_ids") or []
     # Picker: on-demand explorer over ALL (pool × antigen) fits — review tool.
@@ -313,7 +322,9 @@ def generate_report(
     )
     _xr_m, _xr_t = _xrun_overlap(in_range, history_specimens, metadata.get("plate_id"))
     cross_run_match = {"matched": _xr_m, "total": _xr_t}
-    range_heatmap_html = _make_in_range_heatmap(in_range, excluded)
+    range_heatmap_html = _make_in_range_heatmap(
+        in_range, excluded,
+        antigen_pool={a: (selected_fits[a].get("pool") or "—") for a in selected_fits})
     serum_dbs_html = _make_serum_dbs_comparison(in_range)
 
     bead_problems = _format_problem_list(bead_qc.get("problems", pd.DataFrame()))
@@ -389,6 +400,7 @@ def generate_report(
         bg_cv_pct=int(round(bg_cv_thr * 100)),
         bg_max_mfi=int(bg_max_thr),
         nc_cv_pct=int(round(nc_cv_thr * 100)),
+        hist_cv_pct=int(round(hist_cv_thr * 100)),
         n_specimens=int(data[data["well_type"] == "specimen"]["well"].nunique()) if not data.empty else 0,
         n_antigens=len(pool_fits) if pool_fits else 0,
         plate_id=plate_id,
@@ -571,6 +583,8 @@ def _build_featured_grids(
     selected_fits: dict,
     excluded: set[str],
     in_range: pd.DataFrame | None,
+    history_fit: dict | None = None,
+    past_ids=None,
 ) -> str:
     """Featured priority-antigen curves, grouped by pathogen category.
 
@@ -602,14 +616,17 @@ def _build_featured_grids(
             f'({len(fc)} antigen{"s" if len(fc) != 1 else ""} · {tier} · {pool_note})'
             f'</span></h4>'
             + _make_curve_grid(fc, excluded, in_range=in_range,
-                               div_id=f"fig-featured-{cat}")
+                               div_id=f"fig-featured-{cat}",
+                               history_fit=history_fit, past_ids=past_ids)
         )
     return "".join(parts) or "<p style='color:#999;'>No pathogen-matched priority antigens on this plate.</p>"
 
 
 def _make_curve_grid(pool_fits: dict, excluded: set[str], cols: int = 6,
                      in_range: pd.DataFrame | None = None,
-                     div_id: str = "fig-curve-grid") -> str:
+                     div_id: str = "fig-curve-grid",
+                     history_fit: dict | None = None,
+                     past_ids=None) -> str:
     """All-Curves Overview for the (priority) antigens.
 
     Interactive Plotly small-multiples when the count is manageable — each
@@ -624,13 +641,39 @@ def _make_curve_grid(pool_fits: dict, excluded: set[str], cols: int = 6,
         return "<p style='color:#999;'>No standard curve fits.</p>"
     analytes = list(pool_fits.keys())
     if len(analytes) <= _INTERACTIVE_GRID_CAP:
-        return _make_curve_grid_interactive(pool_fits, excluded, cols, in_range, div_id=div_id)
+        return _make_curve_grid_interactive(pool_fits, excluded, cols, in_range,
+                                            div_id=div_id, history_fit=history_fit,
+                                            past_ids=past_ids)
     return _make_curve_grid_static(pool_fits, excluded, cols=10)
+
+
+def _hist_curve_params(history_fit: dict | None, pool: str | None,
+                       analyte: str, past_ids) -> list:
+    """Past-plate 4PL params [(plate_id, [a,b,c,d]), …] for (pool × analyte),
+    limited to ``past_ids`` when given. Used to overlay historical curves."""
+    dfp = (history_fit or {}).get(pool)
+    if dfp is None or getattr(dfp, "empty", True) or "analyte" not in dfp.columns:
+        return []
+    sub = dfp[dfp["analyte"] == analyte]
+    if past_ids is not None and "plate_id" in sub.columns:
+        sub = sub[sub["plate_id"].isin(list(past_ids))]
+    out = []
+    for r in sub.itertuples(index=False):
+        try:
+            pr = [float(r.a), float(r.b), float(r.c), float(r.d)]
+        except Exception:
+            continue
+        if any(v != v for v in pr):
+            continue
+        out.append((str(getattr(r, "plate_id", "")), pr))
+    return out
 
 
 def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
                                  in_range: pd.DataFrame | None,
-                                 div_id: str = "fig-curve-grid") -> str:
+                                 div_id: str = "fig-curve-grid",
+                                 history_fit: dict | None = None,
+                                 past_ids=None) -> str:
     from plotly.subplots import make_subplots
 
     analytes = list(pool_fits.keys())
@@ -657,6 +700,7 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
             spec_by_an[an] = g
 
     shown_legend = set()  # only emit each legend entry once
+    hist_idx = []          # trace indices of past-plate curves (for the toggle)
     for i, an in enumerate(analytes):
         r, c = divmod(i, cols)
         rr_, cc_ = r + 1, c + 1
@@ -667,6 +711,20 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
             continue
         xd = std["dilution"].astype(float).values
         yd = std["mfi"].astype(float).values
+
+        # Past-plate fitted curves (light grey), overlaid like the picker.
+        hp = _hist_curve_params(history_fit, fit.get("pool"), an, past_ids)
+        if hp:
+            xs_h = np.geomspace(max(float(xd.min()), 1e-9), float(xd.max()), 60)
+            for pid_, pr in hp:
+                hist_idx.append(len(fig.data))
+                fig.add_trace(go.Scatter(
+                    x=xs_h, y=four_pl(xs_h, *pr), mode="lines",
+                    line=dict(color="rgba(150,150,150,0.55)", width=0.7),
+                    name="Past plates", legendgroup="hist",
+                    showlegend="hist" not in shown_legend, visible=True,
+                    hovertemplate=f"{pid_}<br>Dilution 1:%{{x:.0f}}<br>MFI %{{y:.0f}}<extra></extra>",
+                ), row=rr_, col=cc_); shown_legend.add("hist")
 
         # Out-of-tolerance standard points (red triangles) from obs/exp recovery.
         oe = fit.get("obs_exp") or []
@@ -755,13 +813,28 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
 
     fig.update_annotations(font_size=8)
     panel_h = 150
-    fig.update_layout(
+    top_margin = 66 if hist_idx else 46
+    layout_kw = dict(
         height=max(260, rows * panel_h + 80),
-        margin=dict(l=40, r=20, t=46, b=30),
+        margin=dict(l=40, r=20, t=top_margin, b=30),
         plot_bgcolor="#fbfcfd",
-        legend=dict(orientation="h", x=0.5, xanchor="center", y=1.02,
+        legend=dict(orientation="h", x=0.5, xanchor="center", y=1.0,
                     yanchor="bottom", font=dict(size=10)),
     )
+    # Show all / hide past-plate curves (default shown), like the other sections.
+    if hist_idx:
+        layout_kw["updatemenus"] = [dict(
+            type="buttons", direction="right", showactive=False,
+            x=0, xanchor="left", y=1.0, yanchor="bottom", pad=dict(t=2, r=2),
+            font=dict(size=10),
+            buttons=[
+                dict(label="Show all past plates", method="restyle",
+                     args=[{"visible": True}, hist_idx]),
+                dict(label="Hide past plates", method="restyle",
+                     args=[{"visible": "legendonly"}, hist_idx]),
+            ],
+        )]
+    fig.update_layout(**layout_kw)
     return _plotly_html(fig, div_id, height=max(260, rows * panel_h + 80))
 
 
@@ -1176,7 +1249,7 @@ def _make_curve_picker(
     var layout = {
       // Rug plate labels sit at the TOP (vertical), so the bottom margin only
       // holds the curve's Dilution axis; top margin holds the vertical labels.
-      width: width, height: 640, margin:{l:L, r:R, t:160, b:64},
+      width: width, height: 640, margin:{l:L, r:R, t:140, b:64},
       showlegend:true, hovermode:"closest", plot_bgcolor:"#fbfcfd",
       // Status box (top) + legend (below) live in the right margin, so neither
       // overlaps the curve / reportable-range box.
@@ -1187,12 +1260,17 @@ def _make_curve_picker(
         xref:"paper", yref:"paper", x:1.01, y:1.0, xanchor:"left", yanchor:"top",
         align:"left", text:boxText, showarrow:false, bordercolor:"#d0d7de", borderwidth:1,
         bgcolor:"rgba(255,255,255,0.92)", font:{size:9},
+      }, {
+        // Antigen × pool title, using the free top-left space above the curve.
+        xref:"paper", yref:"paper", x:0, y:1.12, xanchor:"left", yanchor:"bottom",
+        align:"left", showarrow:false, font:{size:14, color:"#2c3e50"},
+        text:"<b>"+ant+"</b>  <span style='color:#7f8c8d;'>×  "+pool+"</span>",
       }],
       xaxis:{domain:[0, curveEnd], type:"log", title:{text:"Standard dilution (1:x)", font:{size:12}},
              gridcolor:"#eef1f4"},
       xaxis2:{domain:[rugStart2, 1], side:"top", tickmode:"array", tickvals:tickvals, ticktext:ticktext,
-              tickangle:-90, tickfont:{size:9}, range:[-0.55, (nCols-1)+0.55],
-              title:{text:"Plate run (current → oldest)", font:{size:11, color:"#7f8c8d"}}},
+              tickangle:-90, tickfont:{size:8}, range:[-0.55, (nCols-1)+0.55],
+              title:{text:"Plate run (current → oldest)", font:{size:10, color:"#7f8c8d"}}},
       yaxis:{type:"log", title:{text:"MFI (log scale)", font:{size:12}, standoff:8},
              gridcolor:"#eef1f4"},
     };
@@ -1712,9 +1790,11 @@ def _freeze_pane_heatmap(
 </div>"""
 
 
-def _make_in_range_heatmap(in_range: pd.DataFrame, excluded: set[str]) -> str:
+def _make_in_range_heatmap(in_range: pd.DataFrame, excluded: set[str],
+                           antigen_pool: dict | None = None) -> str:
     if in_range is None or in_range.empty:
         return "<p style='color:#999;'>No in-range data.</p>"
+    antigen_pool = antigen_pool or {}
 
     # Four-state classification with a colorblind-friendly scheme:
     #   BELOW_RANGE = blue, IN_RANGE = teal, ABOVE_RANGE = orange, NO_FIT = yellow.
@@ -1759,13 +1839,18 @@ def _make_in_range_heatmap(in_range: pd.DataFrame, excluded: set[str]) -> str:
     )
     status_disp = {"BELOW_RANGE": "Below range", "IN_RANGE": "In range",
                    "ABOVE_RANGE": "Above range", "NO_FIT": "No fit"}
+    # Per-antigen calibrating standard for the hover (so the range call's basis
+    # is explicit — especially for uncalibrated/best-fit antigens).
+    an_std = {a: (f"{antigen_pool.get(a, '—')} · {CALIBRATION_LABELS[antigen_calibration(a, antigen_pool.get(a))]}")
+              for a in analyte_order}
     text = np.empty(z.shape, dtype=object)
     for i, an in enumerate(analyte_order):
         for j, w in enumerate(well_order):
             status = pivot.iat[i, j]
             sid = sample_labels.get(w, "") or "—"
             text[i, j] = (f"<b>{an}</b><br>Well: {w}<br>Sample: {sid}<br>"
-                          f"Status: {status_disp.get(status, status)}")
+                          f"Status: {status_disp.get(status, status)}<br>"
+                          f"Calibrated vs: {an_std.get(an, '—')}")
 
     colorscale = [
         [0.00, "#4477AA"], [0.25, "#4477AA"],   # BELOW_RANGE — blue
@@ -1786,8 +1871,12 @@ def _make_in_range_heatmap(in_range: pd.DataFrame, excluded: set[str]) -> str:
             for c in present_cats)
         legend = (
             '<p style="margin:0 0 6px; font-size:12px; color:#7f8c8d;">'
-            'Antigen labels are coloured by pathogen group (relevant to each '
-            'standard); dotted lines separate groups: ' + chips + '</p>')
+            'Cell colour = the specimen\'s range status against <b>its antigen\'s '
+            'matched standard</b> (BELOW / IN / ABOVE / NO_FIT); hover a cell to '
+            'see which standard it was calibrated against. Antigen <b>labels</b> '
+            'are coloured by pathogen group (dotted lines separate groups): '
+            + chips + '. Antigens with no calibrating standard are scored against '
+            'a best-fit pool — hover shows this, so read their status with care.</p>')
         return legend + heatmap_html
     return heatmap_html
 
@@ -2349,12 +2438,14 @@ def _format_control_stats(
     current_run_date=None,
     excluded: set[str] | None = None,
     cv_flag_threshold: float | None = None,
+    hist_cv_flag_threshold: float | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Per-antigen cross-plate stats rows + the current-plate well columns.
 
     ``cv_flag_threshold`` (a fraction, e.g. 0.25) sets ``row['high_cv']`` when
-    this plate's %CV across the control's wells exceeds it (used to highlight
-    high-variability Background antigens). Left None for PC/NC.
+    this plate's %CV across the control's wells exceeds it (intra-plate).
+    ``hist_cv_flag_threshold`` sets ``row['high_hist_cv']`` when the *historical*
+    (between-plate, inter-assay) %CV exceeds it.
 
     Shared by Background, Positive, and Negative Control QC so all three tables
     carry identical columns. Each row has a ``wells`` dict (well → this-plate
@@ -2427,11 +2518,14 @@ def _format_control_stats(
                 flag = "below"
         high_cv = bool(cv_flag_threshold is not None and cur_cv == cur_cv
                        and cur_cv > cv_flag_threshold)
+        high_hist_cv = bool(hist_cv_flag_threshold is not None and h_cv == h_cv
+                            and h_cv > hist_cv_flag_threshold)
         rows.append({
             "analyte": a,
             "excluded": a in excluded,
             "flag": flag,
             "high_cv": high_cv,
+            "high_hist_cv": high_hist_cv,
             "n_wells": n_wells,
             "wells": wells_map,
             "current_mfi": _fmt(cur_mean, 1),
@@ -2569,6 +2663,7 @@ def _control_qc_sections(
     value_label: str,
     id_prefix: str,
     cv_flag_threshold: float | None = None,
+    hist_cv_flag_threshold: float | None = None,
 ) -> list[dict]:
     """Build one {control, plot_html, stats, well_cols, n_past_plates} block
     per control.
@@ -2594,13 +2689,15 @@ def _control_qc_sections(
             value_label, f"fig-{id_prefix}-{idx}", excluded)
         stats, well_cols = _format_control_stats(
             sub, antigens, current_plate_id, current_run_date, excluded,
-            cv_flag_threshold=cv_flag_threshold)
+            cv_flag_threshold=cv_flag_threshold,
+            hist_cv_flag_threshold=hist_cv_flag_threshold)
         n_past = len(_past_plate_ids(sub, current_plate_id, current_run_date))
         on_plate = bool((sub["plate_id"] == current_plate_id).any())
         out.append({"control": ctrl, "plot_html": plot, "stats": stats,
                     "well_cols": well_cols, "n_past_plates": n_past,
                     "on_plate": on_plate,
-                    "n_high_cv": sum(1 for r in stats if r.get("high_cv"))})
+                    "n_high_cv": sum(1 for r in stats if r.get("high_cv")),
+                    "n_high_hist_cv": sum(1 for r in stats if r.get("high_hist_cv"))})
     return out
 
 

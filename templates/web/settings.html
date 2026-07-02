@@ -311,6 +311,10 @@
       <label>NC duplicate %CV <span class="hint">(flags disagreeing NC wells; default 0.25)</span></label>
       <input type="number" name="nc_cv_threshold" value="{{ config.qc_thresholds.get('nc_cv_threshold', 0.25) }}" step="0.01" min="0" max="5">
     </div>
+    <div class="field">
+      <label>Inter-assay %CV <span class="hint">(between-plate drift flag; default 0.30)</span></label>
+      <input type="number" name="hist_cv_threshold" value="{{ config.qc_thresholds.get('hist_cv_threshold', 0.30) }}" step="0.01" min="0" max="5">
+    </div>
   </div>
   <p style="font-size:0.85em; color:#888; margin-top:4px;">
     <b>Bead count</b> tiers (RED/YELLOW/GREEN) and the <b>problem-fraction</b>

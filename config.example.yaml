@@ -83,7 +83,8 @@ qc_thresholds:
   bead_count_warn: 50          # min..warn-1 = Low; at/above warn = Adequate
   recovery_tolerance: 0.30     # +/-30% Obs/Exp for standard-curve LLOQ/ULOQ
   problem_fraction_threshold: 0.20  # >= this fraction flagged -> antigen/specimen flagged
-  bg_cv_threshold: 0.25        # Background %CV: rows above this are flagged/highlighted
+  bg_cv_threshold: 0.25        # Background intra-plate %CV: rows above this are flagged
   bg_max_mfi: 300              # Background max-MFI reference (dashed line on the plot)
   nc_cv_threshold: 0.25        # NC duplicate-well %CV: above this flags a disagreeing pair
+  hist_cv_threshold: 0.30      # Inter-assay (between-plate) %CV: flags run-to-run drift
   drop_outlier: true           # retry a failing 4PL by dropping one outlier point

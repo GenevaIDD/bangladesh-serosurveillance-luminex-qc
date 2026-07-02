@@ -396,7 +396,7 @@
 <summary>Background QC</summary>
 <div class="inner">
   {% if bg_levels.present %}
-  <div class="stat-row" style="grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px;">
+  <div class="stat-row" style="grid-template-columns:repeat(5, minmax(0,1fr)); gap:8px;">
     <div class="stat" style="padding:10px 12px;">
       <div class="num">{{ bg_levels.n_antigens }}</div>
       <div class="lbl">Antigens with Background data</div>
@@ -411,7 +411,11 @@
     </div>
     <div class="stat" style="padding:10px 12px;">
       <div class="num" style="{% if bg_levels.n_high_cv %}color:#a06a00;{% endif %}">{{ bg_levels.n_high_cv }}</div>
-      <div class="lbl">Antigens with high Background %CV (&gt; {{ bg_cv_pct }}%)</div>
+      <div class="lbl">High <b>intra-plate</b> Background %CV (&gt; {{ bg_cv_pct }}%)</div>
+    </div>
+    <div class="stat" style="padding:10px 12px;">
+      <div class="num" style="{% if bg_levels.n_high_hist_cv %}color:#a06a00;{% endif %}">{{ bg_levels.n_high_hist_cv }}</div>
+      <div class="lbl">High <b>inter-assay</b> Background %CV (&gt; {{ hist_cv_pct }}%, ≥ 2 past plates)</div>
     </div>
   </div>
 
@@ -450,18 +454,23 @@
       </li>
       <li><b>Table.</b>
         <ul style="margin:4px 0 0 16px; padding:0;">
-          <li>One row per antigen: a <b>High CV</b> flag; <b>n wells</b>; one
-            column per Background <b>well</b> (this plate's MFI); the
-            current-plate <b>Mean / SD / %CV / IQR</b> across those wells; and
+          <li>One row per antigen: a <b>High CV</b> flag (intra-plate); <b>n
+            wells</b>; one column per Background <b>well</b> (this plate's MFI);
+            the current-plate <b>Mean / SD / %CV / IQR</b> across those wells;
             the <b>Historical mean / SD / %CV / IQR</b> across each previous
-            plate's mean. Click any column header to sort.</li>
+            plate's mean; and a <b>High hist. CV</b> flag. Click any column
+            header to sort.</li>
           <li>SD uses n−1; %CV = SD ÷ mean × 100; IQR = Q1–Q3.</li>
+          <li><b>Two kinds of %CV variability.</b> The current-plate %CV is
+            <b>intra-plate</b> (spread across this plate's Background wells) —
+            flagged <span class="flag-cv">amber ◆</span> above {{ bg_cv_pct }}%.
+            The Historical %CV is <b>inter-assay</b> (spread of each past plate's
+            mean, i.e. run-to-run drift) — flagged <span class="flag-cv">↕</span>
+            above {{ hist_cv_pct }}% (needs ≥ 2 past plates). The two count cards
+            above summarise each.</li>
           <li>Rows where this plate's mean falls outside the historical IQR are
             highlighted — <span class="flag-up">▲ orange</span> above Q3,
-            <span class="flag-down">▼ blue</span> below Q1. Rows whose Background
-            <b>%CV exceeds {{ bg_cv_pct }}%</b> are shaded
-            <span class="flag-cv">amber ◆</span> (sort the High CV column to group
-            them).</li>
+            <span class="flag-down">▼ blue</span> below Q1.</li>
         </ul>
       </li>
       <li><b>Hidden tables.</b> Two collapsible checks below the main table:
@@ -493,21 +502,21 @@
       <table>
         <thead>
           <tr>
-            <th>Analyte</th><th>High CV</th><th>n wells</th>
+            <th>Analyte</th><th>High CV<br><span style="font-weight:400;font-size:10px;">intra</span></th><th>n wells</th>
             {% for w in bg_levels.well_cols %}<th>Well {{ w }}</th>{% endfor %}
             <th>Mean</th><th>SD</th><th>%CV</th><th>IQR</th>
-            <th>Historical mean</th><th>Historical SD</th><th>Historical %CV</th><th>Historical IQR</th>
+            <th>Historical mean</th><th>Historical SD</th><th>Historical %CV<br><span style="font-weight:400;font-size:10px;">inter-assay</span></th><th>High hist. CV<br><span style="font-weight:400;font-size:10px;">inter</span></th><th>Historical IQR</th>
           </tr>
         </thead>
         <tbody>
           {% for r in bg_levels.rows %}
           <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% elif r.high_cv or r.has_outlier %}row-flag-cv{% endif %}{% if r.excluded %} muted{% endif %}">
-            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.high_cv %} <span class="flag-cv" title="Background %CV above threshold">◆</span>{% endif %}{% if r.has_outlier %} <span class="flag-cv" title="one Background well is a leave-one-out outlier — see the Background well outliers table">⚠ outlier</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.high_cv %} <span class="flag-cv" title="intra-plate Background %CV above threshold">◆</span>{% endif %}{% if r.high_hist_cv %} <span class="flag-cv" title="high inter-assay (between-plate) %CV">↕</span>{% endif %}{% if r.has_outlier %} <span class="flag-cv" title="one Background well is a leave-one-out outlier — see the Background well outliers table">⚠ outlier</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
             <td data-sort="{{ 1 if r.high_cv else 0 }}">{% if r.high_cv %}<span class="flag-cv">yes</span>{% else %}—{% endif %}</td>
             <td>{{ r.n_wells }}</td>
             {% for w in bg_levels.well_cols %}<td>{{ r.wells.get(w, "—") }}</td>{% endfor %}
             <td>{{ r.current_mfi }}</td><td>{{ r.current_sd }}</td><td>{{ r.current_cv }}</td><td>{{ r.current_iqr }}</td>
-            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td>{{ r.hist_cv }}</td><td>{{ r.hist_iqr }}</td>
+            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td{% if r.high_hist_cv %} class="flag-cv"{% endif %}>{{ r.hist_cv }}</td><td data-sort="{{ 1 if r.high_hist_cv else 0 }}">{% if r.high_hist_cv %}<span class="flag-cv">yes</span>{% else %}—{% endif %}</td><td>{{ r.hist_iqr }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -1077,6 +1086,8 @@
     against <b>every</b> pool on the plate — only the best-fit curve is featured
     here; to review any other antigen × pool combination, use the collapsed
     <b>All curve fits</b> block below or the <b>Standard-Curve Picker</b>.
+    Each panel also overlays the antigen's <b>past-plate fitted curves</b> in
+    light grey (use <b>Show all / Hide past plates</b> to toggle them).
   </p>
   {{ featured_grid_html | safe }}
 
@@ -1140,7 +1151,8 @@
   <details class="desc-box">
   <summary>How to read this explorer</summary>
   <ul style="margin: 6px 0 12px 18px; padding: 0; color:#7f8c8d; font-size:13px; line-height:1.55;">
-    <li><b style="color:#34495e;">Left panel</b> — the standard curve: this
+    <li><b style="color:#34495e;">Left panel</b> — the standard curve (titled with
+      the selected <b>antigen × pool</b>; axes labelled dilution / MFI): this
       plate's standards (dark dots) and 4PL fit
       (<span style="color:#D55E00;">orange</span>), the
       <span style="color:#009E73;">green square</span> reportable range,
@@ -1154,8 +1166,8 @@
       <span class="badge badge-r-nofit">NO_FIT</span>, derived from the selected
       pool's reportable range); each past plate is its own column, coloured by the
       <b>same</b> status scheme at higher transparency so previously out-of-range
-      samples are easy to spot. Column labels are vertical; scroll horizontally as
-      plates accumulate.</li>
+      samples are easy to spot. Column labels are vertical and sit at the <b>top</b>
+      (current → nearest-past → oldest); scroll horizontally as plates accumulate.</li>
     <li>The <b>status box</b> (top-right of the plot) shows this plate's specimen
       count, the IN / BELOW / ABOVE / NO_FIT breakdown + percentages, and
       <code>fit OK</code> — refreshing on every pick.</li>

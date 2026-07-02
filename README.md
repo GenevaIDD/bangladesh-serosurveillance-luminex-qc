@@ -46,7 +46,8 @@ interactive HTML report with:
     yellow 30–49, green ≥ 50) with a "how it works" description box,
     "≥ X % flagged" summary cards, and a mechanics note.
 -   **Background QC** — per-antigen spread of the blank wells (per-well MFIs,
-    SD, %CV, a **High CV** flag, a `⚠ outlier` badge on antigens with a
+    SD, %CV, an intra-plate **High CV** flag, an inter-assay **High hist. CV**
+    flag for run-to-run drift, and a `⚠ outlier` badge on antigens with a
     leave-one-out well outlier) and a cross-plate overview with a
     **Median ± IQR / Per-plate data points** toggle (per-plate view colours
     the current plate red and past plates on a chronological blue→green
@@ -67,15 +68,18 @@ interactive HTML report with:
     against a single **scoring pool** and exports RAU under every pool.
 -   **Standard-Curve Summary + All-Curves Overview** — one fit table per
     pool (labelled with pathogen targets); featured priority antigens each
-    shown against their single best-fit standard, with all antigen × pool
-    fits in a collapsed block. Range-problem tables show the calibrating
-    Standard per antigen.
+    shown against their single best-fit standard, with the antigen's
+    **past-plate curves overlaid in light grey** (Show all / Hide toggle) and
+    all antigen × pool fits in a collapsed block. Range-problem tables show the
+    calibrating Standard per antigen.
 -   **Standard-Curve Picker** — type to inspect any antigen's curve, rug,
-    and cross-plate overlays; rug columns run current → nearest → oldest with
-    labels on top; axes labelled (Standard dilution / MFI). Folded by default.
+    and cross-plate overlays; the panel is titled with the selected
+    **antigen × pool**; rug columns run current → nearest → oldest with labels
+    on top; axes labelled (Standard dilution / MFI). Folded by default.
 -   **Standard-Curve Range Matrix** — every specimen × antigen classified
-    IN / BELOW / ABOVE range / NO_FIT, antigen rows grouped and
-    colour-labelled by pathogen, with a folded **Serum-vs-DBS** comparison.
+    IN / BELOW / ABOVE range / NO_FIT against its matched standard; antigen
+    rows grouped and colour-labelled by pathogen, and each **cell's hover names
+    the calibrating standard + tier**; folded **Serum-vs-DBS** comparison.
 -   **Chronological across plates** — cross-plate history, legends and rug
     columns are ordered by the parsed **run date + time** (`BatchStartTime`),
     independent of upload order; a warning banner shows if that datetime
@@ -203,12 +207,14 @@ a ±30 % (configurable) Obs/Exp recovery check.
 
 Per-antigen SD / %CV across the blank wells, the individual MFIs, and the
 current-plate vs previous-plate IQR (with a Median ± IQR / Per-plate toggle).
-Rows are flagged for **high %CV** (> `bg_cv_threshold`) and for a **single-well
-outlier** (leave-one-out: a well > mean + 2·SD of the other wells; the literal
-all-wells figures are shown alongside). A hidden table flags specimen × antigen
-combos with **negative net MFI** (specimen − mean background). The max-MFI
-(default 300, dashed line) and %CV are reference thresholds — **formal
-Background pass/fail flagging is still in development**.
+Rows are flagged for high **intra-plate %CV** (> `bg_cv_threshold`, spread across
+this plate's wells), high **inter-assay %CV** (> `hist_cv_threshold`, run-to-run
+drift of the historical means), and for a **single-well outlier** (leave-one-out:
+a well > mean + 2·SD of the other wells; the literal all-wells figures are shown
+alongside). A hidden table flags specimen × antigen combos with **negative net
+MFI** (specimen − mean background). The max-MFI (default 300, dashed line) and
+the %CV thresholds are reference values — **formal Background pass/fail flagging
+is still in development**.
 
 ### Negative control
 
@@ -257,9 +263,9 @@ well-classification patterns, **priority antigens** (curves shown in the
 Summary/Overview; blank = the pathogen-priority set), the **pool mode**
 (auto_select / per_pool) with scoring pool, regex rules and per-antigen
 overrides, excluded analytes, bead-count thresholds, problem-fraction
-threshold, background %CV and max-MFI reference thresholds, the **NC
-duplicate %CV** threshold, recovery tolerance, the single-outlier drop
-toggle, and the (informational-only) specimen dilution.
+threshold, background intra-plate %CV, **inter-assay %CV**, and max-MFI
+reference thresholds, the **NC duplicate %CV** threshold, recovery tolerance,
+the single-outlier drop toggle, and the (informational-only) specimen dilution.
 
 ## Development
 

@@ -148,15 +148,17 @@ datetime & ordering* below).
     separators); freeze-pane antigen × well tier heatmap (RED \<
     `bead_count_min`, YELLOW \< `bead_count_warn`, else GREEN). Antigen flag
     denominator = all wells; specimen flag denominator = specimen wells.
-3.  **Background QC** — info cards (incl. count of high-%CV antigens); a
-    fixed-width, horizontally-scrolling cross-plate overview with a
-    **two-view toggle** (see *Control overviews* below) and a dashed
-    reference line at `bg_max_mfi`; folded per-antigen table (per-well MFIs,
-    SD, %CV, current/previous IQR, a sortable **High CV** flag; antigens with
-    a flagged well-outlier get a `⚠ outlier` badge + row highlight); two
-    hidden tables — **background well outliers** (leave-one-out flag: a well
-    \> mean + 2·SD of the *other* wells; the literal all-wells mean/SD/
-    threshold are shown alongside for comparison) and **specimens with
+3.  **Background QC** — info cards (counts of high **intra-plate** %CV and
+    high **inter-assay** %CV antigens); a fixed-width, horizontally-scrolling
+    cross-plate overview with a **two-view toggle** (see *Control overviews*
+    below) and a dashed reference line at `bg_max_mfi`; folded per-antigen
+    table (per-well MFIs, SD, %CV, current/previous IQR, a sortable
+    intra-plate **High CV** flag, and a **High hist. CV** flag for inter-assay
+    /run-to-run drift when the historical %CV exceeds `hist_cv_threshold`;
+    antigens with a flagged well-outlier get a `⚠ outlier` badge + row
+    highlight); two hidden tables — **background well outliers** (leave-one-out
+    flag: a well \> mean + 2·SD of the *other* wells; the literal all-wells
+    mean/SD/threshold are shown alongside for comparison) and **specimens with
     negative net MFI** (specimen MFI − mean plate background).
 3b. **Positive Control QC** — single-point Cholera High/Low duplicates;
     two-view cross-plate overview + per-antigen stats table (same layout as
@@ -173,20 +175,25 @@ datetime & ordering* below).
     no-standard antigens (FLU/malaria/…) are omitted here.
 5.  **All-Curves Overview** — **featured priority antigens** at the top,
     grouped by pathogen category, each shown against its **single best-fit**
-    calibrating pool (named + calibration tier in the heading), then a
-    collapsed block with one grid per pool over all antigens. A 4PL is fit
-    for every antigen × every pool regardless; only the best-fit curve is
-    featured. Interactive small-multiples when ≤ 48 panels, else static.
-6.  **Standard-Curve Picker** — folded; type to inspect any antigen; curve +
-    rug on a shared y-range; **X = "Standard dilution (1:x)", Y = "MFI (log
-    scale)"**; rug column labels at the **top** (vertical), ordered **current
-    → nearest-past → oldest**; past-plate rug coloured by range status
-    (higher transparency); cross-plate overlays.
+    calibrating pool (named + calibration tier in the heading), with the
+    antigen's **past-plate fitted curves overlaid in light grey** and a
+    **Show all / Hide past plates** toggle (shown by default); then a collapsed
+    block with one grid per pool over all antigens. A 4PL is fit for every
+    antigen × every pool regardless; only the best-fit curve is featured.
+    Interactive small-multiples when ≤ 48 panels, else static.
+6.  **Standard-Curve Picker** — folded; type to inspect any antigen; the panel
+    is **titled with the selected antigen × pool**; curve + rug on a shared
+    y-range; **X = "Standard dilution (1:x)", Y = "MFI (log scale)"**; rug
+    column labels at the **top** (vertical, small), ordered **current →
+    nearest-past → oldest**; past-plate rug coloured by range status (higher
+    transparency); cross-plate overlays.
 7.  **Standard-Curve Range Matrix** — freeze-pane specimen × antigen status;
-    antigen rows grouped and colour-labelled by pathogen (dotted separators +
-    legend); the folded **Range-problem antigens** table carries a
-    **Standard** column (matched pool + calibration tier); folded
-    **Serum-vs-DBS** scatter.
+    each cell is the specimen's status vs **its antigen's matched standard**,
+    and the **cell hover names that calibrating pool + tier** (uncalibrated
+    antigens are best-fit — hover makes this explicit); antigen rows grouped
+    and colour-labelled by pathogen (dotted separators + legend); the folded
+    **Range-problem antigens** table carries a **Standard** column (matched
+    pool + calibration tier); folded **Serum-vs-DBS** scatter.
 8.  **Downloads**.
 
 ### Control overviews (Background / PC / NC) — two views
@@ -233,7 +240,8 @@ set); `panel.pool_mode` / `scoring_pool` / `pool_assignment_rules` /
 `pool_antigen_overrides`; excluded analytes; `bead_count_min` /
 `bead_count_warn`; `problem_fraction_threshold`; `bg_cv_threshold`;
 `bg_max_mfi` (default 300, dashed reference line); `nc_cv_threshold`
-(default 0.25, NC duplicate-well disagreement); `recovery_tolerance`;
+(default 0.25, NC duplicate-well disagreement); `hist_cv_threshold`
+(default 0.30, inter-assay/between-plate %CV drift flag); `recovery_tolerance`;
 `drop_outlier`; `specimens.default_dilution` (informational only — not
 used in the RAU calculation).
 

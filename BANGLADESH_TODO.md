@@ -1272,7 +1272,36 @@ check-ins; do not do it all at once.** Agreed phases:
 - **REMAINING: v0.2.0 build** — commit, tag `v0.2.0`, verify CI (task #8). Not
   done yet; nothing committed since v0.1.0.
 
+## Phase 7 (DONE — post-v0.2.0, uncommitted; for next release)
+
+From review of the first real multi-plate report:
+1. **Inter-assay CV flag.** The "Historical %CV" column is between-plate
+   (inter-assay) variability; added a `hist_cv_threshold` (default 0.30), a
+   **High hist. CV** flag column + `↕` marker + count card (Background), threaded
+   through `_format_control_stats` / `_control_qc_sections` (PC/NC too). Editable
+   in Settings + config.example.yaml.
+2. **Range-matrix cell hover** now shows the calibrating standard + tier
+   ("Calibrated vs: <pool> · <tier>"); legend note clarifies cell colour =
+   status vs the matched standard, and that uncalibrated antigens are best-fit
+   (left coloured, per decision). `_make_in_range_heatmap` gained `antigen_pool`.
+3. **Featured priority antigens** now overlay **past-plate fitted curves** in
+   light grey + a **Show all / Hide past plates** toggle (default shown).
+   `_make_curve_grid[_interactive]` + `_build_featured_grids` gained
+   `history_fit`/`past_ids`; `_hist_curve_params` helper.
+4. **Picker polish:** added an **antigen × pool title** (top-left, using the
+   freed whitespace), shrank rug x-labels (font 8), tightened top margin
+   (160→140).
+5. **Descriptions pass:** updated Background (two-CV explanation), Featured
+   (historical overlay), Range-matrix legend, Picker (title/axis/top-labels).
+   No stale/removed-feature text found elsewhere.
+
+Verified: template + settings parse, config round-trip, two-plate end-to-end —
+all markers present. **Not committed** — next release (v0.2.1/v0.3.0) will bundle
+Phase 7 + the build.yml macOS-runner pin.
+
 ### Still pending
+- **build.yml:** pin macOS runner (`macos-14`) before the macos-latest→macOS 26
+  migration (~Jun 2026). Low priority.
 - (NIBSC done above.) Former placeholder — the NIBSC pool's
   on-plate sample name; maps to measles/diphtheria/rubella/tetanus) + Featured
   standard labels + Range-problem standard column + **pinned no-standard-scoring

@@ -111,9 +111,10 @@ PROBLEM_FRACTION_THRESHOLD = 0.20
 # Background QC. The max-MFI threshold defaults to 300 for Bangladesh
 # (High PMT) and is editable on the Settings page. Formal Background
 # flagging rules are still being finalized (see BANGLADESH_TODO Section 4).
-BG_CV_THRESHOLD = 0.25       # Background %CV reference threshold
+BG_CV_THRESHOLD = 0.25       # Background %CV reference threshold (intra-plate)
 BG_MAX_MFI = 300             # Background max-MFI reference threshold
 NC_CV_THRESHOLD = 0.25       # Negative-control duplicate-well %CV threshold
+HIST_CV_THRESHOLD = 0.30     # Inter-assay (between-plate) %CV flag threshold
 
 # Standard-curve dilutions are NOT a fixed series for Bangladesh — each
 # control pool carries its own dilution series encoded in the sample name
@@ -199,6 +200,7 @@ DEFAULTS = {
         "bg_cv_threshold": BG_CV_THRESHOLD,
         "bg_max_mfi": BG_MAX_MFI,
         "nc_cv_threshold": NC_CV_THRESHOLD,
+        "hist_cv_threshold": HIST_CV_THRESHOLD,
     },
 }
 
