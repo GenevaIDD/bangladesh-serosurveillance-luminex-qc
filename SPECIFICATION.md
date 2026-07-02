@@ -64,33 +64,63 @@ observed in the pilots: `Anti-OSP & cTxB pool`,
 A 4PL is fit per (pool × antigen) regardless of mode. How specimens are
 then scored (RAU / range) is set by `panel.pool_mode`:
 
-- **`per_pool` (default)** — "fit every pool × antigen, no matching." RAU
-  and range status use a single **scoring pool** (`panel.scoring_pool`, or
-  the pool with the most `fit_ok` antigens). No per-antigen pool matching.
-  The Summary table and All-Curves Overview show one row/grid per pool.
-- **`auto_select`** — each antigen is scored against its calibrating pool
-  (`qc_standard_curve.select_pool_per_antigen`):
-    1.  Parse the antigen's pathogen group from its name (keyword map
+- **`auto_select` (default)** — each antigen is scored against its
+  calibrating pool (`qc_standard_curve.select_pool_per_antigen`):
+    1.  Parse the antigen's pathogen category from its name (keyword map
         below).
-    2.  Candidate pools = those whose name targets that group **and** that
-        produced a usable fit for the antigen.
+    2.  Candidate pools = those whose name targets that category's scoring
+        group **and** that produced a usable fit for the antigen.
     3.  Tie-break (and fall back when no name match) by **best fit**
         (`params` present → `fit_ok` → highest R²) — so when several pools
         match, exactly one (the best-fitting) is used per antigen. No usable
         fit anywhere → `NO_FIT`.
 
     Resolution order per antigen: exact override
-    (`panel.pool_antigen_overrides`, config-file only) → user regex rules
+    (`panel.pool_antigen_overrides`) → user regex rules
     (`panel.pool_assignment_rules`) → keyword match → best-fit fallback.
+    All matches are YAML-overridable.
 
-    Keyword map (antigen-name token → pool-name token):
-    dengue (`DENV`/`DENGUE`) → `dengue`/`orpal`;
-    cholera (`CHO_` prefix, `CtxB`/`Inaba`/`Ogawa`/`cholera`/`vibrio`) →
-    `osp`/`ctxb`/`cholera`; typhoid (`HlyE`/`typhi`) → `hlye`.
+    Category → scoring-pool map: **cholera** (`CHO_` prefix,
+    `CtxB`/`Inaba`/`Ogawa`/`cholera`/`vibrio`) → `osp`/`ctxb`/`cholera`
+    pools; **typhoid** (`HlyE`/`typhi`) → `hlye` pools; **dengue**
+    (`DENV`+digit or `DENGUE` — the digit avoids matching e.g. "DENVer") →
+    `dengue`/`orpal` pools; **other arboviruses** (`ARB_` prefix) and
+    **VPDs** (`VPD_` prefix, plus `RES_measles_lysate`) have no dedicated
+    standard and default to the **Dengue / Orpal** reference pools.
+
+    **NIBSC standard (measles / diphtheria / rubella / tetanus).** These four
+    VPD groups use an ordered *preferred → fallback* candidate list
+    (`_antigen_scoring_groups`): they prefer a pool whose name contains
+    **`NIBSC`** when one is on the plate, and fall back to the Dengue/Orpal
+    reference otherwise. Pertussis / meningitis stay on the reference (not
+    NIBSC). If the real NIBSC pool name lacks "NIBSC", route it with a
+    `pool_assignment_rules` entry.
+
+    **Calibration tier** (`antigen_calibration`, exported per specimen):
+    `standard` = cholera/typhoid/dengue, or a NIBSC-matched
+    measles/diphtheria/rubella/tetanus; `reference` = other arbovirus/VPD
+    scored against Dengue/Orpal; `uncalibrated` = no pathogen match (best-fit
+    RAU kept but flagged — not quantitative).
+- **`per_pool`** — "fit every pool × antigen, no matching." RAU and range
+  status use a single **scoring pool** (`panel.scoring_pool`, or the pool
+  with the most `fit_ok` antigens). No per-antigen pool matching. The
+  Summary and All-Curves Overview show one table/grid per pool.
 
 In `per_pool` mode the in-report scoring sections (count cards, range
 matrix, range-problem tables, Serum-vs-DBS, picker) all use the single
 scoring pool; per-pool RAU lives in the master export and specimens CSV.
+
+### Run datetime & chronological ordering
+
+`parse_xponent._canonical_run_datetime` derives one run datetime per plate,
+preferring **`BatchStartTime`** (the actual run start) over the export
+`Date` stamp, then `BatchStopTime`; stored in `metadata.run_datetime` /
+`run_date`. ALL cross-plate ordering — history, legends, and the picker rug
+columns — sorts by this parsed datetime, so it is **independent of the
+order reports were generated/uploaded** (`_past_plate_ids`). "Past" = run
+strictly before the current plate. If no header datetime parses,
+`run_datetime_ok` is false and the report shows a visible warning banner;
+ordering degrades gracefully rather than crashing.
 
 ## 4PL model & fit QC (`qc_standard_curve.py`)
 
@@ -103,37 +133,74 @@ linear-range square and range classification.
 
 ## Report sections (in order)
 
-1.  **Plate Overview** — metadata table; count cards; shape-coded 384
-    plate map (freeze-pane scroll, hover = well/sample/type).
-2.  **Bead Count** — freeze-pane antigen × well tier heatmap (RED \<
-    `bead_count_min`, YELLOW \< `bead_count_warn`, else GREEN);
-    flagged-antigen/specimen cards.
-3.  **Background QC** — info cards; cross-plate overview (dots \< 3
-    plates; previous-plate IQR bar + current dot ≥ 3 plates, out-of-IQR
-    flagged); folded per-antigen table (individual MFIs, SD, %CV,
-    current/previous IQR).
-4.  **Standard-Curve Summary** — count cards (below/above flags, scored
-    against the scoring pool in `per_pool`); curve table — one row per
-    (pool × antigen) in `per_pool`, or per antigen with its selected Pool
-    in `auto_select` — with 4PL params, LLOQ/ULOQ, % in range. Plus PC
-    replicate-variability (%CV between duplicate standard wells, per
-    pool × antigen × dilution).
-5.  **All-Curves Overview** — one grid per pool (`per_pool`) or the
-    selected-pool curve per antigen (`auto_select`); interactive
-    small-multiples (hover, current-plate rug, green linear-range
-    square, red out-of-tolerance standards, ✕ dropped point) when ≤ 48
-    panels, else a static grid. Non-converged (pool × antigen) pairs
-    appear as observed points only — no curve or range square.
-6.  **Standard-Curve Picker** — folded; type to inspect any antigen;
-    curve + rug pinned to a shared y-range; linear-range square;
-    cross-plate overlays.
-7.  **Standard-Curve Range Matrix** — freeze-pane specimen × antigen
-    status; folded **Serum-vs-DBS** scatter (paired per person ×
-    antigen).
-8.  **Negative Control QC** — per-antigen NC MFI across plates (controls
-    kept separate; current plate ringed); folded NC details (grouped
-    bar + Well / Control / Analyte / MFI table).
-9.  **Downloads**.
+A red banner appears at the top of any report whose **run datetime could
+not be parsed** (chronological ordering then unreliable — see *Run
+datetime & ordering* below).
+
+1.  **Plate Overview** — metadata table (incl. "Run date & time" = the
+    parsed run start); an 8-card single row: Total, PC/standard, **one card
+    per single-point control** (e.g. Cholera High / Cholera Low PC wells,
+    placed between PC/standard and NC), NC, Specimen, Background, Antigens;
+    shape-coded 384 plate map (freeze-pane scroll, hover = well/sample/type).
+2.  **Bead Count** — a collapsed **"How the Bead-Count Matrix works"**
+    description box above the cards; flagged-antigen/specimen + red/yellow
+    cell cards; a mechanics note (hover contents, sticky row/column, group
+    separators); freeze-pane antigen × well tier heatmap (RED \<
+    `bead_count_min`, YELLOW \< `bead_count_warn`, else GREEN). Antigen flag
+    denominator = all wells; specimen flag denominator = specimen wells.
+3.  **Background QC** — info cards (incl. count of high-%CV antigens); a
+    fixed-width, horizontally-scrolling cross-plate overview with a
+    **two-view toggle** (see *Control overviews* below) and a dashed
+    reference line at `bg_max_mfi`; folded per-antigen table (per-well MFIs,
+    SD, %CV, current/previous IQR, a sortable **High CV** flag; antigens with
+    a flagged well-outlier get a `⚠ outlier` badge + row highlight); two
+    hidden tables — **background well outliers** (leave-one-out flag: a well
+    \> mean + 2·SD of the *other* wells; the literal all-wells mean/SD/
+    threshold are shown alongside for comparison) and **specimens with
+    negative net MFI** (specimen MFI − mean plate background).
+3b. **Positive Control QC** — single-point Cholera High/Low duplicates;
+    two-view cross-plate overview + per-antigen stats table (same layout as
+    Background).
+3c. **Negative Control QC** — per-control (Negative 0/49) two-view
+    scrolling overview + stats table with a **duplicate-%CV** flag column,
+    plus a focused table listing the flagged antigens with their two well
+    MFIs + %CV (or a "✓ none" line) when the wells disagree by \>
+    `nc_cv_threshold`.
+4.  **Standard-Curve Summary** — count cards; **one sortable fit table per
+    standard pool**, each labelled with the pathogen target(s) it calibrates,
+    with 4PL params, LLOQ/ULOQ, % in range. By default shows only the
+    **pathogen-priority** antigens (those a standard/reference calibrates);
+    no-standard antigens (FLU/malaria/…) are omitted here.
+5.  **All-Curves Overview** — **featured priority antigens** at the top,
+    grouped by pathogen category, each shown against its **single best-fit**
+    calibrating pool (named + calibration tier in the heading), then a
+    collapsed block with one grid per pool over all antigens. A 4PL is fit
+    for every antigen × every pool regardless; only the best-fit curve is
+    featured. Interactive small-multiples when ≤ 48 panels, else static.
+6.  **Standard-Curve Picker** — folded; type to inspect any antigen; curve +
+    rug on a shared y-range; **X = "Standard dilution (1:x)", Y = "MFI (log
+    scale)"**; rug column labels at the **top** (vertical), ordered **current
+    → nearest-past → oldest**; past-plate rug coloured by range status
+    (higher transparency); cross-plate overlays.
+7.  **Standard-Curve Range Matrix** — freeze-pane specimen × antigen status;
+    antigen rows grouped and colour-labelled by pathogen (dotted separators +
+    legend); the folded **Range-problem antigens** table carries a
+    **Standard** column (matched pool + calibration tier); folded
+    **Serum-vs-DBS** scatter.
+8.  **Downloads**.
+
+### Control overviews (Background / PC / NC) — two views
+
+Each cross-plate overview has a toggle (buttons top-left, under the legend;
+`margin.autoexpand=False` keeps them from shifting when toggled):
+
+- **Median ± IQR** (default once ≥ 3 past plates): grey IQR band of each
+  antigen's historical per-plate mean; this plate's mean is a dot, blue
+  within the IQR / orange ♦ outside.
+- **Per-plate data points** (default with < 3 past plates): every plate as
+  its own dot — current plate **red**, past plates on a chronological
+  blue→green gradient (oldest faded, newest bold). Legend toggles individual
+  plates; Show all / Hide past plates for bulk control.
 
 ## Outputs
 
@@ -147,23 +214,28 @@ below), `in_range_*.csv`,
 `history/`.
 
 The clean master (`results_*.csv` and the workbook `results` sheet)
-follows `panel.pool_mode`. In **per_pool** (default — "fit every pool ×
-antigen, no auto-selecting") it is one row per (well × antigen) with a
-`RAU (<pool>)` + `status (<pool>)` column pair for **every** control
-pool; an antigen a pool never calibrated reads `NO_FIT`. In
-**auto_select** it is a tidy single-pool table (plate, well, sample_id,
-matrix, analyte, `pool`, mfi, RAU, status, censored). Per-pool RAU is
-always also available, wide, in the `specimens` sheet.
+follows `panel.pool_mode`. In **auto_select** (default) it is a tidy
+single-pool table (plate, well, sample_id, matrix, analyte, `pool`,
+`calibration`, mfi, RAU, status, censored) — one matched pool per antigen,
+with `calibration` = standard / reference / uncalibrated (see *Calibration
+tier* above). In **per_pool** it is one row per (well × antigen) with a
+`RAU (<pool>)` + `status (<pool>)` column pair for **every** control pool;
+an antigen a pool never calibrated reads `NO_FIT`. Per-pool RAU is always
+also available, wide, in the `specimens` sheet.
 
 Master **Export All (.xlsx)**: `results`, `specimens`,
 `standard_curve_params`, `standard_curve_data`, `nc_levels`.
 
 ## Settings (`config.yaml`)
 
-Well-classification patterns; priority antigens (blank = all); excluded
-analytes; `bead_count_min` / `bead_count_warn`;
-`problem_fraction_threshold`; `bg_cv_threshold`; `bg_max_mfi` (default
-300, reference); `recovery_tolerance`; `drop_outlier`.
+Well-classification patterns; priority antigens (blank = pathogen-priority
+set); `panel.pool_mode` / `scoring_pool` / `pool_assignment_rules` /
+`pool_antigen_overrides`; excluded analytes; `bead_count_min` /
+`bead_count_warn`; `problem_fraction_threshold`; `bg_cv_threshold`;
+`bg_max_mfi` (default 300, dashed reference line); `nc_cv_threshold`
+(default 0.25, NC duplicate-well disagreement); `recovery_tolerance`;
+`drop_outlier`; `specimens.default_dilution` (informational only — not
+used in the RAU calculation).
 
 ## Module map
 

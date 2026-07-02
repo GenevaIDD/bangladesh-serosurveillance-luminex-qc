@@ -37,36 +37,51 @@ Serosurveillance **202-plex** Luminex immunoassay, run on a Luminex
 Upload an xPONENT plate-result CSV and get back a self-contained
 interactive HTML report with:
 
--   **Plate Overview** — a metadata table (Plate ID, Batch, Run date,
-    Operator, Instrument, Operating mode, CSV file) and count cards
-    (total / PC / NC / specimen / background wells, antigens), plus a
-    **shape-coded 384-well plate map** (○ PC, ✕ NC, ■ specimen, ▫
-    background) with hover and freeze-pane scroll.
--   **Bead Count** — a freeze-pane antigen × well tier heatmap (red \<
-    30, yellow 30–49, green ≥ 50) and "≥ X % flagged" summary cards.
--   **Background QC** — per-antigen spread of the blank wells
-    (individual MFIs, SD, %CV) and a cross-plate **IQR-vs-current**
-    overview (the current plate's mean against the interquartile range
-    of previous plates).
+-   **Plate Overview** — a metadata table (Plate ID, Batch, **Run date &
+    time** = the parsed run start, Operator, Instrument, Operating mode,
+    CSV file) and a single row of count cards (total / PC / **each
+    single-point control, e.g. Cholera High / Cholera Low** / NC / specimen
+    / background wells, antigens), plus a **shape-coded 384-well plate map**.
+-   **Bead Count** — a freeze-pane antigen × well tier heatmap (red \< 30,
+    yellow 30–49, green ≥ 50) with a "how it works" description box,
+    "≥ X % flagged" summary cards, and a mechanics note.
+-   **Background QC** — per-antigen spread of the blank wells (per-well MFIs,
+    SD, %CV, a **High CV** flag, a `⚠ outlier` badge on antigens with a
+    leave-one-out well outlier) and a cross-plate overview with a
+    **Median ± IQR / Per-plate data points** toggle (per-plate view colours
+    the current plate red and past plates on a chronological blue→green
+    gradient). Hidden tables flag single-well outliers and negative net MFI.
+-   **Positive & Negative Control QC** — the same two-view cross-plate
+    overview for the single-point PCs (Cholera High/Low) and NC controls,
+    plus an NC **duplicate-%CV** flag table.
 -   **Multi-pool 4PL standard curves** — a 4PL is fit for **every
-    antigen against every control pool**. By default (per-pool mode) there
-    is no matching: specimen RAU / range are scored against a single
-    **scoring pool**, and the master export carries RAU under every pool.
-    An optional auto-select mode instead scores each antigen against the
-    pool that calibrates it (matched by pathogen, tie-broken by best fit).
--   **Standard-Curve Summary + All-Curves Overview** for the priority
-    antigens, with the linear/reportable range drawn as a green square,
-    out-of-tolerance standards as red triangles, and a current-plate
-    specimen rug.
--   **Standard-Curve Picker** — type to inspect any antigen's curve,
-    rug, and cross-plate overlays (review tool; folded by default).
--   **Standard-Curve Range Matrix** — every specimen × antigen
-    classified IN / BELOW / ABOVE range / NO_FIT, with a folded
-    **Serum-vs-DBS** comparison.
--   **Negative Control QC** — per-antigen NC MFI tracked across plates,
-    with each negative control (Negative 0, Negative 49) kept separate.
--   **Downloads** — per-plate CSVs plus a clean master "results" table
-    with RAU.
+    antigen against every control pool**. By default (auto-select mode)
+    each antigen is scored against the pool that calibrates it — cholera →
+    Anti-OSP & cTxB, typhoid → HlyE, dengue → Dengue/Orpal, and other
+    arboviruses & VPDs (no dedicated standard) → the Dengue/Orpal reference
+    pools — matched by pathogen name, tie-broken by best fit, and fully
+    YAML-overridable. Measles/diphtheria/rubella/tetanus prefer a **NIBSC**
+    pool when one is on the plate. Every specimen carries a **calibration
+    tier** (standard / reference / uncalibrated) so best-fit-only RAUs are
+    clearly flagged. An optional per-pool mode instead scores every antigen
+    against a single **scoring pool** and exports RAU under every pool.
+-   **Standard-Curve Summary + All-Curves Overview** — one fit table per
+    pool (labelled with pathogen targets); featured priority antigens each
+    shown against their single best-fit standard, with all antigen × pool
+    fits in a collapsed block. Range-problem tables show the calibrating
+    Standard per antigen.
+-   **Standard-Curve Picker** — type to inspect any antigen's curve, rug,
+    and cross-plate overlays; rug columns run current → nearest → oldest with
+    labels on top; axes labelled (Standard dilution / MFI). Folded by default.
+-   **Standard-Curve Range Matrix** — every specimen × antigen classified
+    IN / BELOW / ABOVE range / NO_FIT, antigen rows grouped and
+    colour-labelled by pathogen, with a folded **Serum-vs-DBS** comparison.
+-   **Chronological across plates** — cross-plate history, legends and rug
+    columns are ordered by the parsed **run date + time** (`BatchStartTime`),
+    independent of upload order; a warning banner shows if that datetime
+    can't be parsed.
+-   **Downloads** — per-plate CSVs plus a clean master "results" table with
+    RAU and the calibration tier.
 
 No Python installation or internet connection required — runs as a
 self-contained macOS `.app` or Windows `.exe`.
@@ -145,20 +160,22 @@ or `N ng/mL` for HlyE) and calibrate specific pathogens:
 A 4PL is fit for every (pool × antigen). Two modes control how specimens
 are then scored:
 
--   **per_pool (default)** — "fit every pool × antigen, no matching." RAU
-    and range status are computed against a single **scoring pool** (by
-    default the pool with the most passing fits; set `scoring_pool` to
-    override). The Summary table and All-Curves Overview show one row /
-    grid per pool, and the master export lists RAU + status under *every*
-    pool so you can pick the right one per antigen.
--   **auto_select** — each antigen is scored against the pool meant to
-    calibrate it: the tool parses the antigen's pathogen from its name and
-    matches it to the targeting pool(s); when more than one pool targets
-    the same pathogen (e.g. Dengue pool vs ORPAL), the **best-fitting
-    curve** wins (params present → fit_ok → highest R²). Antigens with no
-    name match fall back to the best-fitting pool. You can refine the
-    matching with a regex rules field and exact per-antigen overrides in
-    Settings.
+-   **auto_select (default)** — each antigen is scored against the pool
+    meant to calibrate it: the tool parses the antigen's pathogen from its
+    name and matches it to the targeting pool(s). Cholera → Anti-OSP &
+    cTxB, typhoid → HlyE, dengue → Dengue/Orpal; other arboviruses
+    (`ARB_`) and VPDs (`VPD_`, plus `RES_measles_lysate`) have no dedicated
+    standard and use the Dengue/Orpal reference pools. When more than one
+    pool targets the same category (e.g. Dengue vs ORPAL), the
+    **best-fitting curve** wins (params present → fit_ok → highest R²).
+    Antigens with no name match fall back to the best-fitting pool. Refine
+    the matching with a regex rules field and exact per-antigen overrides
+    in Settings (or the YAML).
+-   **per_pool** — "fit every pool × antigen, no matching." RAU and range
+    status are computed against a single **scoring pool** (by default the
+    pool with the most passing fits; set `scoring_pool` to override). The
+    Summary and All-Curves Overview show one table / grid per pool, and the
+    master export lists RAU + status under *every* pool.
 
 ## QC checks
 
@@ -184,16 +201,22 @@ a ±30 % (configurable) Obs/Exp recovery check.
 
 ### Background QC
 
-Per-antigen SD / %CV across the blank wells, the individual MFIs, and
-the current-plate vs previous-plate IQR. The max-MFI (default 300) and
-%CV are tracked as reference thresholds — **formal Background pass/fail
-flagging is still in development**.
+Per-antigen SD / %CV across the blank wells, the individual MFIs, and the
+current-plate vs previous-plate IQR (with a Median ± IQR / Per-plate toggle).
+Rows are flagged for **high %CV** (> `bg_cv_threshold`) and for a **single-well
+outlier** (leave-one-out: a well > mean + 2·SD of the other wells; the literal
+all-wells figures are shown alongside). A hidden table flags specimen × antigen
+combos with **negative net MFI** (specimen − mean background). The max-MFI
+(default 300, dashed line) and %CV are reference thresholds — **formal
+Background pass/fail flagging is still in development**.
 
 ### Negative control
 
-NC wells (matching `Negative`) are tracked per antigen across plates,
-with each negative control kept separate (duplicate wells averaged
-within each control). Deeper NC-level flagging is in development.
+NC wells (matching `Negative`) are tracked per antigen across plates, each
+control kept separate. Because each control has only two wells, disagreement is
+flagged by **duplicate %CV** (> `nc_cv_threshold`, default 25 %) with a focused
+flag table, rather than a 2-SD outlier test. Deeper NC-level flagging is in
+development.
 
 ## Output
 
@@ -203,7 +226,7 @@ All persistent data is stored under
 ```         
   reports/
     QC_<plate_id>.html              # interactive report
-    results_<plate_id>.csv          # clean master (per_pool: RAU+status per pool; auto_select: single-pool tidy)
+    results_<plate_id>.csv          # clean master (auto_select: single-pool tidy incl. pool + calibration tier; per_pool: RAU+status per pool)
     in_range_<plate_id>.csv         # IN/BELOW/ABOVE/NO_FIT per (specimen × antigen)
     pct_in_range_<plate_id>.csv     # per-antigen %-in-range
     bead_problems_*.csv / bead_problem_{antigens,samples}_*.csv
@@ -219,10 +242,11 @@ All persistent data is stored under
 
 The home page **Export All Processed Data (.xlsx)** combines every plate
 into a workbook. Its headline `results` sheet is the clean master table:
-in the default **per_pool** mode it carries RAU + range status under
-**every** control pool (so each antigen's cholera / dengue / typhoid
-pool RAU sit side by side, `NO_FIT` where a pool doesn't calibrate it);
-in **auto_select** mode it's the tidy single selected-pool table. The
+in the default **auto_select** mode it's the tidy single matched-pool
+table (one RAU + status per antigen); in **per_pool** mode it carries RAU
++ range status under **every** control pool (so each antigen's cholera /
+dengue / typhoid pool RAU sit side by side, `NO_FIT` where a pool doesn't
+calibrate it). The
 `specimens`, `standard_curve_params`, `standard_curve_data`, and
 `nc_levels` sheets follow.
 
@@ -230,10 +254,12 @@ in **auto_select** mode it's the tidy single selected-pool table. The
 
 Editable on the Settings page (persisted to `config.yaml`):
 well-classification patterns, **priority antigens** (curves shown in the
-Summary/Overview; blank = all), excluded analytes, bead-count
-thresholds, problem-fraction threshold, background %CV and max-MFI
-reference thresholds, recovery tolerance, and the single-outlier drop
-toggle.
+Summary/Overview; blank = the pathogen-priority set), the **pool mode**
+(auto_select / per_pool) with scoring pool, regex rules and per-antigen
+overrides, excluded analytes, bead-count thresholds, problem-fraction
+threshold, background %CV and max-MFI reference thresholds, the **NC
+duplicate %CV** threshold, recovery tolerance, the single-outlier drop
+toggle, and the (informational-only) specimen dilution.
 
 ## Development
 

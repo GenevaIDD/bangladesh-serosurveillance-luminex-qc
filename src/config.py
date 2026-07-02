@@ -101,8 +101,6 @@ EXCLUDED_ANALYTES: list[str] = []
 BEAD_COUNT_MIN = 30          # Red below this
 BEAD_COUNT_WARN = 50         # Yellow between MIN and WARN; green above
 RECOVERY_TOLERANCE = 0.30    # ±30% Obs/Exp recovery for standard curve points
-PC_CV_THRESHOLD = 0.20       # Flag a standard point when the %CV between its
-                             # duplicate wells exceeds this (PC replicate QC)
 
 # Shared "≥ X% problematic" threshold used by the bead-count and range
 # summary cards. An antigen is "problem" when at least this fraction of
@@ -115,6 +113,7 @@ PROBLEM_FRACTION_THRESHOLD = 0.20
 # flagging rules are still being finalized (see BANGLADESH_TODO Section 4).
 BG_CV_THRESHOLD = 0.25       # Background %CV reference threshold
 BG_MAX_MFI = 300             # Background max-MFI reference threshold
+NC_CV_THRESHOLD = 0.25       # Negative-control duplicate-well %CV threshold
 
 # Standard-curve dilutions are NOT a fixed series for Bangladesh — each
 # control pool carries its own dilution series encoded in the sample name
@@ -163,11 +162,11 @@ DEFAULTS = {
         # the Standard Curve Summary / All Curves Overview (Section 5).
         "priority_antigens": [],
         # How standard curves are presented/scored:
+        #   "auto_select" — pick one calibrating pool per antigen (pathogen
+        #                   name match, tie-broken by best fit). DEFAULT.
         #   "per_pool"    — fit & show a curve for EVERY (pool × antigen);
         #                   no antigen→pool matching or auto-selection.
-        #   "auto_select" — pick one calibrating pool per antigen (pathogen
-        #                   name match, tie-broken by best fit).
-        "pool_mode": "per_pool",
+        "pool_mode": "auto_select",
         # In per_pool mode, the single pool used to compute specimen RAU /
         # range status (Range Matrix, clean results). Blank = first pool.
         "scoring_pool": "",
@@ -175,6 +174,10 @@ DEFAULTS = {
         # strings, first match wins, applied before the built-in pathogen
         # heuristic. Lets the lab define antigen→pool mapping without code.
         "pool_assignment_rules": [],
+        # Optional exact per-antigen overrides for auto_select mode:
+        # {antigen_name: pool_name}. Highest priority — wins over rules and
+        # the built-in pathogen heuristic.
+        "pool_antigen_overrides": {},
     },
     "well_classification": {
         "pc_patterns": PC_PATTERNS,
@@ -191,11 +194,11 @@ DEFAULTS = {
         "bead_count_min": BEAD_COUNT_MIN,
         "bead_count_warn": BEAD_COUNT_WARN,
         "recovery_tolerance": RECOVERY_TOLERANCE,
-        "pc_cv_threshold": PC_CV_THRESHOLD,
         "drop_outlier": True,
         "problem_fraction_threshold": PROBLEM_FRACTION_THRESHOLD,
         "bg_cv_threshold": BG_CV_THRESHOLD,
         "bg_max_mfi": BG_MAX_MFI,
+        "nc_cv_threshold": NC_CV_THRESHOLD,
     },
 }
 

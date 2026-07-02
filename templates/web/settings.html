@@ -113,8 +113,8 @@
     <div class="field">
       <label>Mode</label>
       <select name="pool_mode" style="width:100%; padding:8px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px;">
-        <option value="per_pool" {{ 'selected' if config.panel.get('pool_mode','per_pool') == 'per_pool' }}>Per pool — fit every (pool × antigen), no matching</option>
-        <option value="auto_select" {{ 'selected' if config.panel.get('pool_mode','per_pool') == 'auto_select' }}>Auto-select — one matched/best-fit pool per antigen</option>
+        <option value="auto_select" {{ 'selected' if config.panel.get('pool_mode','auto_select') == 'auto_select' }}>Auto-select — one matched/best-fit pool per antigen</option>
+        <option value="per_pool" {{ 'selected' if config.panel.get('pool_mode','auto_select') == 'per_pool' }}>Per pool — fit every (pool × antigen), no matching</option>
       </select>
     </div>
     <div class="field">
@@ -123,10 +123,10 @@
     </div>
   </div>
   <p style="font-size:0.85em; color:#888; margin-top:4px;">
-    <b>Per pool</b> (default): a curve is fit and shown for every control pool
-    × antigen with no antigen→pool matching; specimen RAU / range use the single
-    scoring pool above. <b>Auto-select</b>: each antigen is matched to its
-    pathogen's pool (tie-broken by best fit) and scored against that one.
+    <b>Auto-select</b> (default): each antigen is matched to its pathogen's pool
+    (tie-broken by best fit) and scored against that one. <b>Per pool</b>: a curve
+    is fit and shown for every control pool × antigen with no antigen→pool
+    matching; specimen RAU / range use the single scoring pool above.
   </p>
 
   <h3>Pool assignment rules <span class="hint">(auto-select mode; optional)</span></h3>
@@ -195,6 +195,13 @@
         <code>osp</code>, <code>ctxb</code>, or <code>cholera</code>.</li>
       <li><b>Typhoid</b> — antigen contains <code>HlyE</code> or
         <code>typhi</code> → pools whose name contains <code>hlye</code>.</li>
+      <li><b>Other arboviruses</b> — antigen starts with <code>ARB_</code> (not
+        dengue) → the <b>Dengue / Orpal</b> reference pools (no dedicated
+        standard on the plate).</li>
+      <li><b>VPDs</b> — antigen starts with <code>VPD_</code> (diphtheria,
+        rubella, pertussis, measles, tetanus, meningitis…), plus
+        <code>RES_measles_lysate</code> → the <b>Dengue / Orpal</b> reference
+        pools (no dedicated standard on the plate).</li>
     </ul>
     <p style="margin:8px 0 0;">
       <b>When more than one pool matches</b> (e.g. both <code>Dengue pool</code>
@@ -258,10 +265,15 @@
 <div class="card">
   <div class="row">
     <div class="field">
-      <label>Default Dilution Factor <span class="hint">(e.g. 100 for 1:100)</span></label>
+      <label>Specimen dilution factor <span class="hint">(informational; e.g. 100 for 1:100)</span></label>
       <input type="number" name="specimen_default_dilution" value="{{ config.specimens.default_dilution }}" min="1">
     </div>
   </div>
+  <p style="font-size:0.85em; color:#888; margin-top:4px;">
+    The single dilution specimens are run at. <b>Informational only</b> — it does
+    not enter the RAU calculation (RAU is anchored to each standard pool's lowest
+    dilution), so changing it has no numeric effect on results today.
+  </p>
 </div>
 
 <!-- QC Thresholds -->
@@ -280,10 +292,6 @@
       <label>Recovery Tolerance <span class="hint">(standard-curve LLOQ/ULOQ; 0.30 = &plusmn;30%)</span></label>
       <input type="number" name="recovery_tolerance" value="{{ config.qc_thresholds.recovery_tolerance }}" step="0.01" min="0" max="1">
     </div>
-    <div class="field">
-      <label>PC Replicate %CV <span class="hint">(flag a standard point if its duplicate %CV exceeds; 0.20 = 20%)</span></label>
-      <input type="number" name="pc_cv_threshold" value="{{ config.qc_thresholds.get('pc_cv_threshold', 0.20) }}" step="0.01" min="0" max="2">
-    </div>
   </div>
 
   <div class="row" style="margin-top:14px;">
@@ -296,8 +304,12 @@
       <input type="number" name="bg_cv_threshold" value="{{ config.qc_thresholds.get('bg_cv_threshold', 0.25) }}" step="0.01" min="0" max="5">
     </div>
     <div class="field">
-      <label>Background Max-MFI <span class="hint">(reference threshold; default 300)</span></label>
+      <label>Background Max-MFI <span class="hint">(dashed line on the plot; default 300)</span></label>
       <input type="number" name="bg_max_mfi" value="{{ config.qc_thresholds.get('bg_max_mfi', 300) }}" min="0">
+    </div>
+    <div class="field">
+      <label>NC duplicate %CV <span class="hint">(flags disagreeing NC wells; default 0.25)</span></label>
+      <input type="number" name="nc_cv_threshold" value="{{ config.qc_thresholds.get('nc_cv_threshold', 0.25) }}" step="0.01" min="0" max="5">
     </div>
   </div>
   <p style="font-size:0.85em; color:#888; margin-top:4px;">
@@ -306,9 +318,11 @@
     when at least this fraction of its wells (resp. antigens) is red or yellow.
     The same fraction is applied to BELOW_RANGE / ABOVE_RANGE counts in the
     Standard-Curve Summary. <b>Recovery tolerance</b> sets the standard-curve
-    reportable range (LLOQ/ULOQ). The two <b>Background</b> values are tracked
-    for reference only — formal Background pass/fail flagging is still in
-    development, so they do not currently mark antigens as failing.
+    reportable range (LLOQ/ULOQ). <b>Background %CV</b> highlights high-variability
+    background antigens; <b>Background Max-MFI</b> draws the dashed reference line;
+    <b>NC duplicate %CV</b> flags negative-control wells that disagree. Formal
+    Background/NC pass/fail flagging is still in development, so these do not yet
+    mark antigens as failing.
   </p>
 
   <label style="margin-top:20px;">
@@ -326,7 +340,7 @@
 <!-- Actions -->
 <div class="actions">
   <button type="submit" class="btn btn-primary">Save Settings</button>
-  <a href="/settings/export" class="btn btn-secondary">Export Config (YAML)</a>
+  <a href="/settings/export" class="btn btn-secondary">Export current config (YAML)</a>
   <button type="button" class="btn btn-danger" onclick="if(confirm('Reset all settings to defaults?')) document.getElementById('reset-form').submit();">Reset to Defaults</button>
 </div>
 
@@ -334,13 +348,39 @@
 
 <form id="reset-form" method="post" action="/settings/reset" style="display:none;"></form>
 
-<!-- Import -->
+<!-- Configuration file (YAML) -->
 <div class="card" style="margin-top: 20px;">
-  <h3>Import Configuration</h3>
-  <form method="post" action="/settings/import" enctype="multipart/form-data" style="display:flex; gap:10px; align-items:center;">
+  <h3>Configuration file (YAML)</h3>
+  <p style="font-size:0.9em; color:#555; margin:0 0 8px;">
+    Every setting on this page is stored in a YAML file. You can edit settings
+    here directly, or work with the file — useful for sharing a setup between
+    machines or version-controlling it. Editing the file changes nothing until
+    you <b>Import</b> it (or save here).
+  </p>
+  <ol style="font-size:0.9em; color:#555; line-height:1.6; margin:0 0 12px 18px; padding:0;">
+    <li><b>Download a starting point.</b>
+      <a href="/settings/example-config">Annotated template</a> (commented, only
+      the editable settings) or <b>Export current config</b> above (your live
+      settings, full but uncommented).</li>
+    <li><b>Edit it</b> in any text editor. Keep only the lines you want to change
+      — anything you omit uses the built-in default. Pay particular attention to
+      <code>panel.priority_antigens</code> and the antigen&nbsp;&times;&nbsp;pool
+      matching keys (<code>pool_mode</code>, <code>scoring_pool</code>,
+      <code>pool_assignment_rules</code>, <code>pool_antigen_overrides</code>) —
+      the template explains each. The 202-antigen panel is read from the plate
+      CSV automatically, so you don't list antigens here.</li>
+    <li><b>Upload it</b> below to apply. Invalid YAML is rejected with an error
+      and your current settings are kept. After importing, re-check this page and
+      click <b>Save Settings</b> if you tweak anything further.</li>
+  </ol>
+  <form method="post" action="/settings/import" enctype="multipart/form-data" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
     <input type="file" name="config_file" accept=".yaml,.yml">
-    <button type="submit" class="btn btn-secondary">Import</button>
+    <button type="submit" class="btn btn-secondary">Import &amp; apply</button>
   </form>
+  <p style="font-size:0.8em; color:#999; margin:8px 0 0;">
+    Note: importing replaces your saved config with the uploaded file (merged
+    over the built-in defaults). Re-generating reports applies the new settings.
+  </p>
 </div>
 
 <div style="margin-top:30px; padding-top:15px; border-top:1px solid #ddd; font-size:0.85em; color:#999;">

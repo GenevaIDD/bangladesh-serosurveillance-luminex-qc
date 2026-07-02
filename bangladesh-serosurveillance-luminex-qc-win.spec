@@ -17,6 +17,8 @@ a = Analysis(
         (str(project_root / "templates" / "web"), "templates/web"),
         # Specification document
         (str(project_root / "SPECIFICATION.md"), "."),
+        # Annotated config template (served on the Settings page)
+        (str(project_root / "config.example.yaml"), "."),
     ],
     hiddenimports=[
         "src",

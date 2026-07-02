@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>SPECIFICATION</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+  </style>
+</head>
+<body>
+<h1 id="bangladesh-serosurveillance-luminex-qc-tool-specification">Bangladesh Serosurveillance Luminex QC Tool — Specification</h1>
+<h1 id="version-0.1.0-bangladesh">Version 0.1.0-bangladesh</h1>
+<h2 id="overview">Overview</h2>
+<p>Standalone QC tool for the Bangladesh National Serosurveillance <strong>202-plex</strong> Luminex immunoassay, run on a Luminex <strong>Intelliflex</strong> in <strong>High PMT</strong> mode on a <strong>384-well</strong> plate. It parses the xPONENT plate-result CSV, classifies wells, fits 4PL standard curves per (control pool × antigen), scores specimens against each antigen’s calibrating pool, and renders a self-contained interactive HTML report. Distributed as a macOS <code>.app</code> / Windows <code>.exe</code> (no Python or internet required).</p>
+<h2 id="assay-panel">Assay panel</h2>
+<p>Production panel: <strong>202 antigens</strong> (pilot plates ran fewer due to reagent supply). The panel is <strong>re-derived from the CSV <code>Median</code> block header on every ingest</strong> — the default <code>src/config.py::ANTIGENS</code> is a fallback/display list only. Excluded analytes (soft-flag list) default to empty and are editable in Settings.</p>
+<h2 id="plate-layout">Plate layout</h2>
+<p>384-well (rows A–P × columns 1–24). No Intelliflex input file is needed; wells are classified from the <code>Sample</code> name, checked in order <strong>Background → NC → PC → specimen</strong> (patterns editable in Settings):</p>
+<table>
+<thead>
+<tr class="header">
+<th>Type</th>
+<th>Default pattern</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Background</td>
+<td><code>^Background</code></td>
+<td><code>Background0</code></td>
+</tr>
+<tr class="even">
+<td>NC</td>
+<td><code>Negative</code></td>
+<td><code>Pilot Control: Negative 49 , 1:1000</code></td>
+</tr>
+<tr class="odd">
+<td>PC / standard</td>
+<td><code>^Pilot Control:</code></td>
+<td><code>Pilot Control: Dengue pool 1:4000</code></td>
+</tr>
+<tr class="even">
+<td>Specimen</td>
+<td>(anything else)</td>
+<td><code>12602_r3_Serum</code></td>
+</tr>
+</tbody>
+</table>
+<p>NC is checked before PC because both share the <code>Pilot Control:</code> prefix.</p>
+<h2 id="control-pools-dilution-parsing">Control pools &amp; dilution parsing</h2>
+<p>PC samples carry the pool label and dilution in the name. <code>classify.py::_parse_pc</code> extracts:</p>
+<ul>
+<li><strong>pool</strong> — name with any descriptive parenthetical stripped (e.g. <code>Dengue pool</code>).</li>
+<li><strong>dilution</strong> — trailing <code>1:N</code> (→ N), or <code>N ng/mL</code> for HlyE (a concentration axis).</li>
+<li><strong>single-point</strong> controls (e.g. <code>Cholera High/Low</code>) — flagged, not fit; shown as reference markers.</li>
+</ul>
+<p>A 4PL is fit per (pool × antigen) using that pool’s own series. Pools observed in the pilots: <code>Anti-OSP &amp; cTxB pool</code>, <code>Anti-OSP &amp; cTxB &amp; HlyE pool</code>, <code>Dengue pool</code>, <code>Orpal pool</code>, <code>HlyE</code>, <code>Cholera High/Low</code>.</p>
+<h3 id="antigen-pool-scoring-panel.pool_mode">Antigen → pool scoring (<code>panel.pool_mode</code>)</h3>
+<p>A 4PL is fit per (pool × antigen) regardless of mode. How specimens are then scored (RAU / range) is set by <code>panel.pool_mode</code>:</p>
+<ul>
+<li><p><strong><code>auto_select</code> (default)</strong> — each antigen is scored against its calibrating pool (<code>qc_standard_curve.select_pool_per_antigen</code>):</p>
+<ol type="1">
+<li>Parse the antigen’s pathogen category from its name (keyword map below).</li>
+<li>Candidate pools = those whose name targets that category’s scoring group <strong>and</strong> that produced a usable fit for the antigen.</li>
+<li>Tie-break (and fall back when no name match) by <strong>best fit</strong> (<code>params</code> present → <code>fit_ok</code> → highest R²) — so when several pools match, exactly one (the best-fitting) is used per antigen. No usable fit anywhere → <code>NO_FIT</code>.</li>
+</ol>
+<p>Resolution order per antigen: exact override (<code>panel.pool_antigen_overrides</code>) → user regex rules (<code>panel.pool_assignment_rules</code>) → keyword match → best-fit fallback. All matches are YAML-overridable.</p>
+<p>Category → scoring-pool map: <strong>cholera</strong> (<code>CHO_</code> prefix, <code>CtxB</code>/<code>Inaba</code>/<code>Ogawa</code>/<code>cholera</code>/<code>vibrio</code>) → <code>osp</code>/<code>ctxb</code>/<code>cholera</code> pools; <strong>typhoid</strong> (<code>HlyE</code>/<code>typhi</code>) → <code>hlye</code> pools; <strong>dengue</strong> (<code>DENV</code>+digit or <code>DENGUE</code> — the digit avoids matching e.g. “DENVer”) → <code>dengue</code>/<code>orpal</code> pools; <strong>other arboviruses</strong> (<code>ARB_</code> prefix) and <strong>VPDs</strong> (<code>VPD_</code> prefix, plus <code>RES_measles_lysate</code>) have no dedicated standard and default to the <strong>Dengue / Orpal</strong> reference pools.</p>
+<p><strong>NIBSC standard (measles / diphtheria / rubella / tetanus).</strong> These four VPD groups use an ordered <em>preferred → fallback</em> candidate list (<code>_antigen_scoring_groups</code>): they prefer a pool whose name contains <strong><code>NIBSC</code></strong> when one is on the plate, and fall back to the Dengue/Orpal reference otherwise. Pertussis / meningitis stay on the reference (not NIBSC). If the real NIBSC pool name lacks “NIBSC”, route it with a <code>pool_assignment_rules</code> entry.</p>
+<p><strong>Calibration tier</strong> (<code>antigen_calibration</code>, exported per specimen): <code>standard</code> = cholera/typhoid/dengue, or a NIBSC-matched measles/diphtheria/rubella/tetanus; <code>reference</code> = other arbovirus/VPD scored against Dengue/Orpal; <code>uncalibrated</code> = no pathogen match (best-fit RAU kept but flagged — not quantitative).</p></li>
+<li><p><strong><code>per_pool</code></strong> — “fit every pool × antigen, no matching.” RAU and range status use a single <strong>scoring pool</strong> (<code>panel.scoring_pool</code>, or the pool with the most <code>fit_ok</code> antigens). No per-antigen pool matching. The Summary and All-Curves Overview show one table/grid per pool.</p></li>
+</ul>
+<p>In <code>per_pool</code> mode the in-report scoring sections (count cards, range matrix, range-problem tables, Serum-vs-DBS, picker) all use the single scoring pool; per-pool RAU lives in the master export and specimens CSV.</p>
+<h3 id="run-datetime-chronological-ordering">Run datetime &amp; chronological ordering</h3>
+<p><code>parse_xponent._canonical_run_datetime</code> derives one run datetime per plate, preferring <strong><code>BatchStartTime</code></strong> (the actual run start) over the export <code>Date</code> stamp, then <code>BatchStopTime</code>; stored in <code>metadata.run_datetime</code> / <code>run_date</code>. ALL cross-plate ordering — history, legends, and the picker rug columns — sorts by this parsed datetime, so it is <strong>independent of the order reports were generated/uploaded</strong> (<code>_past_plate_ids</code>). “Past” = run strictly before the current plate. If no header datetime parses, <code>run_datetime_ok</code> is false and the report shows a visible warning banner; ordering degrades gracefully rather than crashing.</p>
+<h2 id="pl-model-fit-qc-qc_standard_curve.py">4PL model &amp; fit QC (<code>qc_standard_curve.py</code>)</h2>
+<p><code>y = d + (a − d) / (1 + (x/c)^b)</code>, fit on log10(MFI). <code>fit_ok</code> requires: R² ≥ 0.95, IC50 within tested range (×3 margin), 0.3 ≤ Hill ≤ 5.0, dynamic range ≥ 3×. Optional leave-one-out single-outlier retry. <code>reportable_range</code> (LLOQ/ULOQ dilution + MFI) comes from a ±<code>recovery_tolerance</code> (default 0.30) Obs/Exp check and drives the linear-range square and range classification.</p>
+<h2 id="report-sections-in-order">Report sections (in order)</h2>
+<p>A red banner appears at the top of any report whose <strong>run datetime could not be parsed</strong> (chronological ordering then unreliable — see <em>Run datetime &amp; ordering</em> below).</p>
+<ol type="1">
+<li><strong>Plate Overview</strong> — metadata table (incl. “Run date &amp; time” = the parsed run start); an 8-card single row: Total, PC/standard, <strong>one card per single-point control</strong> (e.g. Cholera High / Cholera Low PC wells, placed between PC/standard and NC), NC, Specimen, Background, Antigens; shape-coded 384 plate map (freeze-pane scroll, hover = well/sample/type).</li>
+<li><strong>Bead Count</strong> — a collapsed <strong>“How the Bead-Count Matrix works”</strong> description box above the cards; flagged-antigen/specimen + red/yellow cell cards; a mechanics note (hover contents, sticky row/column, group separators); freeze-pane antigen × well tier heatmap (RED &lt; <code>bead_count_min</code>, YELLOW &lt; <code>bead_count_warn</code>, else GREEN). Antigen flag denominator = all wells; specimen flag denominator = specimen wells.</li>
+<li><strong>Background QC</strong> — info cards (incl. count of high-%CV antigens); a fixed-width, horizontally-scrolling cross-plate overview with a <strong>two-view toggle</strong> (see <em>Control overviews</em> below) and a dashed reference line at <code>bg_max_mfi</code>; folded per-antigen table (per-well MFIs, SD, %CV, current/previous IQR, a sortable <strong>High CV</strong> flag; antigens with a flagged well-outlier get a <code>⚠ outlier</code> badge + row highlight); two hidden tables — <strong>background well outliers</strong> (leave-one-out flag: a well &gt; mean + 2·SD of the <em>other</em> wells; the literal all-wells mean/SD/ threshold are shown alongside for comparison) and <strong>specimens with negative net MFI</strong> (specimen MFI − mean plate background). 3b. <strong>Positive Control QC</strong> — single-point Cholera High/Low duplicates; two-view cross-plate overview + per-antigen stats table (same layout as Background). 3c. <strong>Negative Control QC</strong> — per-control (Negative 0/49) two-view scrolling overview + stats table with a <strong>duplicate-%CV</strong> flag column, plus a focused table listing the flagged antigens with their two well MFIs + %CV (or a “✓ none” line) when the wells disagree by &gt; <code>nc_cv_threshold</code>.</li>
+<li><strong>Standard-Curve Summary</strong> — count cards; <strong>one sortable fit table per standard pool</strong>, each labelled with the pathogen target(s) it calibrates, with 4PL params, LLOQ/ULOQ, % in range. By default shows only the <strong>pathogen-priority</strong> antigens (those a standard/reference calibrates); no-standard antigens (FLU/malaria/…) are omitted here.</li>
+<li><strong>All-Curves Overview</strong> — <strong>featured priority antigens</strong> at the top, grouped by pathogen category, each shown against its <strong>single best-fit</strong> calibrating pool (named + calibration tier in the heading), then a collapsed block with one grid per pool over all antigens. A 4PL is fit for every antigen × every pool regardless; only the best-fit curve is featured. Interactive small-multiples when ≤ 48 panels, else static.</li>
+<li><strong>Standard-Curve Picker</strong> — folded; type to inspect any antigen; curve + rug on a shared y-range; <strong>X = “Standard dilution (1:x)”, Y = “MFI (log scale)”</strong>; rug column labels at the <strong>top</strong> (vertical), ordered <strong>current → nearest-past → oldest</strong>; past-plate rug coloured by range status (higher transparency); cross-plate overlays.</li>
+<li><strong>Standard-Curve Range Matrix</strong> — freeze-pane specimen × antigen status; antigen rows grouped and colour-labelled by pathogen (dotted separators + legend); the folded <strong>Range-problem antigens</strong> table carries a <strong>Standard</strong> column (matched pool + calibration tier); folded <strong>Serum-vs-DBS</strong> scatter.</li>
+<li><strong>Downloads</strong>.</li>
+</ol>
+<h3 id="control-overviews-background-pc-nc-two-views">Control overviews (Background / PC / NC) — two views</h3>
+<p>Each cross-plate overview has a toggle (buttons top-left, under the legend; <code>margin.autoexpand=False</code> keeps them from shifting when toggled):</p>
+<ul>
+<li><strong>Median ± IQR</strong> (default once ≥ 3 past plates): grey IQR band of each antigen’s historical per-plate mean; this plate’s mean is a dot, blue within the IQR / orange ♦ outside.</li>
+<li><strong>Per-plate data points</strong> (default with &lt; 3 past plates): every plate as its own dot — current plate <strong>red</strong>, past plates on a chronological blue→green gradient (oldest faded, newest bold). Legend toggles individual plates; Show all / Hide past plates for bulk control.</li>
+</ul>
+<h2 id="outputs">Outputs</h2>
+<p>Per plate (in <code>reports/</code>, plus <code>specimens/specimens_*.csv</code>): <code>results_*.csv</code> (clean master; shape follows <code>panel.pool_mode</code> — see below), <code>in_range_*.csv</code>, <code>pct_in_range_*.csv</code>, <code>bead_problems_*.csv</code>, <code>bead_problem_{antigens,samples}_*.csv</code>, <code>range_problem_{antigens,samples}_*.csv</code>, <code>background_qc_*.csv</code>, <code>nc_levels_*.csv</code>. Cross-plate history JSON per pool/metric in <code>history/</code>.</p>
+<p>The clean master (<code>results_*.csv</code> and the workbook <code>results</code> sheet) follows <code>panel.pool_mode</code>. In <strong>auto_select</strong> (default) it is a tidy single-pool table (plate, well, sample_id, matrix, analyte, <code>pool</code>, <code>calibration</code>, mfi, RAU, status, censored) — one matched pool per antigen, with <code>calibration</code> = standard / reference / uncalibrated (see <em>Calibration tier</em> above). In <strong>per_pool</strong> it is one row per (well × antigen) with a <code>RAU (&lt;pool&gt;)</code> + <code>status (&lt;pool&gt;)</code> column pair for <strong>every</strong> control pool; an antigen a pool never calibrated reads <code>NO_FIT</code>. Per-pool RAU is always also available, wide, in the <code>specimens</code> sheet.</p>
+<p>Master <strong>Export All (.xlsx)</strong>: <code>results</code>, <code>specimens</code>, <code>standard_curve_params</code>, <code>standard_curve_data</code>, <code>nc_levels</code>.</p>
+<h2 id="settings-config.yaml">Settings (<code>config.yaml</code>)</h2>
+<p>Well-classification patterns; priority antigens (blank = pathogen-priority set); <code>panel.pool_mode</code> / <code>scoring_pool</code> / <code>pool_assignment_rules</code> / <code>pool_antigen_overrides</code>; excluded analytes; <code>bead_count_min</code> / <code>bead_count_warn</code>; <code>problem_fraction_threshold</code>; <code>bg_cv_threshold</code>; <code>bg_max_mfi</code> (default 300, dashed reference line); <code>nc_cv_threshold</code> (default 0.25, NC duplicate-well disagreement); <code>recovery_tolerance</code>; <code>drop_outlier</code>; <code>specimens.default_dilution</code> (informational only — not used in the RAU calculation).</p>
+<h2 id="module-map">Module map</h2>
+<ul>
+<li><code>parse_xponent.py</code> — xPONENT CSV → metadata + long-format MFI/count (A–P × 1–24).</li>
+<li><code>classify.py</code> — well classification + pool/dilution parsing.</li>
+<li><code>qc_beads.py</code> — bead-count tiers + problem summaries.</li>
+<li><code>qc_background.py</code> — per-antigen background spread + IQR.</li>
+<li><code>qc_standard_curve.py</code> — 4PL fit, pool selection, RAU, range table.</li>
+<li><code>qc_nc.py</code> — NC well levels.</li>
+<li><code>qc_history.py</code> / <code>pipeline.py</code> — cross-plate history + orchestration.</li>
+<li><code>report.py</code> / <code>templates/report.html</code> — HTML report.</li>
+<li><code>app.py</code> / <code>templates/web/</code> — Flask UI, settings, downloads, master export.</li>
+</ul>
+<h2 id="deferred-in-development">Deferred / in development</h2>
+<p>Formal Background pass/fail flagging; deeper NC-level QC (thresholds, drift); PC replicate variability; full-panel picker performance; confirmation of the exact pool → priority-antigen mapping by the lab team.</p>
+</body>
+</html>

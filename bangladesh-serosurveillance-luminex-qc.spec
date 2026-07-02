@@ -19,6 +19,8 @@ a = Analysis(
         (str(project_root / "static" / "vendor"), "static/vendor"),
         # Specification document
         (str(project_root / "SPECIFICATION.md"), "."),
+        # Annotated config template (served on the Settings page)
+        (str(project_root / "config.example.yaml"), "."),
     ],
     hiddenimports=[
         "src",

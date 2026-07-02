@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from .qc_standard_curve import (
     compute_pct_in_range_per_antigen,
     range_problem_summary,
     build_pool_map,
+    antigen_calibration,
     _pool_slug,
 )
 from .settings import get_excluded_analytes
@@ -405,7 +407,48 @@ def run_pipeline(
             index=False, encoding="utf-8",
         )
 
+    # Embed the per-plate CSVs into the report's Download buttons as base64
+    # data-URIs, so the buttons work when the saved HTML is opened offline (and
+    # still work when served live). Must run after all CSVs above are written.
+    _embed_report_downloads(report_path, output_dir)
+
     return report_path
+
+
+_DOWNLOAD_HREF_RE = re.compile(r'href="/download/(?:specimens|report)/([^"]+)"')
+
+
+def _embed_report_downloads(report_path: Path, output_dir: Path) -> None:
+    """Rewrite the report's ``/download/...`` links to base64 ``data:`` URIs of
+    the on-disk files, so downloads work in a saved/offline HTML report.
+
+    Files that don't exist (e.g. nc_levels when the plate has no NC wells) keep
+    their server link untouched. Failures are swallowed — the report is already
+    written and valid with server links.
+    """
+    try:
+        html_text = Path(report_path).read_text(encoding="utf-8")
+    except Exception:
+        return
+    out = Path(output_dir)
+
+    def _repl(m):
+        fname = m.group(1)
+        fpath = out / fname
+        try:
+            if not fpath.is_file():
+                return m.group(0)
+            b64 = base64.b64encode(fpath.read_bytes()).decode("ascii")
+        except Exception:
+            return m.group(0)
+        return f'href="data:text/csv;base64,{b64}" download="{fname}"'
+
+    new_text = _DOWNLOAD_HREF_RE.sub(_repl, html_text)
+    if new_text != html_text:
+        try:
+            Path(report_path).write_text(new_text, encoding="utf-8")
+        except Exception:
+            pass
 
 
 _MATRIX_RE = re.compile(r"_r\d+_(serum|dbs)$", re.IGNORECASE)
@@ -444,7 +487,7 @@ def _build_clean_results(metadata, in_range, specimen_results, fits, config, poo
     base["matrix"] = _matrix_series(base["sample_id"])
     base.insert(0, "plate_id", metadata.get("plate_id", ""))
 
-    pool_mode = (config or {}).get("panel", {}).get("pool_mode", "per_pool")
+    pool_mode = (config or {}).get("panel", {}).get("pool_mode", "auto_select")
     sr = specimen_results if (specimen_results is not None and not specimen_results.empty) else None
 
     # ---- per_pool mode: wide table, RAU + status under every pool ----------
@@ -478,6 +521,11 @@ def _build_clean_results(metadata, in_range, specimen_results, fits, config, poo
     out["status"] = in_range["status"].to_numpy()
     selected = pool_map if pool_map is not None else build_pool_map(fits, None, config)
     out["pool"] = out["analyte"].map(selected).fillna("—")
+    # Calibration tier per antigen: standard / reference / uncalibrated. Marks
+    # antigens with no dedicated (or no) calibrating standard so a best-fit RAU
+    # isn't read as fully quantitative.
+    out["calibration"] = [antigen_calibration(a, p)
+                          for a, p in zip(out["analyte"], out["pool"])]
     if sr is not None and "rau" in sr.columns:
         out = out.merge(sr[["well", "analyte", "rau"]].rename(columns={"rau": "RAU"}),
                         on=["well", "analyte"], how="left")
@@ -492,7 +540,7 @@ def _build_clean_results(metadata, in_range, specimen_results, fits, config, poo
     if "censored" not in out.columns:
         out["censored"] = "none"
     return out[["plate_id", "well", "sample_id", "matrix", "analyte", "pool",
-                "mfi", "RAU", "status", "censored"]]
+                "calibration", "mfi", "RAU", "status", "censored"]]
 
 
 def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> pd.DataFrame:

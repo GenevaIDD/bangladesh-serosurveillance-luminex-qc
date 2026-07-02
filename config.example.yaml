@@ -1,0 +1,89 @@
+# =============================================================================
+# Bangladesh Serosurveillance Luminex QC — configuration template
+# =============================================================================
+# Edit this file and upload it on the Settings page (Import Configuration) to
+# change how the tool behaves. Keep ONLY the lines you want to change — anything
+# you omit falls back to the built-in default, so a short file is fine.
+#
+# The 202-antigen panel is read from each plate's xPONENT CSV automatically, so
+# it is NOT listed here. Pool names below (e.g. "Dengue pool") must match the
+# control pools present on your plate.
+#
+# Tip: "Export Config (YAML)" on the Settings page downloads your CURRENT
+# settings (full, uncommented) — handy as a checkpoint before editing.
+# =============================================================================
+
+panel:
+
+  # ---- Priority antigens -----------------------------------------------------
+  # Which antigens' standard curves are *displayed* in the Standard-Curve
+  # Summary and All-Curves Overview. A 4PL is still fit for EVERY antigen; this
+  # only focuses the display on the curves you mean to interpret.
+  #   []  -> show all antigens (default)
+  # To restrict, list exact analyte names, one per line:
+  priority_antigens: []
+  #   priority_antigens:
+  #     - ARB_DENV1_VLP
+  #     - CHO_CtxB
+  #     - BAC_S.typhi_HlyE
+
+  # ---- Antigen x standard-pool matching --------------------------------------
+  # A 4PL curve is fit for every (control pool x antigen). pool_mode decides how
+  # specimens are SCORED (RAU / range status):
+  #
+  #   auto_select (default) — each antigen is scored against the pool that
+  #                           calibrates it (pathogen-name match, tie-broken by
+  #                           best fit), refined by the rules/overrides below.
+  #                           Cholera -> Anti-OSP & cTxB; dengue -> Dengue/Orpal;
+  #                           typhoid -> HlyE; other arboviruses & VPDs (no
+  #                           dedicated standard) -> Dengue/Orpal reference.
+  #   per_pool              — no matching. Curves shown per pool; specimen RAU /
+  #                           range use the single scoring_pool below.
+  pool_mode: auto_select
+
+  # per_pool only: the one pool used for specimen RAU / range. Blank = first pool.
+  scoring_pool: ""
+
+  # auto_select only: explicit antigen -> pool rules, "<regex> => <pool name>",
+  # ONE PER LINE, first match wins, applied before the built-in pathogen
+  # heuristic. Regexes may contain commas (e.g. X{1,2}) since each rule is its
+  # own list item.
+  pool_assignment_rules: []
+  #   pool_assignment_rules:
+  #     - "ARB_DENV.*        => Dengue pool"
+  #     - "CHO_.*|.*CtxB.*   => Anti-OSP & cTxB pool"
+  #     - ".*HlyE.*          => HlyE"
+
+  # auto_select only: exact per-antigen overrides (highest priority). Maps an
+  # antigen name straight to a pool. Leave as {} for none.
+  pool_antigen_overrides: {}
+  #   pool_antigen_overrides:
+  #     CHO_Inaba_OSP: "Anti-OSP & cTxB pool"
+
+  # Analytes to soft-flag (kept in tables/plots but muted). One per line.
+  excluded_analytes: []
+
+# ---- Well classification (regex matched against the CSV Sample name) ---------
+# Checked in order: Background -> NC -> PC -> specimen.
+well_classification:
+  pc_patterns: ["^Pilot Control:"]
+  background_patterns: ["^Background"]
+  nc_patterns: ["Negative"]
+
+# ---- Specimens ---------------------------------------------------------------
+specimens:
+  # Informational only: the single dilution specimens are run at. This does NOT
+  # enter the RAU calculation (RAU is anchored to each standard pool's lowest
+  # dilution), so changing it has no numeric effect on results today.
+  default_dilution: 100
+
+# ---- QC thresholds -----------------------------------------------------------
+qc_thresholds:
+  bead_count_min: 30           # below this  = Critically Low Bead Count
+  bead_count_warn: 50          # min..warn-1 = Low; at/above warn = Adequate
+  recovery_tolerance: 0.30     # +/-30% Obs/Exp for standard-curve LLOQ/ULOQ
+  problem_fraction_threshold: 0.20  # >= this fraction flagged -> antigen/specimen flagged
+  bg_cv_threshold: 0.25        # Background %CV: rows above this are flagged/highlighted
+  bg_max_mfi: 300              # Background max-MFI reference (dashed line on the plot)
+  nc_cv_threshold: 0.25        # NC duplicate-well %CV: above this flags a disagreeing pair
+  drop_outlier: true           # retry a failing 4PL by dropping one outlier point

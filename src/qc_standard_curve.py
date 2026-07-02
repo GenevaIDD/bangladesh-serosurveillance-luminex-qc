@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 
 import numpy as np
@@ -404,16 +405,17 @@ def default_scoring_pool(fits: dict, config: dict | None = None) -> str | None:
 def build_pool_map(fits: dict, antigens: list[str] | None, config: dict | None) -> dict[str, str]:
     """Antigen → pool mapping used for specimen scoring (RAU / range).
 
-    - ``pool_mode == "auto_select"`` → per-antigen pathogen match + best fit.
-    - ``pool_mode == "per_pool"`` (default) → a single scoring pool for every
-      antigen (``default_scoring_pool``). No per-antigen matching.
+    - ``pool_mode == "auto_select"`` (default) → per-antigen pathogen match +
+      best fit.
+    - ``pool_mode == "per_pool"`` → a single scoring pool for every antigen
+      (``default_scoring_pool``). No per-antigen matching.
     """
     if not fits:
         return {}
     if antigens is None:
         antigens = sorted({a for pf in fits.values() for a in pf})
     cfg = (config or {}).get("panel", {})
-    if cfg.get("pool_mode", "per_pool") == "auto_select":
+    if cfg.get("pool_mode", "auto_select") == "auto_select":
         return select_pool_per_antigen(fits, antigens=antigens, config=config)
     scoring = default_scoring_pool(fits, config)
     return {a: scoring for a in antigens} if scoring else {}
@@ -450,22 +452,88 @@ def _r_squared_log(x, y, params) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-def _antigen_group(name: str) -> str | None:
-    """Map an antigen name to a pathogen group, or None if not a target group.
+# Display pathogen category → human label (used for report labels/grouping).
+PATHOGEN_LABELS = {
+    "cholera": "Cholera",
+    "typhoid": "Typhoid",
+    "dengue": "Dengue",
+    "arbovirus": "Other arbovirus",
+    "vpd": "VPD",
+}
+
+# Display category → the standard-pool group used to *score* it. Cholera /
+# typhoid / dengue have dedicated standards; other arboviruses and VPDs have
+# no dedicated standard on the plate and are calibrated against the general
+# Dengue / Orpal reference pools (per lab decision, Jul 2026).
+_SCORING_POOL_GROUP = {
+    "cholera": "cholera",
+    "typhoid": "typhoid",
+    "dengue": "dengue",
+    "arbovirus": "dengue",
+    "vpd": "dengue",
+}
+
+
+def antigen_group(name: str) -> str | None:
+    """Map an antigen name to its display pathogen category, or None.
+
+    Categories: 'cholera', 'typhoid', 'dengue', 'arbovirus', 'vpd'. Used both
+    for report labels/grouping and (via ``_SCORING_POOL_GROUP``) to choose the
+    calibrating pool(s) in auto_select mode.
 
     Cholera is keyed on the ``CHO_`` family prefix or cholera-specific tokens
     (CtxB / Inaba / Ogawa / cholera / vibrio) — NOT on a bare "OSP" substring,
-    which would wrongly catch Borrelia ``OspA`` / ``OspC`` (TBD_ family).
+    which would wrongly catch Borrelia ``OspA`` / ``OspC`` (TBD_ family). The
+    measles lysate on the respiratory panel (``RES_measles_lysate``) is treated
+    as a VPD alongside ``VPD_measles_NP``.
     """
     n = (name or "").upper()
-    if "DENV" in n or "DENGUE" in n:
-        return "dengue"
-    if "HLYE" in n or "TYPHI" in n:
-        return "typhoid"
     if (n.startswith("CHO_") or "CTXB" in n or "CTX_B" in n or "INABA" in n
             or "OGAWA" in n or "CHOLERA" in n or "VIBRIO" in n):
         return "cholera"
+    if "HLYE" in n or "TYPHI" in n:
+        return "typhoid"
+    # Require a serotype digit (DENV1–4) or the literal word DENGUE — a bare
+    # "DENV" substring wrongly catches e.g. FLU_..._DENVER_1957 ("DENVer").
+    if re.search(r"DENV\d", n) or "DENGUE" in n:
+        return "dengue"
+    if n.startswith("ARB_"):
+        return "arbovirus"
+    if n.startswith("VPD_") or n == "RES_MEASLES_LYSATE":
+        return "vpd"
     return None
+
+
+# Backward-compatible internal alias.
+_antigen_group = antigen_group
+
+
+def antigen_calibration(name: str, pool: str | None = None) -> str:
+    """Calibration tier for an antigen, based on its pathogen category (and,
+    when supplied, the pool it was actually scored against):
+
+    - ``"standard"``   — cholera / typhoid / dengue (dedicated standard), or a
+      measles/diphtheria/rubella/tetanus VPD matched to a NIBSC pool.
+    - ``"reference"``  — other arboviruses / VPDs with no dedicated standard,
+      scored against the Dengue / Orpal reference pools (semi-quantitative).
+    - ``"uncalibrated"`` — no pathogen match: no calibrating standard at all;
+      any RAU is a best-fit fallback and should not be read quantitatively.
+    """
+    g = antigen_group(name)
+    if g in ("cholera", "typhoid", "dengue"):
+        return "standard"
+    if g == "vpd" and pool and "nibsc" in str(pool).lower() and _is_nibsc_target(name):
+        return "standard"  # NIBSC is a dedicated standard for these VPDs
+    if g in ("arbovirus", "vpd"):
+        return "reference"
+    return "uncalibrated"
+
+
+CALIBRATION_LABELS = {
+    "standard": "dedicated standard",
+    "reference": "reference pool (no dedicated standard)",
+    "uncalibrated": "no calibrating standard",
+}
 
 
 def _parse_pool_rules(rules, pools: list[str]) -> list[tuple]:
@@ -494,7 +562,7 @@ def _parse_pool_rules(rules, pools: list[str]) -> list[tuple]:
 
 
 def _pool_groups(pool_name: str) -> set[str]:
-    """Map a pool name to the set of pathogen groups it targets."""
+    """Map a pool name to the set of scoring groups it targets."""
     p = (pool_name or "").lower()
     groups: set[str] = set()
     if "dengue" in p or "orpal" in p:
@@ -503,7 +571,41 @@ def _pool_groups(pool_name: str) -> set[str]:
         groups.add("cholera")
     if "hlye" in p:
         groups.add("typhoid")
+    # NIBSC reference standards for measles / diphtheria / rubella / tetanus.
+    if "nibsc" in p:
+        groups.add("vpd_nibsc")
     return groups
+
+
+# VPD antigens the NIBSC standard calibrates (measles / diphtheria / rubella /
+# tetanus — NOT pertussis / meningitis). Matched to a NIBSC pool when present,
+# else the Dengue / Orpal reference.
+_NIBSC_TARGET_TOKENS = ("MEASLES", "DIPHTERIA", "DIPHTHERIA", "RUBELLA",
+                        "RUB_", "TETANUS", "TET_")
+
+
+def _is_nibsc_target(name: str) -> bool:
+    n = (name or "").upper()
+    return any(tok in n for tok in _NIBSC_TARGET_TOKENS)
+
+
+def _antigen_scoring_groups(name: str) -> list[str]:
+    """Ordered candidate scoring-groups for an antigen (preferred first).
+
+    Measles/diphtheria/rubella/tetanus prefer a NIBSC pool if one is on the
+    plate, else fall back to the Dengue/Orpal reference. Other categories map to
+    their single group.
+    """
+    g = antigen_group(name)
+    if g == "cholera":
+        return ["cholera"]
+    if g == "typhoid":
+        return ["typhoid"]
+    if g == "dengue" or g == "arbovirus":
+        return ["dengue"]
+    if g == "vpd":
+        return ["vpd_nibsc", "dengue"] if _is_nibsc_target(name) else ["dengue"]
+    return []
 
 
 def select_pool_per_antigen(
@@ -560,12 +662,15 @@ def select_pool_per_antigen(
             selected[antigen] = rp
             continue
 
-        # 3) Built-in pathogen-name heuristic, then best-fit fallback.
-        grp = _antigen_group(antigen)
-        # Candidate pools by name match (when the antigen has a known group).
-        candidates = [p for p in pools if grp and grp in pool_grp[p]] if grp else []
-        # Keep only candidates that actually fit this antigen.
-        candidates = [p for p in candidates if fits[p].get(antigen, {}).get("params") is not None]
+        # 3) Built-in pathogen-name heuristic (ordered preferred→fallback
+        #    scoring groups), then best-fit fallback across all pools.
+        candidates = []
+        for sg in _antigen_scoring_groups(antigen):
+            cands = [p for p in pools if sg in pool_grp[p]
+                     and fits[p].get(antigen, {}).get("params") is not None]
+            if cands:
+                candidates = cands
+                break
         # Fall back to any pool that fit this antigen.
         if not candidates:
             candidates = [p for p in pools if fits[p].get(antigen, {}).get("params") is not None]

@@ -61,7 +61,7 @@ def _parse_metadata(rows: list[list[str]]) -> dict:
     meta: dict = {}
     field_map = {
         "Batch": "batch",
-        "Date": "run_date",
+        "Date": "run_date_export",
         "Operator": "operator",
         "ProtocolName": "protocol",
         "ProtocolDescription": "protocol_description",
@@ -90,10 +90,13 @@ def _parse_metadata(rows: list[list[str]]) -> dict:
                 row[3].strip('"') if len(row) > 3 and row[3].strip('"') else row[1].strip('"')
             )
             continue
-        if key == "Date" and len(row) > 2 and row[2].strip('"'):
+        if key == "Date" and len(row) > 1 and row[1].strip('"'):
+            # The 'Date' row is the file *export* stamp (date[, time]); the
+            # actual run time comes from BatchStartTime below. Keep this as a
+            # fallback only.
             d = row[1].strip('"')
-            t = row[2].strip('"')
-            meta["run_date"] = f"{d} {t}"
+            t = row[2].strip('"') if len(row) > 2 else ""
+            meta["run_date_export"] = f"{d} {t}".strip()
             continue
         if key in field_map and len(row) > 1:
             meta[field_map[key]] = row[1].strip('"')
@@ -102,8 +105,40 @@ def _parse_metadata(rows: list[list[str]]) -> dict:
                 meta["n_samples"] = int(row[1].strip('"'))
             except ValueError:
                 pass
+    # Canonical run datetime used for ALL chronological ordering (history,
+    # legends, rug columns). Prefers the actual run start over the export stamp
+    # so ordering reflects DATE + TIME the plate was run, independent of the
+    # order reports were generated/uploaded.
+    meta["run_datetime"] = _canonical_run_datetime(meta)
+    meta["run_date"] = meta["run_datetime"] or meta.get("run_date_export", "")
+    # Flag + human-readable raw values so the report can warn when the run
+    # datetime could not be parsed (ordering would then be unreliable).
+    meta["run_datetime_ok"] = bool(meta["run_datetime"])
+    meta["run_datetime_raw"] = " · ".join(
+        f"{label}={meta[key]}" for label, key in (
+            ("BatchStartTime", "batch_start_time"),
+            ("Date", "run_date_export"),
+            ("BatchStopTime", "batch_stop_time"),
+        ) if meta.get(key)
+    ) or "(none present in CSV header)"
     meta["plate_id"] = _extract_plate_id(meta.get("batch", ""))
     return meta
+
+
+def _canonical_run_datetime(meta: dict) -> str:
+    """Best available *run* datetime for chronological ordering.
+
+    Prefers the actual run start (``BatchStartTime``), then the export
+    ``Date`` stamp, then the run stop time. Returns an ISO
+    ``'YYYY-MM-DD HH:MM:SS'`` string, or ``''`` if nothing parses.
+    """
+    for key in ("batch_start_time", "run_date_export", "batch_stop_time"):
+        raw = meta.get(key)
+        if raw and str(raw).strip():
+            ts = pd.to_datetime(str(raw).strip(), errors="coerce")
+            if pd.notna(ts):
+                return ts.strftime("%Y-%m-%d %H:%M:%S")
+    return ""
 
 
 def _extract_plate_id(batch: str) -> str:

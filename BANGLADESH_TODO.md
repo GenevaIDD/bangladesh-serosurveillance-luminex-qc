@@ -925,10 +925,363 @@ Lab Notes (D2) slots in once its persistence model is chosen.
 - Re-verified end-to-end on pilot Plate 1 (with a simulated multi-plate history
   to exercise the ≥3-plate IQR view, both flag directions, and the bead tiers).
 
-#### Still pending (Phase C onward)
-- Phase C: Standard-Curve Picker (pool/standard selector, angled rug labels,
-  horizontal scroll, plate toggle, performance).
-- Phase D: sortable tables, lab notes, collapsible cross-run scatter,
-  standardized plate naming + sample-matching section, "click to expand" notes,
-  descriptions audit, offline (embedded) downloads, YAML round-trip test.
-- Cleanup: prune orphaned `pc_cv_threshold` + `_nc_control_colors`.
+#### Session 20 refinements (round 2)
+- **Chronological history fix (important):** "past" plates are now those run
+  *before* the current plate (compared by `run_date` via new
+  `_past_plate_ids`), not "every other plate." Fixes the first plate's report
+  showing later-run plates as historical. The IQR, the stats table's historical
+  columns, and "n past plates" all use this definition, so plot and table agree.
+- **Per-plate legend + toggle:** each historical plate is now its own grey,
+  individually legend-toggleable trace (named by plate id; hover names the
+  plate; small per-plate x-jitter so overlapping means separate). Added
+  "Show all past plates" / "Hide past plates" buttons (Plotly `updatemenus`,
+  offline-safe). In the ≥3-plate view individual plates start hidden behind the
+  IQR band; in the < 3-plate view they show by default.
+- **"(not on this plate)" note** in a control's heading when the current plate
+  has no wells for it but history does (`on_plate` flag).
+- **Collapsible description boxes:** all seven section description boxes
+  (Background / PC / NC / control-pool note / "Fit OK" / All-Curves legend /
+  Range Matrix) are now collapsed-by-default `<details class="desc-box">` so
+  they no longer crowd out the plots; full bulleted text on expand.
+- **Spacing:** trimmed the overview plot's top margin and pulled the
+  legend/buttons to just above the plot (removed the large title-to-plot gap).
+- **Wording:** "not yet (need ≥ 3 plates)" → "not established (requires ≥ 3
+  prior plates)"; grey-bar hover drops the "Antigen:" prefix.
+
+## Session 21 — Phase C: Standard-Curve Picker (DONE)
+Replaced the old pre-built picker (which rendered every antigen's traces into
+one figure — the main perf cost) with an **on-demand** explorer in `report.py`
+(`_make_curve_picker` fully rewritten):
+- **Antigen typeahead + pool dropdown** — inspect ANY (pool × antigen) fit, not
+  just the scoring pool. Compact per-(pool × antigen) fit data + per-antigen
+  specimen rug + per-past-plate history are embedded as JSON; one figure is
+  drawn client-side (`Plotly.newPlot`) per selection → fast even at 200 antigens.
+- **Left panel:** standards + 4PL (orange) + green reportable-range box +
+  out-of-tolerance ▲ + dropped ✕ + grey past-plate curves.
+- **Right panel (rug):** this plate's specimens coloured by status (computed
+  client-side from the selected pool's range) in one column; each past plate its
+  own grey column; **angled small labels**, narrower, in a **horizontally
+  scrollable** container that widens with plate count.
+- **Plate toggle:** per-plate legend entries (curve + rug toggle together via
+  `legendgroup`) **plus** "Show all / Hide past plates" buttons. "Past" =
+  chronological (`run_date` before current).
+- Status line shows `fit_ok` + this plate's IN/BELOW/ABOVE/NO_FIT counts.
+- Picker call now passes the full `fits` dict + `current_run_date`; description
+  rewritten to match; fixed a pandas FutureWarning on the empty-history concat.
+- Verified the report renders with the picker (controls, on-demand draw, pool
+  options, toggle) and the app boots. NOTE: a full 200-antigen `run_pipeline` is
+  still > 45s in the sandbox — the remaining cost is the 4PL fitting + the
+  200-panel static All-Curves grid, not the picker (Phase D / later perf pass).
+
+#### Phase C layout refinements (review rounds)
+- Standardized + aligned the antigen typeahead and pool dropdown (shared
+  `.cp-ctrl` style); removed the inline status text.
+- Restored the in-plot-style **status box** (one line each: This plate · N
+  specimens / IN / BELOW / ABOVE / NO FIT / fit OK) and the vertical
+  "Click to toggle" legend — both moved into the **right margin** so they never
+  overlap the curve or the reportable-range box. Fixed the `&middot;` typo
+  (use the literal "·").
+- **Rug sizing:** fixed ~46 px per column (was a fixed wide share), so columns
+  pack tightly with no wasted side space; curve panel widened to ~720 px.
+- "Show all / Hide past plates" buttons moved top-left (no legend overlap).
+
+## Session 22 — Phase D: Quick UX wins (DONE)
+- **Sortable tables:** dependency-free click-to-sort script (bottom of
+  `report.html`) on every data table (those with a `<thead>`; the key-value
+  metadata table is skipped). Numeric-aware (blanks/"—" sort to bottom),
+  asc/desc toggle with a ▲/▼ indicator. Works offline.
+- **Click-to-expand cues:** desc-boxes get " — click to expand" via CSS when
+  closed; added the same note to the bead/range problem + out-of-range detail
+  `<details>` summaries that lacked it.
+- **Cross-run scatter:** now a collapsible `<details>` shown always, with the
+  overlap note "<matched> of this plate's <total> specimens appear in the
+  history" (new `_xrun_overlap` helper, matched on patient_id > barcode >
+  sample_name). Plot only renders when there's overlap; otherwise the note
+  explains why it's empty.
+- **Descriptions audit:** fixed the picker bullet that still said "line above
+  the plot" (now "status box, top-right") + the legend/toggle wording; confirmed
+  no other stale picker phrasing. Verified render + app boot (home/settings 200).
+
+#### Session 22b — cleanup + YAML test (DONE)
+- Pruned orphaned `pc_cv_threshold` (removed `PC_CV_THRESHOLD` in config.py, the
+  `qc_thresholds` default, the app.py save handler entry, and the Settings
+  "PC Replicate %CV" field) and the dead `_nc_control_colors` / `_NC_CTRL_PALETTE`
+  in report.py (`_nc_control` is still used and kept).
+- Added `tests/test_config_roundtrip.py` (standalone-runnable + pytest-style):
+  verifies the antigen→standard-pool matching config (priority_antigens,
+  pool_mode, scoring_pool, pool_assignment_rules incl. a regex with a comma,
+  pool_antigen_overrides) and numeric QC thresholds survive save→load→save.
+  Passes. App still boots (home/settings 200).
+
+#### Session 22c — editable YAML config + Settings instructions (DONE)
+- Added `config.example.yaml` (repo root, bundled in both `.spec` datas): an
+  annotated baseline of the *editable* settings (not the auto-derived antigen
+  panel), with detailed comments on `panel.priority_antigens` and the antigen ×
+  standard-pool matching keys (`pool_mode`, `scoring_pool`,
+  `pool_assignment_rules`, `pool_antigen_overrides`).
+- New route `/settings/example-config` serves it (packaging-safe via `base/`),
+  alongside the existing Export (current config) / Import.
+- Settings page: new "Configuration file (YAML)" card with concise step-by-step
+  instructions (download a starting point → edit → import & apply) plus a
+  "Annotated template" download link.
+- Verified: template is valid YAML, merges over DEFAULTS (panel preserved),
+  download + import round-trip work, Settings page renders the guidance.
+
+#### Session 22d — offline (embedded) downloads (DONE)
+- `pipeline._embed_report_downloads(report_path, output_dir)` runs at the end of
+  `run_pipeline` (after all per-plate CSVs are written): rewrites every
+  `/download/...` link in the report HTML to a base64 `data:text/csv` URI of the
+  on-disk file (with a `download="<name>"` attr). Buttons now work in the saved
+  HTML opened offline AND when served live. Missing files (e.g. nc_levels with
+  no NC, or problem CSVs with no problems) keep their server link.
+- Downloads-section note added: "buttons work whether the app is running or this
+  report is opened as a saved file — each CSV is embedded."
+- Verified: all referenced CSVs embed (server links → data-URIs). Size tradeoff
+  (the user's chosen "embed all"): the specimens CSV pushes a full report to
+  ~50 MB. If that's a concern later, embed only the small summaries and keep
+  specimens/results server-only.
+
+#### Still pending (Phase D onward)
+- Lab Notes section (editable + download-CSV) — **lowest priority**.
+- Standardized plate naming + sample-matching section (needs the master
+  sample list).
+- (Optional) switch the well-classification pattern fields from comma-split to
+  newline-split in the Settings UI for regex-with-comma robustness.
+
+## Session History — Session 23 (QC batch: matching + Background/NC/Summary/All-Curves/Picker/Range-Matrix)
+
+Roadmap validated with the user before coding (auto_select matching; VPD/other-
+arbovirus → Dengue/Orpal reference; measles = `VPD_measles_NP` + `RES_measles_lysate`;
+NC outlier = duplicate %CV; negative net MFI vs plate background wells). Delivered:
+
+1. **Antigen↔standard matching now defaults to `auto_select`** (config, app,
+   report, pipeline fallbacks flipped). `antigen_group()` extended to 5 display
+   categories (cholera/typhoid/dengue/arbovirus/vpd) with `_SCORING_POOL_GROUP`
+   routing arbo+VPD → Dengue/Orpal. `pool_antigen_overrides` added to DEFAULTS.
+   Docs (config.example.yaml, settings, SPEC, README) updated.
+2. **Background QC:** shared overview now fixed-width + horizontal scroll +
+   dashed `bg_max_mfi` line; per-antigen table gains a sortable **High CV** flag
+   (row-highlight when %CV > `bg_cv_threshold`) + count card; two hidden tables —
+   **well outliers (leave-one-out** mean+2SD, since plain all-wells 2SD never
+   fires at n=4) and **negative net MFI** (specimen − mean plate background).
+3. **NC QC:** widen+scroll (shared change); **duplicate-%CV** flag per antigen
+   (`nc_cv_threshold`, new default 0.25) since n=2 makes 2SD meaningless.
+4. **Standard-Curve Summary:** one sortable fit table **per pool**, each labelled
+   with pathogen target(s) (`_pool_target_label`).
+5. **All-Curves:** **featured priority antigens** grouped by pathogen category
+   (each vs selected pool) on top; full per-pool × all-antigen grids collapsed.
+6. **Picker:** past-plate rug coloured by range status (same scheme, alpha 0.45);
+   rug labels rotated to 90°; bottom margin bumped.
+7. **Range Matrix:** antigen rows grouped + colour-labelled by pathogen with
+   dotted separators + legend (`_freeze_pane_heatmap` gained `row_label_colors` /
+   `row_group_lines`).
+8. `specimens.default_dilution` relabelled **informational** (not used in RAU).
+
+Verified: config round-trip; matching unit test; leave-one-out outlier cases;
+per-pool label/grouping; featured-grid categories; range-matrix legend; full
+end-to-end pipeline on a 14-antigen subset in **both** auto_select and per_pool
+(3.8 / 3.9 s) — all new markers present.
+
+**Notes / decisions made:** (a) background well-outlier uses **leave-one-out**
+mean+2SD (literal all-wells 2SD is statistically inert at n=4 — even 500 vs ~10
+doesn't fire). (b) The collapsed "all curve fits, all pools" block renders one
+grid per pool over **all** antigens; on the full 202-plex × N pools this is the
+heavy/slow render (static images) — acceptable since collapsed, but it is the
+main runtime cost. Featured section stays interactive.
+
+## Session 23b — Post-review bug fixes (Session-23 feedback)
+
+User screenshots surfaced four issues; all fixed & verified end-to-end (subset
+pipeline, both pool modes):
+
+1. **Background overview looked flat (y-axis to 1e304).** `add_hline` on a log
+   axis blew up autorange. Fixed by setting an explicit data-derived log
+   y-range (`yaxis.range`, `autorange:false`) that always includes the hline.
+   Applies to Background/PC/NC (shared `_cross_plate_mfi_overview`).
+2. **Picker rug x-labels cut off.** Bumped picker `b` margin 120→190, height
+   560→620.
+3. **"Show all / Hide past plates" buttons** moved from top-right to top-left,
+   **under the legend** (legend raised to `y=1.14`, buttons `x=0` `y=1.015`).
+   Shared overview → applies to Background/PC/NC.
+4. **FLU under a cholera pool in the Summary.** Root cause: uncategorised
+   antigens (no pathogen match) fell through to best-fit fallback in
+   `auto_select`. Fix: the Summary + Featured views now default to the
+   **pathogen-categorised** priority set (`antigen_group(a) is not None`);
+   FLU/MAL/etc. are dropped from those tables (still in collapsed all-curves +
+   picker). New flag `priority_is_pathogen`; banner reworded.
+
+**PINNED (unresolved) decision:** whether no-standard antigens (FLU/MAL/…)
+should keep a meaningless best-fit RAU in the clean-results export or be left
+`NO_FIT`. Deferred to Phase 5.
+
+## Session 24 — Phased roadmap agreed; Phases 1–3 delivered
+
+User directive: **split remaining work into phases across sessions with
+check-ins; do not do it all at once.** Agreed phases:
+- **P1** Plate Overview & Bead Count text · **P2** table↔plot coherence audit ·
+  **P3** chronological foundation (run date+time) · **P4** Background/PC/NC
+  Median±IQR vs per-plate toggle · **P5** matching review + NIBSC + Featured
+  standard labels + Range-problem standard column + pinned scoring decision ·
+  **P6** picker polish (rug labels to top, axis titles).
+
+### Answers/confirmations given (no code)
+- Leave-one-out background outlier, negative-net-MFI table, and NC
+  duplicate-%CV flag are all **already implemented** (Session 23) — explained
+  in plain language. NC "outlier" is the duplicate-%CV column (n=2 → 2SD not
+  meaningful).
+- Confirmed fitting model: **every antigen is fit against every pool** always;
+  Summary shows only relevant matches; Featured shows the single best-fit
+  matched curve; collapsed all-curves + Picker show ALL combinations.
+
+### Decisions this session
+- Matching stays **auto_select default**, YAML-overridable (confirmed).
+- All 5 pilot standards confirmed recognised: Anti-OSP & cTxB (& HlyE) →
+  cholera (+ typhoid); HlyE 50 ng/mL → typhoid; Dengue/Orpal → dengue + arbo +
+  VPD reference. (`_pool_groups` token match handles the `Pilot Control:`
+  prefix fine.)
+- Background outlier method: user chose **"show both / discuss"** → fold into a
+  future Background-QC touch (keep LOO flag, add literal all-wells mean+2SD as
+  an extra column). **TODO task #7.**
+- P2 audit: **all tables numerically coherent** (card = table rows = independent
+  recompute). No counting bug. User chose to **keep as-is**: antigen problem
+  denominator = all wells; specimen = specimen wells only; negative-net keeps
+  all `net < 0`.
+
+### Phase 1 (DONE)
+- Plate Overview: per-single-point-control count cards (Cholera High / Cholera
+  Low PC wells), placed between "PC / standard" and "NC" cards; all 8 cards on
+  one row via `.stat-row.compact8`.
+- Bead Count: collapsed **"How the Bead-Count Matrix works"** description box
+  above the cards; mechanics text (hover / sticky row+col / group separators)
+  below the cards; removed the old redundant tier-legend paragraph.
+
+### Phase 2 (DONE — audit only, no code changes)
+- Verified bead, range-problem, background-outlier, negative-net, high-CV counts
+  all equal their table rows and an independent recompute. Confusion was
+  explanatory (heatmap looks red from standard/PC columns; flags need ≥20%).
+
+### Phase 3 (DONE)
+- **Canonical run datetime** (`parse_xponent._canonical_run_datetime`): prefers
+  `BatchStartTime` (actual run start) → export `Date` → `BatchStopTime`; stored
+  as ISO string in `metadata.run_datetime`, and `run_date` (the ordering key
+  used across history/legends/rug). Export stamp kept as `run_date_export`.
+- Ordering is **render-order-independent** (`_past_plate_ids` sorts by parsed
+  datetime; verified identical after row shuffling).
+- **Picker rug** columns + legend now run **current → nearest-past → oldest**
+  (reversed `past_ids`). Cross-plate overview legends stay chronological.
+- **Datetime-parse safeguard:** `metadata.run_datetime_ok` + `run_datetime_raw`;
+  report shows a red banner under the title (and a `⚠ unparsed` badge on the
+  Run date row) when no header datetime parses, advising to upload the original
+  instrument CSV (not an Excel-resaved copy). Parsing never crashes.
+- Note: `#####` in Excel is only a narrow-column display artifact; the app reads
+  raw CSV text, and pandas parses `8/21/2025 9:22`, `…9:22:00 AM`, 24h, etc.
+
+### Phase 4 (DONE) + task #7 folded in
+- `_cross_plate_mfi_overview` now has a **two-view toggle** (buttons top-left,
+  under the legend): **"Median ± IQR"** (grey IQR band + current dot blue/orange♦
+  by IQR position) and **"Per-plate data points"** (each past plate its own dot on
+  a chronological blue→green gradient via `_blue_green_gradient`, oldest faded /
+  newest bold; current plate bold **red** `_CUR_RED`). Default = Median±IQR when
+  ≥3 past plates, else Per-plate. Kept Show-all/Hide past plates + legend
+  click-toggle. Applies to Background, PC, NC (shared fn). Margins bumped
+  (t=118, height=620) to fit legend + two button rows.
+- Descriptions updated in all three sections (Background/PC/NC) to explain the
+  two views + per-plate gradient.
+- **Task #7 (show both):** `_bg_well_outliers` now also reports the literal
+  all-wells mean/SD/threshold + an `all_flag` column beside the LOO columns.
+  Verified: LOO flags A4 (60 vs thr 12); all-wells does not (60 < 72.5) —
+  both shown.
+
+### Phase 4 refinements (post-review feedback)
+- **Buttons no longer shift on click:** root cause was `margin.autoexpand`
+  (default True) resizing the plot area when legend/visibility changed, moving
+  the paper-anchored buttons. Fixed with `margin(autoexpand=False)` (+ fixed
+  t=118). Verified present in all 5 overviews.
+- **Background outlier now highlighted + explained:** flagged antigens get a
+  `⚠ outlier` badge + amber row highlight in the main per-antigen table
+  (`has_outlier` on each row; `bg_levels.n_outliers`), the outlier table's rows
+  are amber-highlighted, and a plain-language explanation box was added.
+- **NC duplicate-CV detail:** each NC control now shows a focused table listing
+  the flagged antigens with their two well MFIs + %CV (or a "✓ none" line),
+  above the full cross-plate stats table — instead of only the heading count.
+- **Clarified:** default view = Median±IQR when ≥3 *past* plates exist, else
+  Per-plate (depends on # past plates, not total uploaded). A plate with no
+  single-point Cholera High/Low PC has no PC overview/toggle (nothing to plot);
+  Background/NC toggles are unaffected.
+
+### Phase 5 (mostly DONE — NIBSC deferred pending pool name)
+- **Matching review** done against real 202-plex panel. Categories confirmed:
+  cholera(3), typhoid(1), dengue(12), other-arbovirus(22), vpd(9 — incl.
+  measles×2, diphtheria, rubella, tetanus×2, pertussis×2, meningitis-B),
+  uncategorised(152).
+- **BUG FIXED:** `FLU_H1N1_HA_Denver_1957` was matched as *dengue* (bare "DENV"
+  substring caught "DENVer"). Now requires `DENV\d` or `DENGUE` (`import re`
+  added to qc_standard_curve).
+- **Calibration tiers** (`antigen_calibration` + `CALIBRATION_LABELS`):
+  standard (cholera/typhoid/dengue) / reference (arbo/vpd → Dengue/Orpal) /
+  uncalibrated (no category). **Decision: keep best-fit RAU for uncalibrated but
+  MARK it.** Added `calibration` column to the clean-results tidy export.
+- **Range-problem antigens table** now has a **Standard** column (matched pool +
+  calibration tier) with an explanatory note.
+- **Featured section**: headings now state the calibration tier + the best-fit
+  standard pool(s); intro clarifies only the best-fit curve is featured and ALL
+  antigen×pool fits live in the collapsed block + Picker. **Decision: for
+  antigens with >1 candidate pool, feature only the single best-fit curve.**
+- **Confirmed:** `fit_standard_curves` fits every antigen × every pool always;
+  matching only selects which is scored/featured.
+- **Meningitis C** (`BAC_N_meningitidis_C_CPS`) left uncategorised (decision).
+- **NIBSC mapping (DONE, Phase 5b):** keyed on the **"NIBSC"** keyword in the
+  pool name (user: name will be like `Pilot Control: NIBSC...`). Added a
+  `vpd_nibsc` pool group + ordered preferred→fallback scoring
+  (`_antigen_scoring_groups`): measles/diphtheria/rubella/tetanus prefer a
+  NIBSC pool when present (tier upgrades to "standard"), else fall back to the
+  Dengue/Orpal reference. Pertussis/meningitis stay reference (NOT NIBSC).
+  `antigen_calibration(name, pool)` is now pool-aware. Verified with synthetic
+  NIBSC-present / absent scenarios; existing no-NIBSC behavior unchanged. If the
+  real pool name lacks "NIBSC", route via a YAML `pool_assignment_rules` entry.
+- **Clarified for the record:** "(± combined)" just means a category has more
+  than one *real* pool containing its reagent (e.g. cholera → `Anti-OSP & cTxB`
+  AND the tri-mix `Anti-OSP & cTxB & HlyE`); best-fit picks one. The app never
+  fabricates pool combinations — it fits every antigen against every real pool.
+
+### Phase 6 (DONE) — picker polish
+- Rug plate-column labels moved to the **top** (`xaxis2.side:"top"`) — they were
+  being clipped at the bottom.
+- Axis titles restored/made explicit: curve X = **"Standard dilution (1:x)"**,
+  Y = **"MFI (log scale)"**, rug = **"Plate run (current → oldest)"**. They were
+  being crowded out by the oversized bottom margin (b=190) that held the rug
+  labels; moving labels to the top freed the bottom for the Dilution title.
+- Margins rebalanced (t=160, b=64, height=640); Show all/Hide buttons moved to
+  y=1.02 (top-left over the curve; plate labels sit top-right over the rug, no
+  collision). NOTE: eyeball the top spacing on a real multi-plate report; bump
+  `t` if long plate IDs clip.
+
+### Final docs pass (DONE — reference docs synced)
+- **SPECIFICATION.md**: report-sections list rewritten for Phases 1–6 (plate
+  cards incl. single-point PC, bead description box, two-view control overviews,
+  outlier "show both", NC focused flag table, pathogen-priority summary,
+  featured best-fit, picker top labels + axis titles, Range-problem Standard
+  column); added *Run datetime & chronological ordering* subsection; matching
+  section gained NIBSC + calibration tiers + DENV-digit note; Outputs note the
+  `calibration` column; Settings list updated (pool_mode/rules/overrides,
+  nc_cv_threshold, informational default_dilution).
+- **README.md**: feature bullets updated (plate cards, bead box, Background &
+  PC/NC two-view toggle + flags, NIBSC + calibration tier, summary/featured,
+  picker, range-matrix grouping, chronological ordering); Background/NC QC
+  sections, Output (results calibration col), and Settings list synced.
+- **REMAINING: v0.2.0 build** — commit, tag `v0.2.0`, verify CI (task #8). Not
+  done yet; nothing committed since v0.1.0.
+
+### Still pending
+- (NIBSC done above.) Former placeholder — the NIBSC pool's
+  on-plate sample name; maps to measles/diphtheria/rubella/tetanus) + Featured
+  standard labels + Range-problem standard column + **pinned no-standard-scoring
+  decision**. **Phase 6** picker polish (rug labels to top; X/Y axis titles).
+- Task #7: background outlier "show both" layout.
+- Lab Notes (lowest priority); sample-matching (needs master list).
+- **Final docs pass before v0.2.0:** sync SPECIFICATION.md (report-sections
+  list — Cholera High/Low count cards, Bead Count description box, run
+  date/time semantics + parse-warning banner) and README for all Phase 1–6
+  changes, THEN commit + tag v0.2.0 + verify CI. (User: fold SPEC/README sync
+  into this final pass, not per-phase.)
+- Nothing committed since v0.1.0 — user wants a v0.2.0 build once the batch is done.

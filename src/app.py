@@ -439,8 +439,8 @@ def create_app() -> Flask:
         config["panel"]["priority_antigens"] = priority
 
         # Standard-curve pool mode + scoring pool.
-        mode = request.form.get("pool_mode", "per_pool").strip()
-        config["panel"]["pool_mode"] = mode if mode in ("per_pool", "auto_select") else "per_pool"
+        mode = request.form.get("pool_mode", "auto_select").strip()
+        config["panel"]["pool_mode"] = mode if mode in ("per_pool", "auto_select") else "auto_select"
         config["panel"]["scoring_pool"] = request.form.get("scoring_pool", "").strip()
         # Pool assignment rules ("<regex> => <pool>", one per line).
         rules_raw = request.form.get("pool_assignment_rules", "")
@@ -470,7 +470,7 @@ def create_app() -> Flask:
             except (ValueError, TypeError):
                 pass
         for key in ("recovery_tolerance", "problem_fraction_threshold",
-                    "bg_cv_threshold", "pc_cv_threshold"):
+                    "bg_cv_threshold", "nc_cv_threshold"):
             try:
                 qc[key] = float(request.form.get(key, qc.get(key, 0)))
             except (ValueError, TypeError):
@@ -517,6 +517,16 @@ def create_app() -> Flask:
         buf.write(yaml.dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"))
         buf.seek(0)
         return send_file(buf, mimetype="text/yaml", as_attachment=True, download_name="bangladesh_serosurveillance_config.yaml")
+
+    @app.route("/settings/example-config")
+    def example_config():
+        """Serve the annotated baseline config template (config.example.yaml)."""
+        path = base / "config.example.yaml"
+        if not path.exists():
+            flash("Example config template not found.", "error")
+            return redirect(url_for("settings"))
+        return send_file(str(path), mimetype="text/yaml", as_attachment=True,
+                         download_name="bangladesh_serosurveillance_config.example.yaml")
 
     @app.route("/settings/import", methods=["POST"])
     def import_config():
