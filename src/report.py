@@ -44,9 +44,10 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .config import APP_VERSION, RECOVERY_TOLERANCE
 from .settings import get_excluded_analytes, get_qc_thresholds
 from .qc_standard_curve import (
-    four_pl, range_problem_summary, select_pool_per_antigen, default_scoring_pool,
+    four_pl, curve_eval, range_problem_summary, select_pool_per_antigen, default_scoring_pool,
     _pool_groups, PATHOGEN_LABELS, antigen_group,
-    antigen_calibration, CALIBRATION_LABELS,
+    antigen_calibration, CALIBRATION_LABELS, _antigen_scoring_groups,
+    _mfi_bounds_for_fit,
 )
 from .qc_beads import bead_problem_summary
 from .qc_pc_single_point import control_label
@@ -95,6 +96,11 @@ def generate_report(
 
     # Standard-curve presentation mode.
     pool_mode = config.get("panel", {}).get("pool_mode", "auto_select")
+    # Active curve model for this report (uniform across all antigens).
+    _cm = str(config.get("panel", {}).get("curve_model", "5pl")).lower()
+    curve_model_label = "5PL" if _cm != "4pl" else "4PL"
+    curve_model_name = ("5PL (five-parameter logistic)" if _cm != "4pl"
+                        else "4PL (four-parameter logistic)")
     pools = list(fits.keys())
     scoring_pool = default_scoring_pool(fits, config) if pools else None
 
@@ -115,28 +121,10 @@ def generate_report(
     if not selected_fits:
         selected_fits = pool_fits
 
-    # Priority antigens to *display* in the Summary / All-Curves Overview
-    # (curves are still fit for every antigen). An explicit priority list wins;
-    # otherwise the default is the pathogen-categorized antigens (cholera,
-    # dengue, typhoid, other arboviruses, VPDs) — the ones a standard pool
-    # actually calibrates — so uncategorized antigens (e.g. FLU/MAL, which get
-    # only a meaningless best-fit pool) don't clutter the per-pool tables.
+    # All antigens for this plate. The Summary shows every antigen (one table per
+    # pool, with a Relevance column) and the All-Curves Overview shows every
+    # antigen per pool — there is no priority-antigen display filter.
     panel_order = list(metadata.get("analytes") or list(selected_fits.keys()))
-    priority_cfg = list(config.get("panel", {}).get("priority_antigens", []) or [])
-    if priority_cfg:
-        priority_set = set(priority_cfg)
-        priority_antigens = [a for a in panel_order if a in priority_set]
-        priority_is_all = False
-        priority_is_pathogen = False
-    else:
-        priority_antigens = [a for a in panel_order if antigen_group(a) is not None]
-        priority_is_all = False
-        priority_is_pathogen = True
-        # Fallback: if nothing matched a pathogen category, show everything.
-        if not priority_antigens:
-            priority_antigens = list(panel_order)
-            priority_is_all = True
-            priority_is_pathogen = False
 
     well_types_map = (
         data.drop_duplicates("well").set_index("well")["well_type"].to_dict()
@@ -243,7 +231,7 @@ def generate_report(
     pc_controls = _control_qc_sections(
         pc_hist, panel_order, cur_pid, cur_rd, excluded,
         "Single-point PC MFI (log scale)", "pc-sp",
-        hist_cv_flag_threshold=hist_cv_thr)
+        cv_flag_threshold=nc_cv_thr, hist_cv_flag_threshold=hist_cv_thr)
     pc_present = bool(pc_controls)
 
     # ----- Negative Control QC -----
@@ -258,13 +246,9 @@ def generate_report(
         "NC MFI (log scale)", "nc-ctrl", cv_flag_threshold=nc_cv_thr,
         hist_cv_flag_threshold=hist_cv_thr)
     # ----- Standard-Curve Summary + All-Curves Overview -----
-    # per_pool (default): a curve for EVERY (pool × antigen) — one grid per
-    # pool, summary rows per (pool × antigen); no matching/auto-selection.
-    # auto_select: the single matched/best-fit curve per antigen.
-    def _pool_fits_for(pool):
-        return {a: {**fits[pool][a], "pool": pool}
-                for a in priority_antigens if a in fits.get(pool, {})}
-
+    # The Summary (one sortable table per pool over ALL antigens, with a
+    # Relevance column) is built by _build_summary_by_pool_all below. The
+    # All-Curves Overview shows one curve grid per pool over all antigens.
     def _all_pool_grids() -> str:
         """One grid per pool over ALL panel antigens (the collapsed 'all curve
         fits, all pools' block)."""
@@ -280,25 +264,13 @@ def generate_report(
                                    div_id=f"fig-curve-grid-{pi}"))
         return "".join(parts) or "<p style='color:#999;'>No standard curve fits.</p>"
 
-    if pool_mode == "per_pool":
-        curve_summary = []
-        for pool in pools:
-            pf = _pool_fits_for(pool)
-            if not pf:
-                continue
-            # %-in-range is a single-pool scoring metric; omit it per-pool.
-            curve_summary += _build_curve_summary(pf, pd.DataFrame(), excluded, rec_tol)
-        curve_grid_html = _all_pool_grids()
-    else:
-        priority_fits = {a: selected_fits[a] for a in priority_antigens if a in selected_fits}
-        curve_grid_html = _all_pool_grids()
-        curve_summary = _build_curve_summary(priority_fits, pct_in_range, excluded, rec_tol)
+    curve_grid_html = _all_pool_grids()
 
-    # Featured priority antigens (pathogen-categorized) vs their selected pool.
+    # Featured priority antigens (pathogen-relevant) vs their pool(s).
     _featured_past = _past_plate_ids(history_specimens, cur_pid, cur_rd) \
         if isinstance(history_specimens, pd.DataFrame) and not history_specimens.empty else []
     featured_grid_html = _build_featured_grids(
-        panel_order, selected_fits, excluded, in_range,
+        panel_order, fits, pools, excluded, in_range,
         history_fit=history_fit, past_ids=_featured_past)
     layout_info = layout_info or _derive_layout_info(data)
     current_box_ids = layout_info.get("box_ids") or []
@@ -324,11 +296,15 @@ def generate_report(
     cross_run_match = {"matched": _xr_m, "total": _xr_t}
     range_heatmap_html = _make_in_range_heatmap(
         in_range, excluded,
-        antigen_pool={a: (selected_fits[a].get("pool") or "—") for a in selected_fits})
+        antigen_pool={a: (selected_fits[a].get("pool") or "—") for a in selected_fits},
+        pool_mode=pool_mode)
     serum_dbs_html = _make_serum_dbs_comparison(in_range)
 
     bead_problems = _format_problem_list(bead_qc.get("problems", pd.DataFrame()))
-    range_problems = _format_range_problems(in_range, excluded)
+    range_problems = _format_range_problems(
+        in_range, excluded,
+        antigen_pool={a: (selected_fits[a].get("pool") or "—") for a in selected_fits},
+        pool_mode=pool_mode)
     nc_present = nc_levels is not None and not nc_levels.empty
     n_nc_wells = int(nc_levels["well"].nunique()) if nc_present else 0
 
@@ -346,6 +322,15 @@ def generate_report(
         autoescape=select_autoescape(["html"]),
     )
     template = env.get_template("report.html")
+
+    range_problem_by_pool = _build_range_problem_by_pool(
+        fits, data, pools, problem_frac, excluded)
+    _rp_below = {r["well"] for blk in range_problem_by_pool for r in blk["rows"] if r["n_below"]}
+    _rp_above = {r["well"] for blk in range_problem_by_pool for r in blk["rows"] if r["n_above"]}
+    range_problem_counts = {
+        "n_flagged": len({r["well"] for blk in range_problem_by_pool for r in blk["rows"]}),
+        "n_below": len(_rp_below), "n_above": len(_rp_above),
+    }
 
     rendered_html = template.render(
         metadata=metadata,
@@ -365,14 +350,15 @@ def generate_report(
         featured_grid_html=featured_grid_html,
         bead_problems=bead_problems,
         bead_problem_counts=_tier_counts(bead_qc.get("problems", pd.DataFrame())),
-        curve_summary=curve_summary,
-        curve_summary_by_pool=_group_summary_by_pool(curve_summary),
+        bead_n_wells=(bead_qc.get("matrix").shape[1]
+                      if bead_qc.get("matrix") is not None else 0),
+        curve_summary_by_pool=_build_summary_by_pool_all(
+            fits, pools, panel_order, excluded, rec_tol),
         pool_selection=pool_selection,
         pool_mode=pool_mode,
+        curve_model_label=curve_model_label,
+        curve_model_name=curve_model_name,
         scoring_pool=scoring_pool or "",
-        n_priority_antigens=len(priority_antigens),
-        priority_is_all=priority_is_all,
-        priority_is_pathogen=priority_is_pathogen,
         n_panel_antigens=len(panel_order),
         curve_picker_html=curve_picker_html,
         cross_run_html=cross_run_html,
@@ -391,6 +377,8 @@ def generate_report(
         range_summary=_format_range_summary(
             range_summary,
             antigen_pool={a: (selected_fits[a].get("pool") or "—") for a in selected_fits}),
+        range_problem_by_pool=range_problem_by_pool,
+        range_problem_counts=range_problem_counts,
         bg_levels=bg_levels_ctx,
         bg_outliers=bg_outliers,
         bg_negative_net=bg_negative_net,
@@ -477,7 +465,11 @@ def _make_bead_heatmap(bead_qc: dict, excluded: set[str], well_types: dict[str, 
         return "<p style='color:#999;'>No bead-count data.</p>"
 
     sample_labels = bead_qc.get("sample_labels", {})
-    well_cols = list(matrix.columns)
+    # Order wells by plate position (A1, A2, …) so re-run wells appended at the
+    # end of the CSV don't trail off the right of the grid out of sequence.
+    well_cols = sorted(matrix.columns, key=_well_sort_key)
+    matrix = matrix.reindex(columns=well_cols)
+    tier_matrix = tier_matrix.reindex(columns=well_cols)
     analyte_rows = list(matrix.index)
 
     tier_to_int = {"red": 0, "yellow": 1, "green": 2}
@@ -566,8 +558,8 @@ def _linear_range_box(fit: dict):
     if params is None or lo_d is None or hi_d is None:
         return None
     try:
-        y_lo = float(four_pl(np.array([float(lo_d)]), *params)[0])
-        y_hi = float(four_pl(np.array([float(hi_d)]), *params)[0])
+        y_lo = float(curve_eval(params, np.array([float(lo_d)]))[0])
+        y_hi = float(curve_eval(params, np.array([float(hi_d)]))[0])
     except Exception:
         return None
     x0, x1 = sorted((float(lo_d), float(hi_d)))
@@ -578,45 +570,67 @@ def _linear_range_box(fit: dict):
 _FEATURED_CAT_ORDER = ["cholera", "dengue", "typhoid", "arbovirus", "vpd"]
 
 
+def _pool_sort_rank(pool: str) -> tuple:
+    """Order pool sections: cholera/typhoid pools, then NIBSC, then dengue/orpal
+    reference pools, then anything else; alphabetical within a tier so 'Dengue'
+    precedes 'Orpal'."""
+    g = _pool_groups(pool)
+    if "cholera" in g or "typhoid" in g:
+        return (0, pool)
+    if "vpd_nibsc" in g:
+        return (1, pool)
+    if "dengue" in g:
+        return (2, pool)
+    return (3, pool)
+
+
 def _build_featured_grids(
     panel_order: list[str],
-    selected_fits: dict,
+    fits: dict,
+    pools: list[str],
     excluded: set[str],
     in_range: pd.DataFrame | None,
     history_fit: dict | None = None,
     past_ids=None,
 ) -> str:
-    """Featured priority-antigen curves, grouped by pathogen category.
+    """Featured priority-antigen curves, organized **by standard pool**.
 
-    Each pathogen-categorized antigen (cholera / dengue / typhoid / other
-    arbovirus / VPD) is shown against its selected calibrating pool, under a
-    per-category heading. Antigens with no pathogen category (non-priority) are
-    omitted here — they remain in the collapsed all-pool grids below.
+    One section per standard pool on the plate; each shows the antigens relevant
+    to that pool (its designated calibrator / reference, resolved against which
+    pools are present — NIBSC preferred for measles/diphtheria/rubella/tetanus
+    when present, else the Dengue/Orpal reference), each fit **against that
+    pool**. A dengue antigen therefore appears under both the Dengue and Orpal
+    sections. No-standard antigens (no pathogen category) are not featured here.
     """
-    by_cat: dict[str, dict] = {}
-    for a in panel_order:
-        g = antigen_group(a)
-        if g and a in selected_fits:
-            by_cat.setdefault(g, {})[a] = selected_fits[a]
+    if not pools:
+        return "<p style='color:#999;'>No standard pools on this plate.</p>"
+    pool_grp = {p: _pool_groups(p) for p in pools}
+    groups_present = set().union(*pool_grp.values()) if pool_grp else set()
+
+    def _eff_group(a: str) -> str | None:
+        # First of the antigen's preferred→fallback scoring groups that some
+        # pool on THIS plate actually provides.
+        for g in _antigen_scoring_groups(a):
+            if g in groups_present:
+                return g
+        return None
+
+    eff = {a: _eff_group(a) for a in panel_order if antigen_group(a)}
     parts = []
-    for cat in _FEATURED_CAT_ORDER:
-        fc = by_cat.get(cat)
-        if not fc:
+    for pi, pool in enumerate(sorted(pools, key=_pool_sort_rank)):
+        pg = pool_grp[pool]
+        feat = [a for a in panel_order
+                if a in eff and eff[a] in pg and a in fits.get(pool, {})]
+        if not feat:
             continue
-        label = PATHOGEN_LABELS.get(cat, cat)
-        _a0 = next(iter(fc))
-        tier = CALIBRATION_LABELS[antigen_calibration(_a0, fc[_a0].get("pool"))]
-        pools = sorted({(v.get("pool") or "—") for v in fc.values()})
-        pools_txt = " / ".join(html.escape(p) for p in pools)
-        pool_note = (f'best-fit standard: {pools_txt}' if len(pools) == 1
-                     else f'best-fit standard per antigen among: {pools_txt}')
+        fc = {a: {**fits[pool][a], "pool": pool} for a in feat}
         parts.append(
-            f'<h4 style="margin:16px 0 4px; color:#2c3e50;">{html.escape(label)} '
+            f'<h4 style="margin:16px 0 4px; color:#2c3e50;">Pool: {html.escape(pool)} '
             f'<span style="font-weight:400; color:#7f8c8d; font-size:13px;">'
-            f'({len(fc)} antigen{"s" if len(fc) != 1 else ""} · {tier} · {pool_note})'
-            f'</span></h4>'
+            f'({len(fc)} antigen{"s" if len(fc) != 1 else ""} · targets: '
+            f'{html.escape(_pool_target_label(pool))})</span></h4>'
             + _make_curve_grid(fc, excluded, in_range=in_range,
-                               div_id=f"fig-featured-{cat}",
+                               div_id=f"fig-featured-{pi}",
                                history_fit=history_fit, past_ids=past_ids)
         )
     return "".join(parts) or "<p style='color:#999;'>No pathogen-matched priority antigens on this plate.</p>"
@@ -649,8 +663,11 @@ def _make_curve_grid(pool_fits: dict, excluded: set[str], cols: int = 6,
 
 def _hist_curve_params(history_fit: dict | None, pool: str | None,
                        analyte: str, past_ids) -> list:
-    """Past-plate 4PL params [(plate_id, [a,b,c,d]), …] for (pool × analyte),
-    limited to ``past_ids`` when given. Used to overlay historical curves."""
+    """Past-plate curve params ``[(plate_id, [a,b,c,d(,g)]), …]`` for
+    (pool × analyte), limited to ``past_ids`` when given. Each past plate's
+    params are returned **with the model it was actually fit under** (5 values
+    when that plate stored a 5PL ``g``, else 4) so the overlay is drawn under
+    that plate's own model (Option A)."""
     dfp = (history_fit or {}).get(pool)
     if dfp is None or getattr(dfp, "empty", True) or "analyte" not in dfp.columns:
         return []
@@ -665,6 +682,12 @@ def _hist_curve_params(history_fit: dict | None, pool: str | None,
             continue
         if any(v != v for v in pr):
             continue
+        g = getattr(r, "g", None)
+        try:
+            if g is not None and float(g) == float(g):  # 5PL entry (g not NaN)
+                pr.append(float(g))
+        except (TypeError, ValueError):
+            pass
         out.append((str(getattr(r, "plate_id", "")), pr))
     return out
 
@@ -681,6 +704,14 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
     cols = max(1, min(cols, n))
     rows = (n + cols - 1) // cols
 
+    # Fixed per-panel height + fixed inter-row gap (px), converted to the
+    # fraction make_subplots wants. A *fractional* vertical_spacing squishes
+    # tall grids (e.g. a 43-antigen pool → ~8 rows), so keep it pixel-based.
+    panel_h = 165
+    gap_px = 44
+    plot_area_h = rows * panel_h + max(rows - 1, 0) * gap_px
+    v_space = min(gap_px / plot_area_h, 0.9 / max(rows - 1, 1)) if rows > 1 else 0.0
+
     titles = []
     for an in analytes:
         fit = pool_fits[an]
@@ -690,8 +721,7 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
         titles.append(f"<span style='color:{color}'>{short}</span>")
 
     fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles,
-                        horizontal_spacing=0.055,
-                        vertical_spacing=min(0.11, max(0.07, 1.8 / max(rows, 1))))
+                        horizontal_spacing=0.055, vertical_spacing=v_space)
 
     # Per-antigen current-plate specimen MFIs (for the rug), grouped once.
     spec_by_an: dict[str, pd.DataFrame] = {}
@@ -717,13 +747,14 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
         if hp:
             xs_h = np.geomspace(max(float(xd.min()), 1e-9), float(xd.max()), 60)
             for pid_, pr in hp:
+                _hm = "5PL" if len(pr) == 5 else "4PL"
                 hist_idx.append(len(fig.data))
                 fig.add_trace(go.Scatter(
-                    x=xs_h, y=four_pl(xs_h, *pr), mode="lines",
+                    x=xs_h, y=curve_eval(pr, xs_h), mode="lines",
                     line=dict(color="rgba(150,150,150,0.55)", width=0.7),
                     name="Past plates", legendgroup="hist",
                     showlegend="hist" not in shown_legend, visible=True,
-                    hovertemplate=f"{pid_}<br>Dilution 1:%{{x:.0f}}<br>MFI %{{y:.0f}}<extra></extra>",
+                    hovertemplate=f"{pid_} · {_hm} (as fit)<br>Dilution 1:%{{x:.0f}}<br>MFI %{{y:.0f}}<extra></extra>",
                 ), row=rr_, col=cc_); shown_legend.add("hist")
 
         # Out-of-tolerance standard points (red triangles) from obs/exp recovery.
@@ -736,13 +767,14 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
         bad_x = [x for x, t in zip(xd, in_tol) if not t]
         bad_y = [y for y, t in zip(yd, in_tol) if not t]
 
-        # 4PL curve (red).
+        # Fitted curve (red).
         if params is not None:
             xs = np.geomspace(max(xd.min(), 1e-9), xd.max(), 100)
-            ys = four_pl(xs, *params)
+            ys = curve_eval(params, xs)
+            _fitname = "5PL fit" if len(params) == 5 else "4PL fit"
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="lines", line=dict(color=_CB_VERMILLION, width=1.4),
-                name="4PL fit", legendgroup="fit",
+                name=_fitname, legendgroup="fit",
                 showlegend="fit" not in shown_legend, hoverinfo="skip",
             ), row=rr_, col=cc_); shown_legend.add("fit")
 
@@ -812,15 +844,14 @@ def _make_curve_grid_interactive(pool_fits: dict, excluded: set[str], cols: int,
         fig.update_yaxes(type="log", tickfont=dict(size=6), row=rr_, col=cc_)
 
     fig.update_annotations(font_size=8)
-    panel_h = 190
     bottom_margin = 44
     # Reserve top-margin room so the buttons + legend sit ABOVE the grid. Their
     # y is set in PIXELS (converted to paper fraction via the grid height) so the
     # legend↔button gap is constant regardless of the number of rows — otherwise
     # short 1-row grids (Cholera/Typhoid) crush them together.
     top_margin = 104 if hist_idx else 70
-    fig_h = max(320, rows * panel_h + top_margin + bottom_margin)
-    grid_px = max(fig_h - top_margin - bottom_margin, 1)
+    fig_h = plot_area_h + top_margin + bottom_margin
+    grid_px = max(plot_area_h, 1)
     legend_y = 1 + 14 / grid_px
     buttons_y = 1 + 52 / grid_px
     layout_kw = dict(
@@ -874,7 +905,7 @@ def _make_curve_grid_static(pool_fits: dict, excluded: set[str], cols: int = 10)
             ax.scatter(std["dilution"], std["mfi"], s=10, color="#2c7fb8", zorder=3)
             if params is not None:
                 xs = np.geomspace(std["dilution"].min(), std["dilution"].max(), 80)
-                ax.plot(xs, four_pl(xs, *params), color=_CB_VERMILLION, linewidth=1.2, zorder=2)
+                ax.plot(xs, curve_eval(params, xs), color=_CB_VERMILLION, linewidth=1.2, zorder=2)
             ax.set_xscale("log"); ax.set_yscale("log")
         ax.tick_params(labelsize=5, length=2, pad=1)
         title = an if len(an) <= 20 else an[:18] + "…"
@@ -987,10 +1018,17 @@ def _hist_fits_by_analyte(history_fit, current_plate_id: str | None) -> dict[str
     df = df.dropna(subset=["a", "b", "c", "d"])
     out: dict[str, list[dict]] = {}
     for r in df.itertuples(index=False):
+        pr = [float(r.a), float(r.b), float(r.c), float(r.d)]
+        gg = getattr(r, "g", None)
+        try:
+            if gg is not None and float(gg) == float(gg):
+                pr.append(float(gg))
+        except (TypeError, ValueError):
+            pass
         out.setdefault(r.analyte, []).append({
             "plate_id": getattr(r, "plate_id", ""),
             "box_ids": getattr(r, "box_ids", ""),
-            "params": (float(r.a), float(r.b), float(r.c), float(r.d)),
+            "params": tuple(pr),
         })
     return out
 
@@ -1082,6 +1120,12 @@ def _make_curve_picker(
                     continue
                 if any(v != v for v in pr):
                     continue
+                gg = getattr(r, "g", None)
+                try:
+                    if gg is not None and float(gg) == float(gg):
+                        pr.append(float(gg))
+                except (TypeError, ValueError):
+                    pass
                 d2.setdefault(r.analyte, []).append(
                     {"plate": str(getattr(r, "plate_id", "")), "p": pr})
             if d2:
@@ -1118,7 +1162,7 @@ def _make_curve_picker(
   <div class="cp-field">
     <label for="cp-ant">Antigen</label>
     <input id="cp-ant" class="cp-ctrl" list="cp-ant-list" autocomplete="off"
-           placeholder="start typing... e.g. RES_Ade3" style="min-width:300px;">
+           placeholder="Search antigen, e.g. RES_Ade3" style="min-width:300px;">
     <datalist id="cp-ant-list">__OPTIONS__</datalist>
   </div>
   <div class="cp-field">
@@ -1136,7 +1180,13 @@ def _make_curve_picker(
   var antEl = document.getElementById("cp-ant");
   var poolEl = document.getElementById("cp-pool");
 
-  function fourpl(x, p) { return p[3] + (p[0]-p[3]) / (1 + Math.pow(x/p[2], p[1])); }
+  // Curve eval: 4 params → 4PL, 5 params → 5PL (p[4] = asymmetry g). Each past
+  // plate is drawn under the model it was fit with (Option A).
+  function curve(x, p) {
+    var base = 1 + Math.pow(x/p[2], p[1]);
+    var denom = (p.length === 5) ? Math.pow(base, p[4]) : base;
+    return p[3] + (p[0]-p[3]) / denom;
+  }
   function geomspace(a, b, n) {
     if (!(a>0)) a = 1e-6; var out=[], la=Math.log(a), lb=Math.log(b);
     for (var i=0;i<n;i++) out.push(Math.exp(la + (lb-la)*i/(n-1))); return out;
@@ -1162,10 +1212,13 @@ def _make_curve_picker(
     hf.forEach(function (h) {
       var xs = (stdAll.length ? geomspace(Math.min.apply(null,stdAll), Math.max.apply(null,stdAll), 60)
                               : geomspace(1, 100000, 60));
-      var ys = xs.map(function (x) { return fourpl(x, h.p); });
+      var ys = xs.map(function (x) { return curve(x, h.p); });
+      var hm = (h.p.length === 5) ? "5PL" : "4PL";
       pastIdx.push(traces.length);
       traces.push({x:xs, y:ys, mode:"lines", line:{color:D.colors.grey, width:1, dash:"dot"},
-                   name:h.plate, legendgroup:"plate:"+h.plate, hoverinfo:"skip", xaxis:"x", yaxis:"y"});
+                   name:h.plate, legendgroup:"plate:"+h.plate,
+                   hovertemplate: h.plate+" · "+hm+" (as fit)<br>1:%{x:.0f}<br>MFI %{y:.0f}<extra></extra>",
+                   xaxis:"x", yaxis:"y"});
     });
 
     // ----- current standards + fit + box + oot + dropped -----
@@ -1177,8 +1230,9 @@ def _make_curve_picker(
       }
       if (e.p && e.std.length) {
         var xs = geomspace(Math.min.apply(null,stdAll), Math.max.apply(null,stdAll), 80);
-        traces.push({x:xs, y:xs.map(function(x){return fourpl(x, e.p);}), mode:"lines",
-          line:{color:D.colors.fit, width:2}, name:"4PL fit", hoverinfo:"skip", xaxis:"x", yaxis:"y"});
+        var fitName = (e.p.length === 5) ? "5PL fit" : "4PL fit";
+        traces.push({x:xs, y:xs.map(function(x){return curve(x, e.p);}), mode:"lines",
+          line:{color:D.colors.fit, width:2}, name:fitName, hoverinfo:"skip", xaxis:"x", yaxis:"y"});
       }
       if (e.oot && e.oot.length) {
         traces.push({x:e.oot.map(function(d){return d[0];}), y:e.oot.map(function(d){return d[1];}),
@@ -1598,7 +1652,7 @@ def _make_cross_run_scatter(
     Search antigen:
   </label>
   <input id="cross-run-input" list="cross-run-list"
-         placeholder="start typing… e.g. RES_Ade3"
+         placeholder="Search antigen, e.g. RES_Ade3"
          autocomplete="off"
          style="flex:1; max-width:340px; padding:6px 10px; font-size:13px;
                 border:1px solid #d0d7de; border-radius:4px;">
@@ -1800,7 +1854,8 @@ def _freeze_pane_heatmap(
 
 
 def _make_in_range_heatmap(in_range: pd.DataFrame, excluded: set[str],
-                           antigen_pool: dict | None = None) -> str:
+                           antigen_pool: dict | None = None,
+                           pool_mode: str = "auto_select") -> str:
     if in_range is None or in_range.empty:
         return "<p style='color:#999;'>No in-range data.</p>"
     antigen_pool = antigen_pool or {}
@@ -1878,14 +1933,25 @@ def _make_in_range_heatmap(in_range: pd.DataFrame, excluded: set[str],
             f'<span style="color:{_PATHOGEN_COLORS.get(c, "#2c3e50")}; font-weight:700;">■</span> '
             f'{html.escape(PATHOGEN_LABELS.get(c, c))}</span>'
             for c in present_cats)
+        if pool_mode == "per_pool":
+            basis = ('against the single <b>scoring pool</b> — every antigen is '
+                     'scored against one pool, so a cell for an antigen that pool '
+                     'does not calibrate may read BELOW / ABOVE / NO_FIT for that '
+                     'reason')
+        else:
+            basis = ('against <b>its antigen\'s matched standard</b> — this grid '
+                     'mixes standards, one per antigen row: antigens with a '
+                     'dedicated or reference standard use that standard, while '
+                     '<b>antigens with no standard (e.g. influenza, malaria) are '
+                     'scored against the best-fitting pool</b>, so read those calls '
+                     'with care')
         legend = (
             '<p style="margin:0 0 6px; font-size:12px; color:#7f8c8d;">'
-            'Cell colour = the specimen\'s range status against <b>its antigen\'s '
-            'matched standard</b> (BELOW / IN / ABOVE / NO_FIT); hover a cell to '
-            'see which standard it was calibrated against. Antigen <b>labels</b> '
-            'are coloured by pathogen group (dotted lines separate groups): '
-            + chips + '. Antigens with no calibrating standard are scored against '
-            'a best-fit pool — hover shows this, so read their status with care.</p>')
+            'Cell colour = the specimen\'s range status ' + basis +
+            ' (BELOW / IN / ABOVE / NO_FIT). Hover a cell to see the exact standard '
+            'it was scored against (see "How to read this matrix" above). Antigen '
+            '<b>labels</b> are coloured by pathogen group (dotted lines separate '
+            'groups): ' + chips + '.</p>')
         return legend + heatmap_html
     return heatmap_html
 
@@ -1968,7 +2034,8 @@ def _build_curve_summary(
     rows = []
     for an, fit in pool_fits.items():
         params = fit.get("params") or (None, None, None, None)
-        a, b, c, d = params
+        a, b, c, d = params[0], params[1], params[2], params[3]
+        g = params[4] if len(params) == 5 else None  # 5PL asymmetry (None for 4PL)
         rr = fit.get("reportable_range") or {}
         pct = pct_lookup.get(an)
         rows.append({
@@ -1976,11 +2043,16 @@ def _build_curve_summary(
             "pool": fit.get("pool", "—"),
             "excluded": an in excluded,
             "fit_ok": bool(fit.get("fit_ok")),
+            # No curve at all (no signal / too few points / non-convergence),
+            # distinct from a curve that fit but failed QC (fit_ok False).
+            "no_fit": fit.get("params") is None,
             "n_points": len(fit.get("mean_data", [])) if fit.get("mean_data") is not None else 0,
             "a": _fmt(a, 1),
             "b": _fmt(b, 2),
             "c_ic50": _fmt(c, 1),
             "d": _fmt(d, 1),
+            "g": _fmt(g, 2) if g is not None else "—",
+            "model": fit.get("model", "4pl"),
             "lloq_dilution": _fmt(rr.get("lloq_dilution"), 1),
             "uloq_dilution": _fmt(rr.get("uloq_dilution"), 1),
             "pct_in_range": _fmt(pct, 1),
@@ -1991,8 +2063,10 @@ def _build_curve_summary(
 
 
 def _pool_target_label(pool_name: str) -> str:
-    """Human label for the pathogen(s) a standard pool calibrates,
-    e.g. 'Dengue pool' → 'Dengue / other arboviruses & VPDs (reference)'."""
+    """Human label for the pathogen(s) a standard pool calibrates, e.g.
+    'Dengue pool' → 'Dengue'; 'Orpal pool' → 'Dengue & other arboviruses
+    (pan-arbovirus reference)'; 'NIBSC pool' → 'Measles / Diphtheria / Rubella /
+    Tetanus'."""
     groups = _pool_groups(pool_name)
     if not groups:
         return "—"
@@ -2001,8 +2075,14 @@ def _pool_target_label(pool_name: str) -> str:
         parts.append("Cholera")
     if "typhoid" in groups:
         parts.append("Typhoid")
-    if "dengue" in groups:
-        parts.append("Dengue / other arboviruses & VPDs (reference)")
+    if "arbovirus" in groups:
+        # Pan-arbovirus reference pool (also carries dengue). The whole pool is a
+        # semi-quantitative reference; dengue's dedicated standard is elsewhere.
+        parts.append("Dengue & other arboviruses (pan-arbovirus reference)")
+    elif "dengue" in groups:
+        parts.append("Dengue")
+    if "vpd_nibsc" in groups:
+        parts.append("Measles / Diphtheria / Rubella / Tetanus")
     return " · ".join(parts) if parts else "—"
 
 
@@ -2022,6 +2102,136 @@ def _group_summary_by_pool(curve_summary: list[dict]) -> list[dict]:
              "n": len(buckets[p]), "rows": buckets[p]} for p in order]
 
 
+def _build_summary_by_pool_all(fits: dict, pools: list[str], panel_order: list[str],
+                               excluded: set[str], rec_tol: float) -> list[dict]:
+    """One summary block per standard pool over **every** antigen fit against
+    that pool. Each row carries ``relevant`` = whether that pool is the antigen's
+    designated calibrator/reference (its pathogen's effective scoring group,
+    resolved against the pools present) — independent of best-fit. Relevant rows
+    are listed first. %-in-range is omitted (a single-pool scoring metric).
+    """
+    if not pools:
+        return []
+    pool_grp = {p: _pool_groups(p) for p in pools}
+    groups_present = set().union(*pool_grp.values()) if pool_grp else set()
+
+    def _eff(a):
+        for g in _antigen_scoring_groups(a):
+            if g in groups_present:
+                return g
+        return None
+    eff_map = {a: _eff(a) for a in panel_order if antigen_group(a)}
+    order_index = {a: i for i, a in enumerate(panel_order)}
+
+    out = []
+    for pool in sorted(pools, key=_pool_sort_rank):
+        pf = {a: {**fits[pool][a], "pool": pool}
+              for a in panel_order if a in fits.get(pool, {})}
+        if not pf:
+            continue
+        rows = _build_curve_summary(pf, pd.DataFrame(), excluded, rec_tol)
+        for r in rows:
+            a = r["analyte"]
+            r["relevant"] = bool(a in eff_map and eff_map[a] in pool_grp[pool])
+        rows.sort(key=lambda r: (not r["relevant"], order_index.get(r["analyte"], 1_000_000)))
+        out.append({"pool": pool, "targets": _pool_target_label(pool),
+                    "n": len(rows), "n_relevant": sum(1 for r in rows if r["relevant"]),
+                    "rows": rows})
+    return out
+
+
+_DEDICATED_GROUPS = ("cholera", "typhoid", "dengue")
+
+
+def _build_range_problem_by_pool(fits: dict, data: pd.DataFrame, pools: list[str],
+                                 threshold: float, excluded: set[str]) -> list[dict]:
+    """Range-problem specimens computed **within each standard pool** (not pooled).
+
+    Each standard pool is assessed independently and the flag is clearly attributed
+    to a specific standard:
+
+    * The **flag** fires for a (specimen, pool) pair when ≥ ``threshold`` of that
+      pool's *dedicated* antigens (cholera / typhoid / dengue whose group the pool
+      targets) read outside **that pool's** reportable range. This keeps the flag
+      on trustworthy curves. A dengue antigen is assessed separately against Dengue
+      and against Orpal, so a specimen can be flagged for one and not the other.
+    * **Non-dedicated antigens** (reference arbo/VPD + no-match antigens such as
+      influenza / malaria) are *not dropped*: for the reference pools (Dengue /
+      Orpal) they are read against that reference curve and reported per flagged
+      specimen as **informational context** only — they never drive the flag,
+      keeping seronegative noise out of the trigger.
+
+    Informational only.
+    """
+    if data is None or data.empty or "well_type" not in data.columns:
+        return []
+    spec = data[data["well_type"] == "specimen"]
+    if spec.empty:
+        return []
+    id_col = "sample_id" if "sample_id" in spec.columns else "sample_name"
+    out = []
+    for pool in sorted(pools, key=_pool_sort_rank):
+        pf = fits.get(pool, {})
+        pg = _pool_groups(pool)
+        is_ref_pool = "dengue" in pg  # Dengue / Orpal double as the reference pools
+        ded_bounds, ref_bounds = {}, {}
+        for a in pf:
+            if a in excluded:
+                continue
+            g = antigen_group(a)
+            lo, hi = _mfi_bounds_for_fit(pf[a])
+            if lo is None or hi is None:
+                continue
+            if g in _DEDICATED_GROUPS and g in pg:
+                ded_bounds[a] = (lo, hi)
+            elif is_ref_pool and g not in _DEDICATED_GROUPS:
+                ref_bounds[a] = (lo, hi)
+        n_ded = len(ded_bounds)
+        if n_ded == 0:
+            continue
+        n_ref = len(ref_bounds)
+        all_bounds = {**ded_bounds, **ref_bounds}
+        sub = spec[spec["analyte"].isin(all_bounds.keys())]
+        rows = []
+        for well, g in sub.groupby("well", sort=False):
+            d_below, d_above, r_out = [], [], 0
+            sid = ""
+            for r in g.itertuples(index=False):
+                a = r.analyte
+                m = getattr(r, "mfi", None)
+                if not sid:
+                    _s = getattr(r, id_col, "")
+                    sid = str(_s) if _s is not None and str(_s).strip() and str(_s).lower() != "nan" else str(well)
+                if m is None or pd.isna(m):
+                    continue
+                if a in ded_bounds:
+                    lo, hi = ded_bounds[a]
+                    if m < lo:
+                        d_below.append(a)
+                    elif m > hi:
+                        d_above.append(a)
+                elif a in ref_bounds:
+                    lo, hi = ref_bounds[a]
+                    if m < lo or m > hi:
+                        r_out += 1
+            n_out = len(d_below) + len(d_above)
+            if n_ded and (n_out / n_ded) >= threshold:
+                rows.append({
+                    "well": str(well), "sample_id": sid, "n_dedicated": n_ded,
+                    "n_below": len(d_below), "n_above": len(d_above),
+                    "frac": round(n_out / n_ded, 4),
+                    "below": ", ".join(d_below), "above": ", ".join(d_above),
+                    "n_reference": n_ref, "n_reference_out": r_out,
+                    "frac_reference": round(r_out / n_ref, 4) if n_ref else 0.0,
+                })
+        if rows:
+            rows.sort(key=lambda d: d["frac"], reverse=True)
+            out.append({"pool": pool, "targets": _pool_target_label(pool),
+                        "n_dedicated": n_ded, "n_reference": n_ref,
+                        "n_flagged": len(rows), "rows": rows})
+    return out
+
+
 def _format_problem_list(problems: pd.DataFrame) -> list[dict]:
     if problems is None or problems.empty:
         return []
@@ -2039,17 +2249,32 @@ def _format_problem_list(problems: pd.DataFrame) -> list[dict]:
 
 def _tier_counts(problems: pd.DataFrame) -> dict:
     if problems is None or problems.empty:
-        return {"red": 0, "yellow": 0}
+        return {"red": 0, "yellow": 0, "red_wells": 0}
     counts = problems["tier"].value_counts().to_dict()
-    return {"red": int(counts.get("red", 0)), "yellow": int(counts.get("yellow", 0))}
+    red = problems[problems["tier"] == "red"]
+    # Distinct wells with ≥ 1 antigen at critically-low (red) bead count.
+    red_wells = int(red["well"].nunique()) if not red.empty else 0
+    return {"red": int(counts.get("red", 0)), "yellow": int(counts.get("yellow", 0)),
+            "red_wells": red_wells}
 
 
-def _format_range_problems(in_range: pd.DataFrame, excluded: set[str]) -> list[dict]:
+def _format_range_problems(in_range: pd.DataFrame, excluded: set[str],
+                           antigen_pool: dict | None = None,
+                           pool_mode: str = "auto_select") -> list[dict]:
     if in_range is None or in_range.empty:
         return []
+    antigen_pool = antigen_pool or {}
     out = in_range[in_range["status"].isin(["BELOW_RANGE", "ABOVE_RANGE"])]
     rows = []
     for r in out.itertuples(index=False):
+        pool = antigen_pool.get(r.analyte, "—")
+        # The per-antigen calibration tier only means something when each antigen
+        # is matched to its own pool (auto-select). In per_pool mode every antigen
+        # is scored against the one scoring pool, so the tier would be misleading.
+        if pool_mode == "per_pool":
+            cal_label = "scoring pool (not pathogen-matched)"
+        else:
+            cal_label = CALIBRATION_LABELS[antigen_calibration(r.analyte, None if pool == "—" else pool)]
         rows.append({
             "well": r.well,
             "sample_name": r.sample_name,
@@ -2058,6 +2283,8 @@ def _format_range_problems(in_range: pd.DataFrame, excluded: set[str]) -> list[d
             "mfi_lloq": _fmt(r.mfi_lloq, 1),
             "mfi_uloq": _fmt(r.mfi_uloq, 1),
             "status": r.status,
+            "standard": pool,
+            "calibration": cal_label,
             "excluded": r.analyte in excluded,
         })
     return rows
@@ -2100,6 +2327,28 @@ def _format_range_summary(range_summary: dict, antigen_pool: dict | None = None)
             }
             if key == "well":
                 row["sample_name"] = getattr(r, "sample_name", "")
+                # Split the specimen's out-of-range antigens by the SAME three
+                # calibration tiers used across the report: dedicated standard
+                # (the trustworthy signal), reference pool, and best-fit (no
+                # standard). Inline only the dedicated ones (usually few); the
+                # reference and best-fit lists are collapsed so the cell stays
+                # readable.
+                ants = [x for x in (row["detail"] or "").split(";") if x]
+                ded, ref, bestfit = [], [], []
+                for a in ants:
+                    t = antigen_calibration(a, antigen_pool.get(a))
+                    if t == "standard":
+                        ded.append(f"{a} ({antigen_pool.get(a, '—')})")
+                    elif t == "reference":
+                        ref.append(a)
+                    else:
+                        bestfit.append(a)
+                row["n_dedicated"] = len(ded)
+                row["n_reference"] = len(ref)
+                row["n_bestfit"] = len(bestfit)
+                row["detail_dedicated"] = "; ".join(ded)
+                row["detail_reference"] = ", ".join(ref)
+                row["detail_bestfit"] = ", ".join(bestfit)
             else:
                 # Which standard the antigen was scored against + its tier.
                 an = getattr(r, key)
@@ -2452,7 +2701,7 @@ def _format_control_stats(
     """Per-antigen cross-plate stats rows + the current-plate well columns.
 
     ``cv_flag_threshold`` (a fraction, e.g. 0.25) sets ``row['high_cv']`` when
-    this plate's %CV across the control's wells exceeds it (intra-plate).
+    this plate's %CV across the control's wells exceeds it (intra-assay).
     ``hist_cv_flag_threshold`` sets ``row['high_hist_cv']`` when the *historical*
     (between-plate, inter-assay) %CV exceeds it.
 
@@ -2910,8 +3159,11 @@ def _fmt(v, decimals=2) -> str:
 def _fmt_params(params) -> str:
     if not params:
         return "—"
-    a, b, c, d = params
-    return f"a={_fmt(a, 1)}, b={_fmt(b, 2)}, c={_fmt(c, 1)}, d={_fmt(d, 1)}"
+    a, b, c, d = params[0], params[1], params[2], params[3]
+    s = f"a={_fmt(a, 1)}, b={_fmt(b, 2)}, c={_fmt(c, 1)}, d={_fmt(d, 1)}"
+    if len(params) == 5:
+        s += f", g={_fmt(params[4], 2)}"
+    return s
 
 
 def _derive_layout_info(data: pd.DataFrame) -> dict:

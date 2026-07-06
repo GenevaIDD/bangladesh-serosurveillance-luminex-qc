@@ -43,8 +43,10 @@ interactive HTML report with:
     single-point control, e.g. Cholera High / Cholera Low** / NC / specimen
     / background wells, antigens), plus a **shape-coded 384-well plate map**.
 -   **Bead Count** — a freeze-pane antigen × well tier heatmap (red \< 30,
-    yellow 30–49, green ≥ 50) with a "how it works" description box,
-    "≥ X % flagged" summary cards, and a mechanics note.
+    yellow 30–49, green ≥ 50) with wells ordered by plate position (A1 →
+    last), a "how it works" description box, and five summary cards (wells
+    with ≥ 1 critically-low antigen; critically-low and low grid-cell counts;
+    antigens and specimens flagged).
 -   **Background QC** — per-antigen spread of the blank wells (per-well MFIs,
     SD, %CV, an intra-plate **High CV** flag, an inter-assay **High hist. CV**
     flag for run-to-run drift, and a `⚠ outlier` badge on antigens with a
@@ -55,22 +57,38 @@ interactive HTML report with:
 -   **Positive & Negative Control QC** — the same two-view cross-plate
     overview for the single-point PCs (Cholera High/Low) and NC controls,
     plus an NC **duplicate-%CV** flag table.
--   **Multi-pool 4PL standard curves** — a 4PL is fit for **every
-    antigen against every control pool**. By default (auto-select mode)
+-   **Multi-pool standard curves (5PL / 4PL)** — a logistic curve is fit for
+    **every antigen against every control pool**, using the **5PL**
+    (five-parameter, default — its asymmetry term reduces back-calculation bias
+    near an asymptote) or **4PL** model. The model is chosen per report on the
+    home page (default 5PL) and shown as a badge in the report; a report uses one
+    model throughout. The home page has two **independent** model selectors — one
+    for **Generate Report** and one beside **Regenerate All** — so a new upload
+    and a full rebuild can use different models without affecting each other, and
+    the **Past Reports** table has a **Fit** column showing the model each report
+    was generated under. By default (auto-select mode)
     each antigen is scored against the pool that calibrates it — cholera →
-    Anti-OSP & cTxB, typhoid → HlyE, dengue → Dengue/Orpal, and other
-    arboviruses & VPDs (no dedicated standard) → the Dengue/Orpal reference
-    pools — matched by pathogen name, tie-broken by best fit, and fully
-    YAML-overridable. Measles/diphtheria/rubella/tetanus prefer a **NIBSC**
-    pool when one is on the plate. Every specimen carries a **calibration
-    tier** (standard / reference / uncalibrated) so best-fit-only RAUs are
-    clearly flagged. An optional per-pool mode instead scores every antigen
-    against a single **scoring pool** and exports RAU under every pool.
+    Anti-OSP & cTxB, typhoid → HlyE, **dengue → the dedicated Dengue pool**
+    (preferred) plus the pan-arbovirus **Institute Pasteur / Orpal** pool,
+    **other (non-dengue) arboviruses → Institute Pasteur / Orpal only**
+    (semi-quantitative reference), and **measles / diphtheria / rubella /
+    tetanus → a NIBSC pool** when present (else the pan-arbo reference as a
+    fallback). Antigens with no calibrating standard (other VPDs such as
+    pertussis / bordetella / meningitidis, plus influenza, malaria, etc.) are
+    scored on a best-fit pool only. Matching is by pathogen name, tie-broken
+    by best fit, and fully YAML-overridable; every specimen carries a
+    **calibration tier** (standard / reference / uncalibrated) so best-fit-only
+    RAUs are clearly flagged. An optional per-pool mode instead scores every
+    antigen against a single **scoring pool** and exports RAU under every pool.
 -   **Standard-Curve Summary + All-Curves Overview** — one fit table per
-    pool (labelled with pathogen targets); featured priority antigens each
-    shown against their single best-fit standard, with the antigen's
-    **past-plate curves overlaid in light grey** (Show all / Hide toggle) and
-    all antigen × pool fits in a collapsed block. Range-problem tables show the
+    pool over **all** antigens, each with a **Relevance** column (checked for
+    the antigens that pool is meant to calibrate) so you can sort
+    relevant-first and still inspect the rest. **Featured priority antigens**
+    are organized **by standard pool** — one section per pool, each antigen
+    fit against that pool (dengue appears under both the Dengue and Institute
+    Pasteur / Orpal sections) — with the antigen's **past-plate curves
+    overlaid in light grey** (Show all / Hide toggle); every antigen × pool
+    fit is also in a collapsed block. Range-problem tables show the
     calibrating Standard per antigen.
 -   **Standard-Curve Picker** — type to inspect any antigen's curve, rug,
     and cross-plate overlays; the panel is titled with the selected
@@ -156,25 +174,43 @@ or `N ng/mL` for HlyE) and calibrate specific pathogens:
 -   **Anti-OSP & cTxB (± HlyE) pool** → cholera (OSP / CtxB) — and
     typhoid HlyE in the combined pool
 -   **HlyE** → *S. typhi* HlyE (concentration series)
--   **Dengue pool** + **ORPAL pool** → DENV antigens
+-   **Dengue pool** → dedicated dengue standard (DENV antigens)
+-   **Institute Pasteur / ORPAL pool** → pan-arbovirus reference: dengue
+    **and** other arboviruses (semi-quantitative). `Orpal` is the pilot
+    name; `Institute Pasteur` is the name used going forward
+-   **NIBSC pool** (when present) → measles / diphtheria / rubella / tetanus
 -   **Cholera High / Low** → single-point range markers (not fit)
 
 ### Antigen → pool scoring (`pool_mode`, set in Settings)
 
-A 4PL is fit for every (pool × antigen). Two modes control how specimens
-are then scored:
+A logistic curve (5PL by default, or 4PL — chosen per report) is fit for every
+(pool × antigen). Two modes control how specimens are then scored:
 
 -   **auto_select (default)** — each antigen is scored against the pool
-    meant to calibrate it: the tool parses the antigen's pathogen from its
-    name and matches it to the targeting pool(s). Cholera → Anti-OSP &
-    cTxB, typhoid → HlyE, dengue → Dengue/Orpal; other arboviruses
-    (`ARB_`) and VPDs (`VPD_`, plus `RES_measles_lysate`) have no dedicated
-    standard and use the Dengue/Orpal reference pools. When more than one
-    pool targets the same category (e.g. Dengue vs ORPAL), the
-    **best-fitting curve** wins (params present → fit_ok → highest R²).
-    Antigens with no name match fall back to the best-fitting pool. Refine
-    the matching with a regex rules field and exact per-antigen overrides
-    in Settings (or the YAML).
+    meant to calibrate it, parsed from the antigen name:
+    -   **Cholera** (`CHO_` / CtxB / Inaba / Ogawa) → Anti-OSP & cTxB
+        (combined or standalone).
+    -   **Typhoid** (`HlyE` / typhi) → HlyE (combined or standalone).
+    -   **Dengue** (`DENV1–4` / dengue) → the **dedicated Dengue pool**
+        (preferred for scoring) and also the pan-arbovirus **Institute
+        Pasteur / Orpal** pool (shown for comparison).
+    -   **Other (non-dengue) arboviruses** (`ARB_`) → the **Institute
+        Pasteur / Orpal** pan-arbovirus reference only (semi-quantitative).
+    -   **Measles / diphtheria / rubella / tetanus** VPDs (plus
+        `RES_measles_lysate`) → a **NIBSC** pool when present, else the
+        pan-arbo reference as a fallback.
+    -   **All other VPDs** (`VPD_` pertussis / bordetella / meningitidis, …)
+        and any antigen with no pathogen match have **no calibrating
+        standard**: they are scored on a best-fitting pool only and are never
+        featured as relevant to a pool (they remain viewable in the Picker and
+        the per-pool tables).
+
+    Within a pathogen's candidate pools the **best-fitting curve** wins
+    (params present → fit_ok → highest R²), except that dengue prefers its
+    dedicated Dengue pool over the pan-arbo reference. The pan-arbovirus pool
+    is recognized by the names `Orpal` (pilot) or `Institute Pasteur` (going
+    forward). Refine the matching with a regex rules field and exact
+    per-antigen overrides in Settings (or the YAML).
 -   **per_pool** — "fit every pool × antigen, no matching." RAU and range
     status are computed against a single **scoring pool** (by default the
     pool with the most passing fits; set `scoring_pool` to override). The
@@ -186,22 +222,35 @@ are then scored:
 ### Bead counts
 
 `bead_count_min` (red below, default 30) and `bead_count_warn` (yellow
-below / green at-or-above, default 50). Antigens and specimens are
-flagged when ≥ `problem_fraction_threshold` (default 20 %) of their
-cells are red or yellow.
+below / green at-or-above, default 50). The heatmap is antigens × wells,
+with wells ordered by plate position (A1 → last) so re-run wells appended
+to the end of the CSV stay in sequence. Five summary cards report: **wells
+with ≥ 1 critically-low antigen** (out of the wells run), the number of
+grid cells that are **critically low** (\< 30) and **low** (30–49), and the
+**antigens** and **specimens** flagged when ≥ `problem_fraction_threshold`
+(default 20 %) of their cells are red or yellow.
 
 ### Standard-curve fit quality
 
-Each antigen's 4PL fit is `fit_ok` only when all of: R² ≥ 0.95 (log10),
-IC50 inside the tested dilution range (×3 margin), Hill slope 0.3–5.0,
-dynamic range ≥ 3×. A failing fit can retry by dropping a single outlier
-point (configurable).
+Each antigen's fit (5PL or 4PL) is `fit_ok` only when all of: R² ≥ 0.95
+(log10), IC50 inside the tested dilution range (×3 margin), Hill slope 0.3–5.0,
+dynamic range ≥ 3× (the 5PL asymmetry `g` is bounded to 0.1–10 during the fit).
+A failing fit can retry by dropping a single outlier point (configurable). The
+Summary's Fit-OK column has three states: **OK** (passed), **FAIL** (a curve was
+fit but failed a criterion — parameters shown, but LLOQ/ULOQ and %-in-range are
+unreliable), and **NO_FIT** (no curve could be fit at all — no signal, too few
+points, or non-convergence). Each report uses one model throughout.
 
 ### Range classification
 
 Per (specimen × antigen): `IN_RANGE` / `BELOW_RANGE` / `ABOVE_RANGE` /
-`NO_FIT`, using the antigen's selected-pool curve. LLOQ / ULOQ come from
-a ±30 % (configurable) Obs/Exp recovery check.
+`NO_FIT`, using the antigen's selected-pool curve (dengue against the
+dedicated Dengue pool; uncalibrated antigens against a best-fit pool — the
+cell hover and the calibration tier disclose this). LLOQ / ULOQ come from a
+±30 % (configurable) Obs/Exp recovery check. The **Range-problem specimens**
+table is computed **per standard**: a well is flagged for a pool when
+≥ `problem_fraction_threshold` of that pool's **dedicated** antigens read
+out of range, keeping the flag on trustworthy curves.
 
 ### Background QC
 
@@ -259,12 +308,11 @@ calibrate it). The
 ## Settings
 
 Editable on the Settings page (persisted to `config.yaml`):
-well-classification patterns, **priority antigens** (curves shown in the
-Summary/Overview; blank = the pathogen-priority set), the **pool mode**
-(auto_select / per_pool) with scoring pool, regex rules and per-antigen
-overrides, excluded analytes, bead-count thresholds, problem-fraction
-threshold, background intra-plate %CV, **inter-assay %CV**, and max-MFI
-reference thresholds, the **NC duplicate %CV** threshold, recovery tolerance,
+well-classification patterns, the **standard-curve model** (5PL default / 4PL),
+the **pool mode** (auto_select / per_pool) with scoring pool, regex rules and
+per-antigen overrides, excluded analytes, bead-count thresholds, problem-fraction
+threshold, background **intra-assay %CV**, **inter-assay %CV**, and max-MFI
+reference thresholds, the **PC/NC intra-assay %CV** threshold, recovery tolerance,
 the single-outlier drop toggle, and the (informational-only) specimen dilution.
 
 ## Development

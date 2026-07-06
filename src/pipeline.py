@@ -650,7 +650,10 @@ def _build_fit_history(metadata: dict, pool_fits: dict, pool_name: str = "", box
         if pool_name:
             row["pool"] = pool_name
         if fit["params"]:
-            a, b, c, d = fit["params"]
-            row.update({"a": a, "b": b, "c": c, "d": d})
+            p = fit["params"]
+            row.update({"a": p[0], "b": p[1], "c": p[2], "d": p[3]})
+            if len(p) == 5:
+                row["g"] = p[4]
+            row["model"] = fit.get("model", "4pl")
         rows.append(row)
     return pd.DataFrame(rows)

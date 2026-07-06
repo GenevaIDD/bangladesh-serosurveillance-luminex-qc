@@ -15,28 +15,31 @@
 
 panel:
 
-  # ---- Priority antigens -----------------------------------------------------
-  # Which antigens' standard curves are *displayed* in the Standard-Curve
-  # Summary and All-Curves Overview. A 4PL is still fit for EVERY antigen; this
-  # only focuses the display on the curves you mean to interpret.
-  #   []  -> show all antigens (default)
-  # To restrict, list exact analyte names, one per line:
-  priority_antigens: []
-  #   priority_antigens:
-  #     - ARB_DENV1_VLP
-  #     - CHO_CtxB
-  #     - BAC_S.typhi_HlyE
+  # ---- Standard-curve model --------------------------------------------------
+  # Logistic model fit to every (control pool x antigen). One model per report
+  # (no per-antigen fallback); an antigen the model can't fit is NO_FIT for that
+  # report. The home page can override this per report; this is the default.
+  #   5pl (default) — five-parameter logistic; the asymmetry term reduces
+  #                   back-calculation bias near an asymptote.
+  #   4pl           — four-parameter logistic.
+  curve_model: 5pl
 
   # ---- Antigen x standard-pool matching --------------------------------------
-  # A 4PL curve is fit for every (control pool x antigen). pool_mode decides how
-  # specimens are SCORED (RAU / range status):
+  # A logistic curve is fit for every (control pool x antigen). pool_mode decides
+  # how specimens are SCORED (RAU / range status):
   #
   #   auto_select (default) — each antigen is scored against the pool that
   #                           calibrates it (pathogen-name match, tie-broken by
   #                           best fit), refined by the rules/overrides below.
-  #                           Cholera -> Anti-OSP & cTxB; dengue -> Dengue/Orpal;
-  #                           typhoid -> HlyE; other arboviruses & VPDs (no
-  #                           dedicated standard) -> Dengue/Orpal reference.
+  #                           Cholera -> Anti-OSP & cTxB; typhoid -> HlyE;
+  #                           dengue -> the dedicated Dengue pool AND the
+  #                           pan-arbovirus Institute Pasteur / Orpal pool
+  #                           (dengue prefers the dedicated Dengue pool for
+  #                           scoring); other (non-dengue) arboviruses ->
+  #                           Institute Pasteur / Orpal only; measles /
+  #                           diphtheria / rubella / tetanus -> NIBSC (else the
+  #                           pan-arbo reference); other VPDs & unmatched antigens
+  #                           -> no calibrating standard (best-fit pool only).
   #   per_pool              — no matching. Curves shown per pool; specimen RAU /
   #                           range use the single scoring_pool below.
   pool_mode: auto_select

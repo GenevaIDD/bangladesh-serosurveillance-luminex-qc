@@ -63,15 +63,5 @@ def get_excluded_analytes(config: dict) -> list[str]:
     return list(config.get("panel", {}).get("excluded_analytes", []))
 
 
-def get_priority_antigens(config: dict) -> list[str]:
-    """Priority antigens whose standard curves are meant to be interpreted.
-
-    Empty list = all antigens (the default). Curves are still fit for every
-    antigen regardless; this only controls which antigens are *displayed* in
-    the Standard-Curve Summary and All-Curves Overview.
-    """
-    return list(config.get("panel", {}).get("priority_antigens", []))
-
-
 def get_qc_thresholds(config: dict) -> dict:
     return config["qc_thresholds"]

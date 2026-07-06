@@ -1,5 +1,188 @@
 # Bangladesh National Serosurveillance Luminex QC — To-Do & Session Log
 
+## RELEASE DECISION (supersedes v0.4.0 planning below)
+
+**Everything ships together in v0.3.0** — Phases 8/9/11, Phase A (pool remap),
+the bead-count + text + doc updates, AND the 5PL curve model. The "→ v0.4.0"
+notes in the older planning entries below are historical; 5PL is part of 0.3.0.
+Version strings are set to 0.3.0. All work uncommitted pending the user's tag.
+
+**Home-page model selector now authoritative for BOTH generate + Regenerate All
+(bug fix).** Root cause of "changed the dropdown but the report still says 5PL":
+the dropdown only fed the /upload route; **Regenerate All used the saved Settings
+model** (default 5PL). Fixed: Regenerate All form now carries `curve_model`
+(hidden input synced from the dropdown via onsubmit) and `regenerate_all()` reads
++ applies it; both `/upload` and `/regenerate-all` now **persist** the chosen
+model to config (dropdown, Settings, and regenerated reports stay in sync; the
+home dropdown default reflects the persisted value). Verified via Flask test
+client: upload(4pl)→4PL, regen(5pl)→5PL, regen(4pl)→4PL, config persisted each
+time, dropdown default follows. (NOTE: the dropdown affects *newly generated*
+reports; re-opening an old report without regenerating shows its original model —
+now also covered by the no-cache headers/meta.)
+
+**Model-text audit (5PL↔4PL) + cache fix.** Diffed the same plate rendered under
+both models: report text DOES update (badge, featured/picker legends via
+len(params), Fit-OK definition, g column, all curve_model_label description
+boxes). Found + fixed ONE stale spot: the Positive Control description hardcoded
+"fit to a 4PL curve" → now `{{ curve_model_label }}`. No hardcoded four/five-
+parameter text remains. Root cause of "text doesn't update on re-run" = **browser
+caching** (reports reuse `QC_<plate_id>.html`): added no-cache headers to the
+`/report/<filename>` route + a no-cache `<meta>` in the report head. Both re-run
+paths (upload selector override; regenerate_all via saved config) correctly thread
+`curve_model`.
+
+**Fit-OK column now 3-state** (was binary OK/FAIL): OK (passed QC) / FAIL (curve
+fit but failed a criterion) / **NO_FIT** (no curve at all — params None). Added
+`no_fit` to `_build_curve_summary` rows; template badge dispatches (grey NO_FIT);
+"Definition of Fit OK" box + README explain all three. Range Matrix already had a
+distinct NO_FIT status. Verified: summary shows OK/FAIL/NO_FIT distinctly.
+
+**Priority Antigens setting REMOVED** (superseded by Phase 9 "show all + Relevance
+column"). Deleted: settings.html field + YAML-import mention, app.py POST parse,
+config.py DEFAULTS key, config.example.yaml block, `settings.get_priority_antigens`,
+report.py priority computation + unused `curve_summary`/`_pool_fits_for` +
+`priority_*` context vars. Summary (`_build_summary_by_pool_all`) + Featured +
+All-curves already use `panel_order` (all antigens), so no display change. Test
+`test_config_roundtrip` now round-trips `curve_model` instead. README/SPEC updated.
+
+**CI runners pinned** (build.yml): `macos-15` + `windows-2022` (were
+`macos-latest`/`windows-latest`) for reproducible release builds — macos-14
+began deprecation 2026-07-06; macos-latest now → macos-26. Bump when GitHub
+deprecates these (keeps ~2 versions). **Pre-release review done:** py_compile
+clean, test suite 2/2, Flask app + templates render, config.example.yaml +
+DEFAULTS carry `curve_model: 5pl`; full-panel run only exceeds the sandbox 45s
+cap (fine on a real machine). Stale `config.py` fallback comment fixed.
+
+## PLAN — Pool relevance remap (Phase A, near-term) + 5PL (v0.4.0)
+
+**Phase A — pool relevance remap + Institute Pasteur recognition (items 1–3).**
+Mostly `qc_standard_curve.py`; Featured/Summary builders derive from these helpers
+so they update automatically.
+- **A1.** Split non-dengue **arbovirus** into its own group (today it collapses to
+  `dengue`, which is why Dengue and Orpal look identical). Relevance groups:
+  dengue→`{dengue}`, non-dengue arbo→`{arbovirus}`, cholera/typhoid own,
+  **M/D/R/T VPD→ordered `[vpd_nibsc, arbovirus]`** (NIBSC preferred, pan-arbo
+  fallback), **all other VPD→`[]` (never featured/relevant)**.
+- **A2.** `_pool_groups` returns sets + recognizes the pan-arbo pool by name:
+  Dengue→`{dengue}`; **Orpal OR Institute Pasteur** (tokens `orpal`/`pasteur`/
+  `institut`)→`{dengue, arbovirus}`; Anti-OSP&cTxB&HlyE→`{cholera, typhoid}`;
+  NIBSC→`{vpd_nibsc}`. Orpal kept for pilot; no display rename.
+  → Dengue pool = dengue only; Institute Pasteur/Orpal = dengue + arbovirus
+  (dengue fit against BOTH); non-MRT VPD featured nowhere but still fit against
+  every pool (viewable in picker + all-antigens tables).
+- **A3.** `antigen_calibration`/scoring: arbovirus→pan-arbo reference; non-MRT
+  VPD→best-fit/`uncalibrated`; M/D/R/T→NIBSC `standard`, else pan-arbo `reference`
+  (DECIDED: fall back to pan-arbo when NIBSC absent, e.g. pilot).
+- **A4.** Verify on pilot ("Orpal") + a synthetic "Institute Pasteur" pool.
+
+**Phase B — 5PL model (item 4) → v0.4.0 (separate release).** Add `five_pl` +
+inverse; `panel.curve_model` config (**default `5pl`**, `4pl` optional) + settings
+dropdown; model-aware fitting/bounds/plotting/back-calc/R²/history overlays;
+**tag each stored fit with its model** (existing 4PL history kept & rendered under
+its own model — DECIDED); **mark the model clearly in the report** (badge +
+per-curve); docs.
+
+**Sequencing (DECIDED):** Phase A near-term; 5PL as v0.4.0.
+Tasks: #10–#13 (Phase A), #14 (5PL).
+
+**Phase B / 5PL STATUS: DELIVERED (uncommitted), staged 0–4 + verified.**
+Version aligned to **0.3.0** (APP_VERSION `0.3.0-bangladesh`, pyproject `0.3.0`,
+SPEC) — the current unreleased work is 0.3.0; **5PL ships as 0.4.0** when cut.
+- **Model:** standard asymmetric 5PL `y=d+(a−d)/(1+(x/c)^b)^g` (g∈[0.1,10]) +
+  4PL; `five_pl`/`invert_5pl` + `curve_eval`/`curve_invert` dispatch by param
+  count. `panel.curve_model` default `5pl`.
+- **Uniform per report, NO per-antigen fallback** (user's revised decision): a
+  report is one model throughout; 5PL-fail → NO_FIT (re-render under 4PL to try).
+  Chosen at **render time** via a **home-page selector** (default 5PL) + Settings
+  default. `_fit_one(model=…)` fits the one model; fit_ok checks unchanged.
+- **Model-aware end-to-end:** obs/exp, reportable range, R², concentrations,
+  mfi-bounds, report curve drawing (server + picker JS `curve()`), summary (+g
+  column), all dispatch by param count. Fit result + history store `model`+`g`.
+- **History (Option A, user's choice):** no duplication — dedup key is
+  `(plate_id, analyte…)`, keep-last, so re-rendering the SAME csv under a
+  different model **overwrites** (never double-counts). Model not in the key.
+  Past-plate curve **overlays drawn under each plate's own stored model**;
+  clearly stated on the **home page**, in the Featured/Picker **description
+  boxes**, and in the overlay **hovers** (`<plate> · 4PL/5PL (as fit)`).
+- **Report marking:** "Curve model: …" banner in Standard-Curve Summary; trace
+  names + all description "4PL" wording now model-aware (`curve_model_label`).
+- Verified: 5PL R²≥4PL on dengue, g≈0.5 (real asymmetry), near-asymptote
+  back-calc differs sensibly; both modes render; mixed-model overlay (5PL report
+  over 4PL history) renders; settings/index templates render.
+
+**Phase A STATUS: DELIVERED (uncommitted), verified on both pilot fixtures.**
+- A1/A2: `_antigen_scoring_groups` (arbovirus own group; M/D/R/T `[vpd_nibsc,
+  arbovirus]`; other VPD `[]`) + `_pool_groups` (Dengue `{dengue}`; Orpal/Institute
+  Pasteur `{dengue,arbovirus}`; combined/split cholera+typhoid handled by
+  independent osp/ctxb/hlye tokens). A3: `antigen_calibration` (arbovirus→
+  reference; M/D/R/T→standard@NIBSC / reference fallback; other VPD→uncalibrated);
+  removed dead `_SCORING_POOL_GROUP`.
+- Verified end-to-end (parse→classify→fit→render) on Plate 1 (5 pools: combined +
+  split Anti-OSP&cTxB + HlyE + Dengue + Orpal) and Plate 2 (3 pools). Featured:
+  Dengue=dengue only; Orpal=dengue+arbo+M/D/R/T(fallback, no NIBSC on pilot);
+  cholera→every OSP/cTxB pool, typhoid→every HlyE pool. The 3 non-MRT VPDs shown
+  in all-antigens tables/picker but relevant=False everywhere & uncalibrated.
+- **Text/label sync (post-review):** `_pool_target_label` rewritten (Dengue→
+  "Dengue"; Orpal/IP→"Dengue · Other arbovirus (reference)"; NIBSC→"Measles /
+  Diphtheria / Rubella / Tetanus") — drives every "targets:" label. Updated stale
+  narrative in report.html (auto-select matching, calibration-tier legend,
+  Featured description, **"How to read this matrix"**) and settings.html pool-rules
+  list. Verified matrix hover now shows non-MRT VPD as "no calibrating standard".
+  NOTE: SPECIFICATION.html still has old wording — covered by the pending doc-sync
+  task.
+- **Dengue scoring preference (post-review):** `select_pool_per_antigen` now
+  prefers the *dedicated* Dengue pool over the pan-arbo Orpal/Institute Pasteur
+  pool for dengue scoring (ranking tier `dedicated` = pan-arbo pools deprioritized
+  for group=dengue; sits above R² but below params/fit_ok, so it only falls back
+  when the dedicated fit is unusable). Fixes dengue antigens getting swapped onto
+  Orpal by a marginally higher R² (e.g. DENV1_VLP). Featured still shows dengue
+  under both pools. Verified: all dengue → Dengue pool; CHIKV → Orpal (reference).
+- **Label reword:** `_pool_target_label` pan-arbo case → "Dengue & other
+  arboviruses (pan-arbovirus reference)" (plain `&`; escaped downstream).
+- 5PL (#14) remains for v0.4.0.
+
+**Text audit (report + settings + report.py strings) — done (uncommitted):**
+- ACCURACY: clean across all three files — no stale pool descriptions, no
+  premature 5PL claims (only 4PL referenced), correct card denominators,
+  standardized "Intra-/Inter-assay %CV". Phase A text sync held up.
+- TONE fixes (report.html + 2 report.py placeholders): bead "200 scattered single
+  misses" → neutral wording; Picker "Pick any… / Use this to investigate" →
+  "Select an… / This view is intended for inspecting…"; Downloads "Looking for the
+  clean analysis table? … tidy" → "Analysis-ready results table. The
+  consolidated…"; "downstream-analysis workhorse" → "primary table for downstream
+  analysis"; placeholders "start typing…" → "Search antigen, e.g. RES_Ade3"
+  (standardized); heading 'What does "Fit OK" mean?' → 'Definition of "Fit OK"'.
+- JUDGMENT: kept ✓ (pass) / ⚠ (warn) status glyphs as functional QC indicators.
+- settings.html: no changes needed. SPECIFICATION.html "tidy" wording will be
+  refreshed in the pending doc-sync task.
+
+**Bead Count section — 3 tweaks (post-review, uncommitted, verified on plate 1):**
+1. Grid x-axis wells now **sorted by plate position** (`_make_bead_heatmap`
+   reindexes matrix/tier_matrix columns via `_well_sort_key`) so re-run wells that
+   xPONENT appends at the end of the CSV (e.g. D7/G7/L24) no longer trail off the
+   right out of sequence — order is now monotonic A1→last.
+2. Top-row card reworded "Overall **cells**" → "Overall **grid cells** with bead
+   count < N" (both red & yellow cards) to clarify the denominator is the
+   well×antigen grid.
+3. New top-row card: **"Wells with ≥ 1 antigen at critically low bead count
+   (< N) — out of {bead_n_wells} wells"** (`_tier_counts` now returns `red_wells`
+   = distinct wells with any red cell; `bead_n_wells` = matrix column count). Top
+   row widened to 5 cards. Plate 1: 3 / 346 wells.
+4. **Card reorder** (post-review): wells-with-critically-low card moved to
+   FIRST; order now wells → grid cells <N (red) → grid cells N–M (yellow) →
+   antigens flagged → specimens flagged.
+
+**Full-panel VPD audit (200 antigens) — verified correct after Phase A:**
+9 VPD-group antigens. PRIORITY/featured (M/D/R/T, scoring `[vpd_nibsc,
+arbovirus]`, standard@NIBSC / reference fallback): VPD_measles_NP,
+RES_measles_lysate, VPD_Diphteria_Tox, VPD_Rub_VLP, VPD_Tetanus_Toxin,
+VPD_Tet_tox. EXCLUDED (scoring `[]`, uncalibrated, best-fit only, never
+featured): VPD_B_pertussis_FHA, VPD_Bordetella_p_Tox, VPD_N_meningitidis_B_MP.
+Sanity scan: BAC_N_meningitidis_C_CPS & RES_mumps_NP correctly not featured
+(not M/D/R/T). No missed/false matches.
+
+---
+
 Working document tracking a **new project** forked from `uvira-luminex-qc`
 (which was itself forked from the legacy `mpox-luminex-qc`). This app provides
 automated QC for **202-plex Luminex immunoassays run on a 384-well plate** for
@@ -1327,3 +1510,274 @@ Phase 7 + the build.yml macOS-runner pin.
   changes, THEN commit + tag v0.2.0 + verify CI. (User: fold SPEC/README sync
   into this final pass, not per-phase.)
 - Nothing committed since v0.1.0 — user wants a v0.2.0 build once the batch is done.
+
+## v0.3.0 — Phases 8, 9, 11 DELIVERED (uncommitted); Phase 10 → v0.4.0
+
+**STATUS:** Phases 8, 9, 11 implemented + verified (template renders, config
+round-trip passes, two-plate end-to-end on subsets). **Not committed.** Phase 10
+(5PL) deferred to **v0.4.0** at the user's request. Delivered:
+- **Phase 8:** Featured section rebuilt BY POOL (`_build_featured_grids` iterates
+  pools; each antigen fit vs that pool via `fits[pool]`; dengue under both
+  Dengue & Orpal; no-standard antigens excluded). Description rewritten.
+- **Phase 9:** Summary = one table per pool over ALL antigens
+  (`_build_summary_by_pool_all`) with a **Relevance** column (designated
+  calibrator/reference, not best-fit), relevant-first + `row-flag-relevant`
+  highlight, muted not-relevant, sortable; no-standard antigens never dropped.
+  Stale "omitted"/per-mode summary intro removed.
+- **Phase 11:** PC gains an Intra-plate %CV flag (via `cv_flag_threshold=nc_cv`);
+  PC & NC gain the Inter-assay %CV column + heading badges (parity with
+  Background). Range-problem SPECIMENS table gains a **Calibrated / best-fit**
+  count column + per-antigen pool·tier tags in the detail
+  (`n_calibrated`/`n_uncalibrated`/`detail_tagged` in `_format_range_summary`).
+  Labels standardized to **Intra-plate %CV** / **Inter-assay %CV** across
+  Background/PC/NC (no leftover "High CV"/"Dup. CV"/"High hist. CV"); descriptions
+  updated. 4PL wording left as-is (Phase 10 deferred).
+
+**Post-review fixes (from first v0.3.0 screenshots):**
+- Featured panels were miniscule on large pool sections: `vertical_spacing` was
+  a *fraction* of total height, so an 8-row (43-antigen Dengue) grid spent ~80%
+  on gaps. Now pixel-based: fixed `panel_h=165` + `gap_px=44` → `plot_area_h`
+  drives `fig_h` and `v_space=gap_px/plot_area_h`. Constant panel size for any
+  row count.
+- Range-problem specimens Antigens cell was a wall of 100+ tagged antigens.
+  Now split: calibrated antigens (few, with pool) inline; best-fit ones collapsed
+  behind a "+N best-fit (low-confidence)" expander; separate Calibrated/Best-fit
+  count columns; plain-language "What this table is" explanation added.
+  `_format_range_summary` now emits `detail_calibrated`/`detail_bestfit`.
+- **Second review round:** (a) label standardization — "Intra-plate %CV" →
+  **"Intra-assay %CV"** everywhere (parallel with Inter-assay), all cases in
+  templates + report.py. (b) Specimens table reworked from a binary
+  calibrated/best-fit (which lumped reference antigens into "calibrated" → still
+  a 38-antigen inline dump) to the report-wide **3 tiers**: Dedicated / Reference
+  / Best-fit count columns; only the **dedicated** antigens inline (the
+  trustworthy signal); Reference and Best-fit each collapsed behind an expander;
+  rewritten plain-language explanation with a worked example ("0 dedicated / 20
+  reference / 83 best-fit" = normal seronegative vs "8 dedicated / …" = real
+  problem). `_format_range_summary` now emits
+  `n_dedicated`/`n_reference`/`n_bestfit` + `detail_dedicated`/`_reference`/`_bestfit`.
+
+- **Third review round — Range-problem SPECIMENS redesigned to per-standard**
+  (`_build_range_problem_by_pool` in report.py; new template block; old
+  `range_summary.sample_*` specimens table removed). Rationale (user critical-
+  thinking): the previous whole-panel "≥20% of a well's antigens out of range"
+  metric conflated seronegativity + uncalibrated best-fit noise and was not a
+  clean range-problem signal. New design assesses **each standard pool
+  independently** and attributes the flag to a **specific standard**:
+  - **Flag** = ≥ `problem_fraction_threshold` (20%) of that pool's **dedicated**
+    antigens (cholera/typhoid vs Anti-OSP&cTxB&HlyE; dengue vs Dengue *and* vs
+    Orpal, each independently) reading BELOW/ABOVE that pool's reportable range.
+    One block per pool; a well can be flagged for one standard and not another.
+  - **Reference antigens** (arbo/VPD + no-match FLU/MAL) are **not dropped**: for
+    the reference pools (Dengue/Orpal) they are read against that reference curve
+    and shown as an informational `n_out / n_ref` context column — they never
+    drive the flag. Non-reference pools (cholera/typhoid) show no context column.
+  - Both BELOW and ABOVE shown; per-specimen dedicated antigen names listed.
+  - Count cards updated: "Specimens flagged BELOW/ABOVE" now = distinct wells
+    flagged (dedicated, any standard) via `range_problem_counts`.
+  - Verified end-to-end on the Plate-1 subset: all 5 pools render as separate
+    blocks (Anti-OSP&cTxB&HlyE, Anti-OSP&cTxB, HlyE, Dengue, Orpal); Dengue/Orpal
+    carry a 5-antigen reference-context column; example row F5 = 3/3 dengue BELOW.
+  - **OBSERVED / for discussion:** BELOW flags ~230–247 of ~250 wells per pool —
+    i.e. essentially all specimens — because seronegativity reads below range even
+    for dedicated antigens. ABOVE flagged only 5 wells (the more specific signal).
+    So the BELOW flag is near-non-discriminating; options if desired later: raise
+    threshold, emphasise/segregate ABOVE, or cross-reference bead count.
+  - Dead code left intact (low risk): `_format_range_summary` still computes the
+    now-unused sample_below/sample_above tier fields; `range_summary.n_*_samples`
+    no longer rendered. Trim in a later cleanup.
+
+- **Fourth review round — five pre-v0.3.0 notes:**
+  1. *Out-of-range detail list* — kept (user), but gained a **Standard
+     (fit against)** column: pool + calibration tier in auto-select; the neutral
+     "scoring pool (not pathogen-matched)" label in per_pool.
+     `_format_range_problems` now takes `antigen_pool` + `pool_mode`. (Its data is
+     otherwise fully in the downloadable `in_range` CSV + the Range Matrix.)
+  2. *Standard-Curve Range Matrix* — confirmed it overlays all standards (one
+     status per antigen against its matched pool; best-fit for no-standard
+     antigens). Kept, labeling strengthened: desc-box auto-select branch now says
+     it mixes standards + best-fit for no-standard antigens; in-plot legend made
+     **mode-aware** (`_make_in_range_heatmap(pool_mode=…)`): matched-standard /
+     best-fit wording in auto-select, single-scoring-pool wording in per_pool.
+  3. *PC/NC & LOO* — **no change needed.** PC/NC flags are Intra-assay %CV +
+     Inter-assay %CV + historical-IQR position; LOO (`_bg_well_outliers`) is
+     Background-only, which is correct (LOO needs ≥3 wells; controls run in
+     duplicate → %CV is the right tool). Descriptions already accurate.
+  4. *%CV thresholds editable* — they already were (`nc_cv_threshold` drives
+     PC+NC intra-assay; `hist_cv_threshold` inter-assay; `bg_cv_threshold`
+     background intra). Relabeled Settings fields to standardized "intra/inter-
+     assay %CV" wording + clarified PC/NC scope; added "editable on the Settings
+     page" notes to the Background/PC/NC report descriptions.
+  5. *DBS + cross-run gating* — per user, **hide entirely when absent, no note.**
+     DBS already gated; cross-run now wrapped in `{% if cross_run_present %}`
+     (previously always shown with an empty-state note — removed).
+  - Verified both pool modes render consistently on the Plate-1 subset.
+  - **NOTE for user:** the sandbox's saved config is `pool_mode: per_pool` (a
+    leftover); production was set to `auto_select`. All new text is mode-aware, so
+    both are correct — just confirm the app's saved setting is auto_select.
+
+- **PINNED — `per_pool` / `scoring_pool` mode (decision: LEAVE IN for now).**
+  Scoped the wiring: the only real branch point is `build_pool_map()` in
+  qc_standard_curve.py (auto_select → `select_pool_per_antigen`; per_pool → one
+  `default_scoring_pool` for all). `compute_in_range_table` /
+  `compute_concentrations` are generic (consume the pool_map, no mode branch).
+  Other mode-dependent surfaces: `_build_clean_results` (pipeline — **export
+  master is wide/per-pool ONLY in per_pool**, tidy single-pool in auto_select;
+  note `specimens_*.csv` always carries per-pool AU columns regardless of mode),
+  report.py `selected_fits` + curve-summary/all-curves blocks + a few mode-aware
+  text spots, ~7 report.html text branches, settings.html Mode select +
+  scoring_pool input, app.py POST handler, config.py DEFAULTS. **Decision:** keep
+  per_pool in (user will verify the app's saved mode = auto_select per run). All
+  report text is now mode-aware so both render correctly. If we later remove it:
+  default-and-lock the UI to auto_select + (if wanted) decouple
+  `_build_clean_results` so the clean `results` master always includes per-pool
+  RAU/status columns. → revisit at **v0.4.0**.
+
+- **App icon rebrand (ochre + wordmark).** `scripts/make_icon.py` rewritten:
+  lifts the white GDD antibody/curve motif out of the old pink logo (per-pixel
+  min-channel mask) and recomposits it on an **icddr,b classic-ochre gradient**
+  — a **single solid ochre** `OCHRE=#C67A28` (no gradient, no band). Layout:
+  **"BANGLADESH NSL" wordmark across the BOTTOM**, white, in **Century Gothic
+  (URW Gothic Demi), all-caps (no letter-spacing)**, sitting directly on the ochre;
+  the motif is cropped to its true bounding box (source had ~32% h / ~46% v
+  internal padding) and scaled at its native 1.25:1 aspect to a **medium** size
+  (`MOTIF_FILL=0.80`) in the area above the text. Text only drawn at ≥ 128 px
+  (small menu icons stay motif-only). Bundled fonts under `assets/fonts/`:
+  **URWGothic-Demi.otf** (primary, Century Gothic equivalent) + Poppins-Bold +
+  NimbusSans-Bold + LiberationSans-Bold fallbacks, so text renders reproducibly on
+  CI. Tunables at the top of make_icon.py:
+  `OCHRE`, `ICON_TEXT`, `MOTIF_FILL`, `TEXT_MIN_SIZE`. `app_icon.ico`
+  regenerated here; **`app_icon.icns` is regenerated by the CI "Generate icons"
+  step on macOS** (iconutil) — the committed .icns stays the old pink one until CI
+  builds or the script is run on a Mac. (Exact icddr,b brand hex not confirmed —
+  site is JS-rendered; hand-matched ochre in OCHRE_TOP/OCHRE_BOTTOM, easy to swap.)
+
+Docs synced (DONE, uncommitted): README.md + SPECIFICATION.md updated for
+Phase A (dedicated Dengue vs pan-arbo Institute Pasteur/Orpal; arbovirus own
+group; M/D/R/T→NIBSC w/ pan-arbo fallback; other VPDs uncalibrated; dengue
+dedicated-scoring preference), the per-standard range-problem specimens table,
+the Summary Relevance column + featured-by-pool, the 5-card Bead Count section
+(well A1→last ordering), calibration tiers, and 5PL noted as deferred (v0.4.0).
+SPECIFICATION.html + BANGLADESH_TODO.html regenerated via pandoc. Version
+strings left at 0.1.0-bangladesh (matches APP_VERSION; release decision).
+Remaining v0.3.0 pre-release: user commits + tags v0.3.0.
+(Original plan text retained below.)
+
+## Planned — v0.3.0 (original plan text) — Phase 10 now targets v0.4.0
+
+Suggested order 8 → 9 → 10 (presentation first, model last); 10 may go first if
+we want the model locked before the display rework. One phase per session with a
+check-in after each.
+
+### Phase 8 — Featured section organized BY STANDARD POOL
+Reorganize "Featured priority antigens" from per-pathogen-category grids into one
+section **per standard pool present on the plate**; each antigen is shown fit
+**against that section's pool**, so a dengue antigen appears under both Dengue and
+Orpal (both fits visible). Pool → relevant antigens (same matching logic as
+scoring):
+- Anti-OSP & cTxB & HlyE → all cholera + typhoid
+- Anti-OSP & cTxB (if separate) → cholera; HlyE (if separate) → typhoid
+- Dengue → dengue + other arboviruses + **all VPDs (reference) when no NIBSC**
+- Orpal → dengue + other arboviruses + **all VPDs (reference) when no NIBSC**
+- NIBSC (when present) → measles/diphtheria/rubella/tetanus (moved out of Dengue/Orpal)
+Keep past-plate grey overlay + Show all/Hide toggle + fixed spacing. No-standard
+antigens (FLU/malaria/…) are NOT featured (they live in the Summary + collapsed
+all-curves). Impl: rewrite `_build_featured_grids` to iterate pools, pulling each
+antigen's fit vs that pool from `fits[pool][antigen]` + that pool's history.
+**Decision:** VPDs with no NIBSC on the plate show under Dengue & Orpal (reference).
+
+### Phase 9 — Summary tables: ALL antigens + Relevance column
+One table per pool listing **every antigen** fit against that pool (all antigen ×
+pool); no-standard antigens included via best-fit, **never dropped**. New
+**Relevance** column meaning (corrected): **relevance = whether that pool is the
+DESIGNATED calibrator/reference for the antigen's pathogen — it has NOTHING to do
+with fit quality or best-fit.** Same pool→pathogen mapping as Phase 8:
+- Dengue/Orpal table → dengue, other-arbovirus, (no-NIBSC) VPD antigens = relevant;
+  cholera/typhoid/FLU/malaria/etc. = not relevant.
+- Anti-OSP & cTxB & HlyE table → cholera + typhoid = relevant; rest not relevant.
+- NIBSC table → measles/diphtheria/rubella/tetanus = relevant; rest not relevant.
+A dengue antigen is "relevant" in BOTH the Dengue and Orpal tables; FLU/malaria are
+"not relevant" in every table. Best-fit is used only for scoring/export, never for
+this flag. In each table: relevant rows sorted first + coloured, not-relevant
+muted, but every antigen's fit is listed; all columns sortable asc/desc on header
+click.
+
+### Phase 10 — 5PL model (REPLACE 4PL outright; user's choice, no 4PL fallback)
+`five_pl(x,a,b,c,d,g) = d + (a−d)/(1+(x/c)^b)^g` + `invert_5pl`. Update: fitting
+(5 params, bounds/initials for g), fit-QC, `compute_concentrations`, reportable
+range, `_linear_range_box`, all curve grids, AND the picker's JS curve function.
+History gains a `g` column; old 4-param entries read as **g=1** (5PL≡4PL) so past
+overlays still render. Non-converging 5PL → NO_FIT (as today). CAVEATS: every
+back-calculated RAU changes → prior 4PL reports/history not directly comparable;
+needs a validation pass on real plates; g can be poorly constrained on a ~7-point
+series (flagged; user chose outright replace anyway). Version the whole batch as
+**v0.3.0**.
+
+### Phase 11 — PC/NC variability parity + Range-problem specimens calibration info
+Two smaller additions (agreed):
+1. **PC & NC parity with Background on variability.** The shared
+   `_format_control_stats` already computes intra-plate %CV and inter-assay
+   (historical) %CV for PC/NC — just surface them like Background:
+   - PC: add an **intra-plate %CV** flag (across its 2 duplicate wells). NC
+     already has this as the **Dup. CV** flag.
+   - PC **and** NC: add the **High hist. CV** (inter-assay/between-plate) flag
+     column + a count card, matching Background.
+   - Do NOT add Background's well-outlier or negative-net tables to PC/NC (LOO
+     needs ≥3 wells; net-MFI is a specimen-vs-blank concept). Parity = the
+     intra + inter %CV flags and cards only.
+2. **Range-problem SPECIMENS table — calibration awareness** (a single Standard
+   column doesn't fit, since a specimen spans many antigens/pools). Instead:
+   - **Option 2 (headline):** per flagged specimen, show a count of its problem
+     antigens split **calibrated vs best-fit/uncalibrated** (e.g. "48 problem:
+     5 with a real standard, 43 best-fit"), so an all-uncalibrated flag reads as
+     low-confidence rather than a real bad well.
+   - **Option 1 (detail):** in the row's expandable "problem antigens" list, tag
+     each antigen with its pool + tier (e.g. `ARB_DENV1_NS1 (Dengue · dedicated)`,
+     `FLU_H1N1 (Orpal · best-fit)`).
+
+### Cross-cutting acceptance criteria (ALL v0.3.0 phases)
+- **Standardised labels across every section.** Use one consistent term for each
+  concept in Background, PC, NC (cards, table columns, flags, tooltips) and the
+  Summary/Featured/Range sections. Canonical terms to settle on and apply
+  everywhere:
+  - **Intra-plate %CV** (spread across a control's own wells this plate) — today
+    called "High CV" in Background and "Dup. CV" in NC → unify wording (note the
+    2-well controls' intra %CV *is* the duplicate %CV).
+  - **Inter-assay %CV** (between-plate, historical) — today "High hist. CV" →
+    unify.
+  - Calibration tiers (**dedicated standard / reference / no calibrating
+    standard**) and **relevance** (relevant / not relevant) wording identical
+    across Summary, Featured, Range-matrix hover, Range-problem tables.
+- **Descriptions kept current; no stale text.** Each phase updates the affected
+  section's description box(es), and a FINAL sweep before release removes any
+  stale/removed-feature wording. Known ones to catch:
+  - After **Phase 8**: featured description says "by pathogen category / best-fit
+    only" → change to "by standard pool".
+  - After **Phase 9**: summary description says no-standard antigens are
+    "omitted" → change to "all antigens shown, relevance-flagged".
+  - After **Phase 10**: EVERY "4PL" mention in descriptions/labels/section text
+    becomes "5PL" (and the `four_pl`→`five_pl` naming, fit-QC notes, picker text).
+  - General: remove any lingering "best-fit only" / old per_pool-default wording.
+- Regenerate `SPECIFICATION.html` / `BANGLADESH_TODO.html` (pandoc) and sync
+  SPECIFICATION.md + README as part of the pre-release docs pass.
+
+---
+
+## Home page: two independent Fit dropdowns + Past-Reports "Fit" column (v0.3.0)
+
+Split the single standard-curve-model selector into **two independent
+dropdowns**, one per action, and surfaced the model each report used:
+
+- **Generate Report** keeps its own `curve_model` dropdown (upload form).
+- **Regenerate All** now has its own `Fit` dropdown beside the button
+  (removed the hidden input + JS value-copy that mirrored the upload dropdown).
+  Choosing a model here no longer touches the Generate Report selection, and
+  vice-versa. Each defaults to the persisted Settings model.
+- The registry (`plate_registry.json`) now stores `curve_model` per plate.
+  `_register_plate` records it on upload; `regenerate_all` updates it for each
+  regenerated plate. `_list_reports` maps it to a `fit_label` (5PL / 4PL / — for
+  legacy reports generated before this change).
+- Past Reports table gained a **Fit** column showing that label.
+
+Verified: registry round-trip (update without a model keeps the stored one),
+`_list_reports` labels (5PL/4PL/—), and index.html render (two `name="curve_model"`
+selects present, hidden input gone, Fit header + cells render).

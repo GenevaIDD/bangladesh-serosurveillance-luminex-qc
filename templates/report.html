@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Reports reuse the same filename per plate; prevent the browser from showing
+     a cached copy after a report is re-generated (e.g. curve model switched). -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
 <title>Bangladesh Serosurveillance Luminex QC Report — {{ metadata.plate_id }}</title>
 <!-- Plotly.js is embedded inline on the first chart below (no CDN; works offline). -->
 <style>
@@ -152,6 +156,8 @@
   .flag-down { color: var(--flag-below-bar); font-weight: 700; }
   tr.row-flag-cv td { background: #fff4e0; }
   tr.row-flag-cv td:first-child { box-shadow: inset 3px 0 0 0 #E69F00; font-weight: 600; }
+  tr.row-flag-relevant td { background: #eafaf3; }
+  tr.row-flag-relevant td:first-child { box-shadow: inset 3px 0 0 0 #009E73; font-weight: 600; }
   .flag-cv { color: #a06a00; font-weight: 700; }
   tr.tier-red td.tier-cell { background: var(--red); color: #fff; font-weight: 600; }
   tr.tier-yellow td.tier-cell { background: var(--yellow); color: #2c3e50; font-weight: 600; }
@@ -283,19 +289,50 @@
       <li><span class="badge badge-yellow">Low Bead Count ({{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }})</span></li>
       <li><span class="badge badge-green">Adequate Bead Count (≥ {{ bead_thresholds.yellow_below }})</span></li>
     </ul>
-    The four cards summarise the matrix two ways: how many antigens have most of
-    their wells in trouble (suggests a bead-region issue), how many specimens
-    have most of their antigens in trouble (suggests a per-well aspiration /
-    volume problem), and absolute counts of red and yellow cells. An antigen or
-    specimen is flagged when ≥ {{ problem_threshold_pct }}% of its companion cells
-    fall in the red or yellow tiers. All four thresholds
-    ({{ bead_thresholds.red_below }}, {{ bead_thresholds.yellow_below }},
-    {{ problem_threshold_pct }}%, and the well-fraction cut-off) are editable on
-    the Settings page.
+    The matrix is <b>antigens (rows) × wells (columns)</b>, so each square is one
+    <b>(well × antigen)</b> bead count. The five summary cards slice it along
+    different axes — note the different denominators:
+    <ul style="margin:8px 0 0 18px; padding:0; line-height:1.6;">
+      <li><b>Wells with ≥ 1 antigen at critically low bead count</b> — counts
+        <b>wells</b> (out of the {{ bead_n_wells }} wells run) that have <b>at least
+        one</b> antigen below {{ bead_thresholds.red_below }} beads. This is the most
+        sensitive well-level indicator, as it flags a well even when only a single
+        antigen falls below the threshold; it helps identify wells that may warrant
+        review or re-running.</li>
+      <li><b>Overall grid cells &lt; {{ bead_thresholds.red_below }}</b> and
+        <b>{{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }}</b>
+        — count individual <b>grid cells</b> (well × antigen squares, out of
+        wells × antigens ≈ the whole grid) in the critically-low and low tiers.
+        These are the raw <i>magnitude</i> of low-count measurements, not a count
+        of wells or antigens.</li>
+      <li><b>Antigens flagged</b> — counts <b>antigens</b> (rows) where
+        ≥ {{ problem_threshold_pct }}% of that antigen's wells are red or yellow
+        (suggests a bead-region issue affecting many wells).</li>
+      <li><b>Specimens flagged</b> — counts <b>specimens/wells</b> (columns) where
+        ≥ {{ problem_threshold_pct }}% of that well's antigens are red or yellow
+        (suggests a per-well aspiration / volume problem).</li>
+    </ul>
+    A given number of low cells may reflect a single failed well (affecting many
+    antigens) or many isolated single-cell events; the well- and antigen-level
+    cards distinguish these cases. All thresholds
+    ({{ bead_thresholds.red_below }}, {{ bead_thresholds.yellow_below }}, and
+    {{ problem_threshold_pct }}%) are editable on the Settings page.
   </div>
   </details>
 
-  <div class="stat-row" style="grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px;">
+  <div class="stat-row" style="grid-template-columns:repeat(5, minmax(0,1fr)); gap:8px;">
+    <div class="stat {{ 'flag-on' if bead_problem_counts.red_wells else 'flag-off' }}" style="padding:10px 12px;">
+      <div class="num" style="color:var(--red);">{{ bead_problem_counts.red_wells }}</div>
+      <div class="lbl">Wells with ≥ 1 antigen at critically low bead count (&lt; {{ bead_thresholds.red_below }}) — out of {{ bead_n_wells }} wells</div>
+    </div>
+    <div class="stat {{ 'flag-on' if bead_problem_counts.red else 'flag-off' }}" style="padding:10px 12px;">
+      <div class="num" style="color:var(--red);">{{ bead_problem_counts.red }}</div>
+      <div class="lbl">Overall grid cells with bead count &lt; {{ bead_thresholds.red_below }} (critically low bead count)</div>
+    </div>
+    <div class="stat {{ 'flag-warn' if bead_problem_counts.yellow else 'flag-off' }}" style="padding:10px 12px;">
+      <div class="num" style="color:#b58900;">{{ bead_problem_counts.yellow }}</div>
+      <div class="lbl">Overall grid cells with bead count {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} (low bead count)</div>
+    </div>
     <div class="stat {{ 'flag-on' if bead_summary.n_problem_antigens else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num">{{ bead_summary.n_problem_antigens }}</div>
       <div class="lbl">Antigens flagged (≥ {{ problem_threshold_pct }}% of wells have either {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} beads or &lt; {{ bead_thresholds.red_below }} beads)</div>
@@ -303,14 +340,6 @@
     <div class="stat {{ 'flag-on' if bead_summary.n_problem_samples else 'flag-off' }}" style="padding:10px 12px;">
       <div class="num">{{ bead_summary.n_problem_samples }}</div>
       <div class="lbl">Specimens flagged (≥ {{ problem_threshold_pct }}% of antigens have either {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} beads or &lt; {{ bead_thresholds.red_below }} beads)</div>
-    </div>
-    <div class="stat {{ 'flag-on' if bead_problem_counts.red else 'flag-off' }}" style="padding:10px 12px;">
-      <div class="num" style="color:var(--red);">{{ bead_problem_counts.red }}</div>
-      <div class="lbl">Overall cells with bead count &lt; {{ bead_thresholds.red_below }} (critically low bead count)</div>
-    </div>
-    <div class="stat {{ 'flag-warn' if bead_problem_counts.yellow else 'flag-off' }}" style="padding:10px 12px;">
-      <div class="num" style="color:#b58900;">{{ bead_problem_counts.yellow }}</div>
-      <div class="lbl">Overall cells with bead count {{ bead_thresholds.red_below }}–{{ bead_thresholds.yellow_below - 1 }} (low bead count)</div>
     </div>
   </div>
 
@@ -411,7 +440,7 @@
     </div>
     <div class="stat" style="padding:10px 12px;">
       <div class="num" style="{% if bg_levels.n_high_cv %}color:#a06a00;{% endif %}">{{ bg_levels.n_high_cv }}</div>
-      <div class="lbl">High <b>intra-plate</b> Background %CV (&gt; {{ bg_cv_pct }}%)</div>
+      <div class="lbl">High <b>intra-assay</b> Background %CV (&gt; {{ bg_cv_pct }}%)</div>
     </div>
     <div class="stat" style="padding:10px 12px;">
       <div class="num" style="{% if bg_levels.n_high_hist_cv %}color:#a06a00;{% endif %}">{{ bg_levels.n_high_hist_cv }}</div>
@@ -454,20 +483,22 @@
       </li>
       <li><b>Table.</b>
         <ul style="margin:4px 0 0 16px; padding:0;">
-          <li>One row per antigen: a <b>High CV</b> flag (intra-plate); <b>n
+          <li>One row per antigen: an <b>Intra-assay %CV</b> flag; <b>n
             wells</b>; one column per Background <b>well</b> (this plate's MFI);
             the current-plate <b>Mean / SD / %CV / IQR</b> across those wells;
-            the <b>Historical mean / SD / %CV / IQR</b> across each previous
-            plate's mean; and a <b>High hist. CV</b> flag. Click any column
-            header to sort.</li>
+            the <b>Historical mean / SD / IQR</b> and <b>Inter-assay %CV</b>
+            across each previous plate's mean; and an <b>Inter-assay %CV</b>
+            flag. Click any column header to sort.</li>
           <li>SD uses n−1; %CV = SD ÷ mean × 100; IQR = Q1–Q3.</li>
-          <li><b>Two kinds of %CV variability.</b> The current-plate %CV is
-            <b>intra-plate</b> (spread across this plate's Background wells) —
-            flagged <span class="flag-cv">amber ◆</span> above {{ bg_cv_pct }}%.
-            The Historical %CV is <b>inter-assay</b> (spread of each past plate's
-            mean, i.e. run-to-run drift) — flagged <span class="flag-cv">↕</span>
-            above {{ hist_cv_pct }}% (needs ≥ 2 past plates). The two count cards
-            above summarise each.</li>
+          <li><b>Two kinds of %CV variability.</b> <b>Intra-assay %CV</b> is the
+            spread across this plate's Background wells — flagged
+            <span class="flag-cv">amber ◆</span> above {{ bg_cv_pct }}%.
+            <b>Inter-assay %CV</b> is the spread of each past plate's mean
+            (run-to-run drift) — flagged <span class="flag-cv">↕</span> above
+            {{ hist_cv_pct }}% (needs ≥ 2 past plates). The two count cards above
+            summarise each. The same two flags appear in Positive and Negative
+            Control QC. <em>Both thresholds are editable on the Settings page
+            (QC thresholds).</em></li>
           <li>Rows where this plate's mean falls outside the historical IQR are
             highlighted — <span class="flag-up">▲ orange</span> above Q3,
             <span class="flag-down">▼ blue</span> below Q1.</li>
@@ -502,16 +533,16 @@
       <table>
         <thead>
           <tr>
-            <th>Analyte</th><th>High CV<br><span style="font-weight:400;font-size:10px;">intra</span></th><th>n wells</th>
+            <th>Analyte</th><th>Intra-assay %CV<br><span style="font-weight:400;font-size:10px;">high?</span></th><th>n wells</th>
             {% for w in bg_levels.well_cols %}<th>Well {{ w }}</th>{% endfor %}
             <th>Mean</th><th>SD</th><th>%CV</th><th>IQR</th>
-            <th>Historical mean</th><th>Historical SD</th><th>Historical %CV<br><span style="font-weight:400;font-size:10px;">inter-assay</span></th><th>High hist. CV<br><span style="font-weight:400;font-size:10px;">inter</span></th><th>Historical IQR</th>
+            <th>Historical mean</th><th>Historical SD</th><th>Inter-assay %CV</th><th>Inter-assay %CV<br><span style="font-weight:400;font-size:10px;">high?</span></th><th>Historical IQR</th>
           </tr>
         </thead>
         <tbody>
           {% for r in bg_levels.rows %}
           <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% elif r.high_cv or r.has_outlier %}row-flag-cv{% endif %}{% if r.excluded %} muted{% endif %}">
-            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.high_cv %} <span class="flag-cv" title="intra-plate Background %CV above threshold">◆</span>{% endif %}{% if r.high_hist_cv %} <span class="flag-cv" title="high inter-assay (between-plate) %CV">↕</span>{% endif %}{% if r.has_outlier %} <span class="flag-cv" title="one Background well is a leave-one-out outlier — see the Background well outliers table">⚠ outlier</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.high_cv %} <span class="flag-cv" title="intra-assay Background %CV above threshold">◆</span>{% endif %}{% if r.high_hist_cv %} <span class="flag-cv" title="high inter-assay (between-plate) %CV">↕</span>{% endif %}{% if r.has_outlier %} <span class="flag-cv" title="one Background well is a leave-one-out outlier — see the Background well outliers table">⚠ outlier</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
             <td data-sort="{{ 1 if r.high_cv else 0 }}">{% if r.high_cv %}<span class="flag-cv">yes</span>{% else %}—{% endif %}</td>
             <td>{{ r.n_wells }}</td>
             {% for w in bg_levels.well_cols %}<td>{{ r.wells.get(w, "—") }}</td>{% endfor %}
@@ -621,7 +652,7 @@
     Single-point positive controls (PCs)
     are samples of known antibody status used to track inter-plate assay
     performance over time. Unlike the standards (a serial-dilution series fit to
-    a 4PL curve), these are loaded at a single nominal level — here the
+    a {{ curve_model_label }} curve), these are loaded at a single nominal level — here the
     <b>Cholera High</b> and <b>Cholera Low</b> controls, each run in
     <b>duplicate wells</b> per plate and not fit to a curve. For any given antigen
     a control should read at a roughly consistent MFI across runs; the two
@@ -647,11 +678,17 @@
       </li>
       <li><b>Per-control stats table (collapsed).</b>
         <ul style="margin:4px 0 0 16px; padding:0;">
-          <li>One row per antigen: <b>n wells</b>; one column per <b>well</b>
+          <li>One row per antigen: an <b>Intra-assay %CV</b> flag (across the
+            control's duplicate wells); <b>n wells</b>; one column per <b>well</b>
             (this plate's MFI); current <b>Mean / SD / %CV / IQR</b> across the
-            wells; <b>Historical mean / SD / %CV / IQR</b> across each past
-            plate's mean; and <b>n past plates</b>.</li>
-          <li>SD uses n−1; %CV = SD ÷ mean × 100; IQR = Q1–Q3.</li>
+            wells; <b>Historical mean / SD / IQR</b> and <b>Inter-assay %CV</b>
+            across each past plate's mean, with an <b>Inter-assay %CV</b> flag;
+            and <b>n past plates</b>. Click any column header to sort.</li>
+          <li>SD uses n−1; %CV = SD ÷ mean × 100; IQR = Q1–Q3.
+            <b>Intra-assay %CV</b> flags a control whose duplicate wells disagree
+            by &gt; {{ nc_cv_pct }}%; <b>Inter-assay %CV</b> flags run-to-run
+            drift &gt; {{ hist_cv_pct }}% (matching Background/NC).
+            <em>Both thresholds are editable on the Settings page (QC thresholds).</em></li>
           <li>Rows where this plate's mean falls outside the historical IQR are
             highlighted — <span class="flag-up">▲ orange</span> above Q3,
             <span class="flag-down">▼ blue</span> below Q1.</li>
@@ -665,27 +702,28 @@
 
   {% if pc_present %}
   {% for c in pc_controls %}
-  <h3 style="margin-top:18px;">{{ c.control }}{% if not c.on_plate %} <span style="font-weight:400; color:#7f8c8d;">(not on this plate — showing history only)</span>{% endif %}</h3>
+  <h3 style="margin-top:18px;">{{ c.control }}{% if not c.on_plate %} <span style="font-weight:400; color:#7f8c8d;">(not on this plate — showing history only)</span>{% endif %}{% if c.n_high_cv %} <span class="flag-cv" style="font-size:13px; font-weight:600;">— {{ c.n_high_cv }} intra-assay %CV flag(s)</span>{% endif %}{% if c.n_high_hist_cv %} <span class="flag-cv" style="font-size:13px; font-weight:600;">— {{ c.n_high_hist_cv }} inter-assay %CV flag(s)</span>{% endif %}</h3>
   {{ c.plot_html | safe }}
   <details style="margin-top:10px;">
     <summary><b>{{ c.control }} cross-plate stats</b> ({{ c.stats | length }} antigens) — click to expand</summary>
     <div class="scroll-tbl" style="max-height:480px;">
       <table>
         <thead><tr>
-          <th>Analyte</th><th>n wells</th>
+          <th>Analyte</th><th>Intra-assay %CV<br><span style="font-weight:400;font-size:10px;">high?</span></th><th>n wells</th>
           {% for w in c.well_cols %}<th>Well {{ w }}</th>{% endfor %}
           <th>Mean</th><th>SD</th><th>%CV</th><th>IQR</th>
-          <th>Historical mean</th><th>Historical SD</th><th>Historical %CV</th>
+          <th>Historical mean</th><th>Historical SD</th><th>Inter-assay %CV</th><th>Inter-assay %CV<br><span style="font-weight:400;font-size:10px;">high?</span></th>
           <th>Historical IQR</th><th>n past plates</th>
         </tr></thead>
         <tbody>
           {% for r in c.stats %}
-          <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% endif %}{% if r.excluded %} muted{% endif %}">
-            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+          <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% elif r.high_cv or r.high_hist_cv %}row-flag-cv{% endif %}{% if r.excluded %} muted{% endif %}">
+            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.high_cv %} <span class="flag-cv" title="high intra-assay (duplicate-well) %CV">◆</span>{% endif %}{% if r.high_hist_cv %} <span class="flag-cv" title="high inter-assay (between-plate) %CV">↕</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+            <td data-sort="{{ 1 if r.high_cv else 0 }}">{% if r.high_cv %}<span class="flag-cv">yes</span>{% else %}—{% endif %}</td>
             <td>{{ r.n_wells }}</td>
             {% for w in c.well_cols %}<td>{{ r.wells.get(w, "—") }}</td>{% endfor %}
             <td>{{ r.current_mfi }}</td><td>{{ r.current_sd }}</td><td>{{ r.current_cv }}</td><td>{{ r.current_iqr }}</td>
-            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td>{{ r.hist_cv }}</td>
+            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td{% if r.high_hist_cv %} class="flag-cv"{% endif %}>{{ r.hist_cv }}</td><td data-sort="{{ 1 if r.high_hist_cv else 0 }}">{% if r.high_hist_cv %}<span class="flag-cv">yes</span>{% else %}—{% endif %}</td>
             <td>{{ r.hist_iqr }}</td><td>{{ r.n_past }}</td>
           </tr>
           {% endfor %}
@@ -738,16 +776,20 @@
       </li>
       <li><b>Per-control stats table (collapsed).</b>
         <ul style="margin:4px 0 0 16px; padding:0;">
-          <li>One row per antigen: a <b>Dup. CV</b> flag; <b>n wells</b>; one
-            column per <b>well</b> (this plate's MFI); current <b>Mean / SD /
-            %CV / IQR</b> across the wells; <b>Historical mean / SD / %CV /
-            IQR</b> across each past plate's mean; and <b>n past plates</b>.
-            Click any column header to sort.</li>
-          <li><b>Duplicate-well outlier check.</b> Each NC control has only two
-            wells per antigen, so a mean+2SD test isn't meaningful. Instead, an
-            antigen is flagged <span class="flag-cv">amber ◆</span> when its two
-            NC wells <b>disagree by more than {{ nc_cv_pct }}% CV</b> — i.e. one
-            well is pulling the average. Sort the Dup. CV column to group them.</li>
+          <li>One row per antigen: an <b>Intra-assay %CV</b> flag; <b>n wells</b>;
+            one column per <b>well</b> (this plate's MFI); current <b>Mean / SD /
+            %CV / IQR</b> across the wells; <b>Historical mean / SD / IQR</b> and
+            <b>Inter-assay %CV</b> across each past plate's mean, with an
+            <b>Inter-assay %CV</b> flag; and <b>n past plates</b>. Click any
+            column header to sort.</li>
+          <li><b>Intra-assay %CV (duplicate-well) check.</b> Each NC control has
+            only two wells per antigen, so a mean+2SD test isn't meaningful.
+            Instead, an antigen is flagged <span class="flag-cv">amber ◆</span>
+            when its two NC wells <b>disagree by more than {{ nc_cv_pct }}%
+            CV</b> — i.e. one well is pulling the average. <b>Inter-assay %CV</b>
+            (between-plate drift, flagged <span class="flag-cv">↕</span> above
+            {{ hist_cv_pct }}%) is shown too, matching Background/PC.
+            <em>Both thresholds are editable on the Settings page (QC thresholds).</em></li>
         </ul>
       </li>
     </ul>
@@ -761,7 +803,7 @@
 
   {% if nc_present %}
   {% for c in nc_controls %}
-  <h3 style="margin-top:18px;">{{ c.control }}{% if not c.on_plate %} <span style="font-weight:400; color:#7f8c8d;">(not on this plate — showing history only)</span>{% endif %}{% if c.n_high_cv %} <span class="flag-cv" style="font-size:13px; font-weight:600;">— {{ c.n_high_cv }} duplicate-CV flag(s)</span>{% endif %}</h3>
+  <h3 style="margin-top:18px;">{{ c.control }}{% if not c.on_plate %} <span style="font-weight:400; color:#7f8c8d;">(not on this plate — showing history only)</span>{% endif %}{% if c.n_high_cv %} <span class="flag-cv" style="font-size:13px; font-weight:600;">— {{ c.n_high_cv }} intra-assay %CV flag(s)</span>{% endif %}{% if c.n_high_hist_cv %} <span class="flag-cv" style="font-size:13px; font-weight:600;">— {{ c.n_high_hist_cv }} inter-assay %CV flag(s)</span>{% endif %}</h3>
   {{ c.plot_html | safe }}
 
   {# Focused table: which antigens have disagreeing NC duplicate wells. #}
@@ -803,21 +845,21 @@
     <div class="scroll-tbl" style="max-height:480px;">
       <table>
         <thead><tr>
-          <th>Analyte</th><th>Dup. CV</th><th>n wells</th>
+          <th>Analyte</th><th>Intra-assay %CV<br><span style="font-weight:400;font-size:10px;">high?</span></th><th>n wells</th>
           {% for w in c.well_cols %}<th>Well {{ w }}</th>{% endfor %}
           <th>Mean</th><th>SD</th><th>%CV</th><th>IQR</th>
-          <th>Historical mean</th><th>Historical SD</th><th>Historical %CV</th>
+          <th>Historical mean</th><th>Historical SD</th><th>Inter-assay %CV</th><th>Inter-assay %CV<br><span style="font-weight:400;font-size:10px;">high?</span></th>
           <th>Historical IQR</th><th>n past plates</th>
         </tr></thead>
         <tbody>
           {% for r in c.stats %}
-          <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% elif r.high_cv %}row-flag-cv{% endif %}{% if r.excluded %} muted{% endif %}">
-            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.high_cv %} <span class="flag-cv" title="NC duplicate wells disagree above threshold">◆</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+          <tr class="{% if r.flag == 'above' %}row-flag-above{% elif r.flag == 'below' %}row-flag-below{% elif r.high_cv or r.high_hist_cv %}row-flag-cv{% endif %}{% if r.excluded %} muted{% endif %}">
+            <td>{{ r.analyte }}{% if r.flag == "above" %} <span class="flag-up" title="this plate above historical Q3">▲</span>{% elif r.flag == "below" %} <span class="flag-down" title="this plate below historical Q1">▼</span>{% endif %}{% if r.high_cv %} <span class="flag-cv" title="high intra-assay (duplicate-well) %CV">◆</span>{% endif %}{% if r.high_hist_cv %} <span class="flag-cv" title="high inter-assay (between-plate) %CV">↕</span>{% endif %}{% if r.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
             <td data-sort="{{ 1 if r.high_cv else 0 }}">{% if r.high_cv %}<span class="flag-cv">yes</span>{% else %}—{% endif %}</td>
             <td>{{ r.n_wells }}</td>
             {% for w in c.well_cols %}<td>{{ r.wells.get(w, "—") }}</td>{% endfor %}
             <td>{{ r.current_mfi }}</td><td>{{ r.current_sd }}</td><td>{{ r.current_cv }}</td><td>{{ r.current_iqr }}</td>
-            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td>{{ r.hist_cv }}</td>
+            <td>{{ r.hist_mean }}</td><td>{{ r.hist_sd }}</td><td{% if r.high_hist_cv %} class="flag-cv"{% endif %}>{{ r.hist_cv }}</td><td data-sort="{{ 1 if r.high_hist_cv else 0 }}">{% if r.high_hist_cv %}<span class="flag-cv">yes</span>{% else %}—{% endif %}</td>
             <td>{{ r.hist_iqr }}</td><td>{{ r.n_past }}</td>
           </tr>
           {% endfor %}
@@ -841,6 +883,14 @@
 <summary>Standard-Curve Summary</summary>
 <div class="inner">
 
+  <div class="banner" style="margin:0 0 10px; font-size:13px;">
+    <b>Curve model: {{ curve_model_name }}.</b> A single model is applied to every
+    antigen in this report. An antigen that this model cannot fit is reported as
+    <code>NO_FIT</code>; to fit it under the alternative model, re-generate the
+    plate from the home page. Historical curves from earlier plates are displayed
+    using the model under which each plate was generated.
+  </div>
+
   <div class="stat-row">
     <div class="stat {{ 'flag-warn' if range_summary.n_below_antigens else 'flag-off' }}">
       <div class="num">{{ range_summary.n_below_antigens }}</div>
@@ -850,13 +900,13 @@
       <div class="num">{{ range_summary.n_above_antigens }}</div>
       <div class="lbl">Antigens flagged ABOVE<br>(≥ {{ problem_threshold_pct }}% specimens land above the curve)</div>
     </div>
-    <div class="stat {{ 'flag-warn' if range_summary.n_below_samples else 'flag-off' }}">
-      <div class="num">{{ range_summary.n_below_samples }}</div>
-      <div class="lbl">Specimens flagged BELOW<br>(≥ {{ problem_threshold_pct }}% of their antigens land below)</div>
+    <div class="stat {{ 'flag-warn' if range_problem_counts.n_below else 'flag-off' }}">
+      <div class="num">{{ range_problem_counts.n_below }}</div>
+      <div class="lbl">Specimens flagged BELOW<br>(≥ {{ problem_threshold_pct }}% of a standard's dedicated antigens land below)</div>
     </div>
-    <div class="stat {{ 'flag-warn' if range_summary.n_above_samples else 'flag-off' }}">
-      <div class="num">{{ range_summary.n_above_samples }}</div>
-      <div class="lbl">Specimens flagged ABOVE<br>(≥ {{ problem_threshold_pct }}% of their antigens land above)</div>
+    <div class="stat {{ 'flag-warn' if range_problem_counts.n_above else 'flag-off' }}">
+      <div class="num">{{ range_problem_counts.n_above }}</div>
+      <div class="lbl">Specimens flagged ABOVE<br>(≥ {{ problem_threshold_pct }}% of a standard's dedicated antigens land above)</div>
     </div>
   </div>
 
@@ -879,8 +929,9 @@
       <li>This plate carries <b>{{ pool_selection.n_pools }}</b> control pools,
         each its own dilution series:
         <span>{{ pool_selection.pools | join(", ") }}</span>.</li>
-      <li>A 4PL is fit for <em>every antigen against every pool</em> — there is
-        <b>no</b> antigen→pool matching or auto-selection.</li>
+      <li>A {{ curve_model_label }} curve is fit for <em>every antigen against
+        every pool</em> — there is <b>no</b> antigen→pool matching or
+        auto-selection.</li>
       <li>There is one fit table per pool below (labelled with its pathogen
         targets); the All-Curves Overview shows one grid per pool.</li>
       <li>Specimen <b>RAU / range</b> are computed against a single
@@ -893,12 +944,18 @@
     {% else %}
     <b>Multiple control pools — auto-selected per antigen.</b>
     <ul style="margin:6px 0 0 18px; padding:0; line-height:1.5;">
-      <li>A 4PL is fit for every antigen against every pool
-        ({{ pool_selection.pools | join(", ") }}); each antigen is scored against
-        the pool matched to its pathogen, tie-broken by best fit.</li>
+      <li>A {{ curve_model_label }} curve is fit for every antigen against every
+        pool ({{ pool_selection.pools | join(", ") }}); each antigen is scored
+        against the pool matched to its pathogen, tie-broken by best fit.</li>
       <li>The fit tables below are grouped by the matched pool and labelled with
-        the pathogen target(s) each pool calibrates (cholera → Anti-OSP&nbsp;&amp;&nbsp;cTxB,
-        typhoid → HlyE, dengue / other arboviruses &amp; VPDs → Dengue&nbsp;/&nbsp;Orpal).</li>
+        the pathogen target(s) each pool calibrates: cholera → Anti-OSP&nbsp;&amp;&nbsp;cTxB,
+        typhoid → HlyE, <b>dengue → the Dengue pool <i>and</i> the pan-arbovirus
+        Institute&nbsp;Pasteur&nbsp;/&nbsp;Orpal pool</b>, <b>other (non-dengue)
+        arboviruses → Institute&nbsp;Pasteur&nbsp;/&nbsp;Orpal only</b>, and
+        measles&nbsp;/&nbsp;diphtheria&nbsp;/&nbsp;rubella&nbsp;/&nbsp;tetanus →
+        NIBSC (falling back to the pan-arbo pool when no NIBSC is present). Other
+        VPDs (pertussis, bordetella, meningitidis) have no calibrating standard
+        and are shown against a best-fit pool only.</li>
       <li>Switch to per-pool on the Settings page to show every pool's curve
         instead.</li>
     </ul>
@@ -908,11 +965,11 @@
   {% endif %}
 
   <details class="desc-box">
-  <summary>What does "Fit OK" mean?</summary>
+  <summary>Definition of "Fit OK"</summary>
   <div class="banner" style="margin-top:6px;">
     Each antigen's standard points are
-    fit to a 4-parameter logistic (4PL) curve. A fit is marked
-    <span class="badge badge-ok">OK</span> only when <em>all four</em>
+    fit to this report's model ({{ curve_model_name }}). A fit is marked
+    <span class="badge badge-ok">OK</span> only when <em>all</em>
     of these criteria pass:
     <ul style="margin:6px 0 0 18px; padding:0;">
       <li><b>R² ≥ 0.95</b> on log<sub>10</sub>(MFI) — the curve actually tracks the data.</li>
@@ -920,74 +977,55 @@
       <li><b>Hill slope between 0.3 and 5.0</b> — the curve isn't suspiciously flat or step-like.</li>
       <li><b>Dynamic range ≥ 3×</b> — upper-plateau MFI is at least 3× the lower-plateau MFI, so there's real signal to fit.</li>
     </ul>
-    A fit that converges but fails any of these is marked
-    <span class="badge badge-warn">FAIL</span>; the parameters are
-    still shown, but the LLOQ / ULOQ and %-in-range are unreliable.
+    The Fit-OK column has three states:
+    <ul style="margin:6px 0 0 18px; padding:0;">
+      <li><span class="badge badge-ok">OK</span> — the curve converged and passed
+        all criteria above.</li>
+      <li><span class="badge badge-warn">FAIL</span> — a curve <em>was</em> fit but
+        failed at least one criterion; its parameters are still shown, but the
+        LLOQ / ULOQ and %-in-range are unreliable.</li>
+      <li><span class="badge badge-grey">NO_FIT</span> — no curve could be fit at
+        all (no signal, too few dilution points, or the fit did not converge); the
+        parameters are blank and the antigen cannot be quantified in this report.</li>
+    </ul>
   </div>
   </details>
 
-  <p style="margin-top:14px;">
-    {% if pool_mode == "per_pool" %}
-    One row per <b>(control pool × antigen)</b> — a 4PL is fit for every antigen
-    against every pool. The <b>% in range</b> column is left blank here because
-    it is a single-pool scoring metric; specimens are scored in the Range Matrix
-    against the scoring pool.
-    {% else %}
-    One row per antigen. <b>%-in-range</b> is the fraction of specimens
-    whose MFI falls between the antigen's LLOQ and ULOQ on the 4PL.
-    {% endif %}
-  </p>
-  <div class="banner" style="margin-top:10px;">
-    Showing
-    {% if priority_is_pathogen %}the <b>{{ n_priority_antigens }}</b>
-    pathogen-priority antigens of {{ n_panel_antigens }} on the panel — the
-    cholera, dengue, typhoid, other-arbovirus and VPD antigens a standard pool
-    calibrates (antigens with no relevant standard, e.g. influenza / malaria,
-    are omitted here; set an explicit priority list on the Settings page to
-    override){% elif priority_is_all %}<b>all {{ n_priority_antigens }}</b>
-    antigens{% else %}the <b>{{ n_priority_antigens }}</b> priority antigen(s)
-    of {{ n_panel_antigens }} on the panel (set on the Settings page){% endif %}.
-    {% if pool_mode == "per_pool" %}
-    Each antigen appears once per control pool (see the <b>Pool</b> column); a
-    4PL is fit for every antigen × pool, with no matching or auto-selection. Use
-    the Standard-Curve Picker below to review any of them.
-    {% else %}
-    Each antigen is shown against its auto-selected control pool (see the
-    <b>Pool</b> column). Curves are still fit for every antigen — use the
-    Standard-Curve Picker below to review any of them.
-    {% endif %}
-  </div>
-  <p style="margin:10px 0 4px; color:#7f8c8d; font-size:13px;">
-    One fit table per <b>standard pool</b>, labelled with the pathogen target(s)
-    that pool calibrates. Click any column header to sort within a table.
+  <p style="margin:14px 0 4px; color:#7f8c8d; font-size:13px;">
+    One fit table per <b>standard pool</b>. <b>Every</b> antigen's fit against
+    that pool is listed — nothing is dropped. The <b>Relevance</b> column marks
+    whether that pool is the antigen's <b>designated</b> calibrator/reference
+    (independent of fit quality): relevant rows are shown first and highlighted,
+    other antigens (fit against this pool only as a best-fit fallback) are muted.
+    Click any column header to sort ascending/descending. (% in range is a
+    single-pool scoring metric and is omitted here.)
   </p>
   {% for grp in curve_summary_by_pool %}
   <h4 style="margin:16px 0 4px; color:#2c3e50;">
     Pool: {{ grp.pool }}
-    <span style="font-weight:400; color:#7f8c8d; font-size:13px;">— targets: {{ grp.targets }} ({{ grp.n }} antigen{{ 's' if grp.n != 1 }})</span>
+    <span style="font-weight:400; color:#7f8c8d; font-size:13px;">— targets: {{ grp.targets }} ({{ grp.n_relevant }} relevant of {{ grp.n }} antigens)</span>
   </h4>
   <div class="scroll-tbl">
     <table>
       <thead>
         <tr>
-          <th>Analyte</th><th>Fit OK</th><th>n pts</th>
+          <th>Analyte</th><th>Relevance</th><th>Fit OK</th><th>n pts</th>
           <th>a (min asym)</th><th>b (slope)</th>
-          <th>c (IC50)</th><th>d (max asym)</th>
+          <th>c (IC50)</th><th>d (max asym)</th><th>g (asym)</th>
           <th>LLOQ dil.</th><th>ULOQ dil.</th>
-          <th>% in range</th>
           <th>QC warnings</th>
         </tr>
       </thead>
       <tbody>
         {% for row in grp.rows %}
-        <tr class="{% if row.excluded %}muted{% endif %}">
+        <tr class="{% if row.excluded %}muted{% elif not row.relevant %}muted{% elif row.relevant %}row-flag-relevant{% endif %}">
           <td>{{ row.analyte }}{% if row.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
-          <td data-sort="{{ 1 if row.fit_ok else 0 }}">{% if row.fit_ok %}<span class="badge badge-ok">OK</span>{% else %}<span class="badge badge-warn">FAIL</span>{% endif %}</td>
+          <td data-sort="{{ 1 if row.relevant else 0 }}">{% if row.relevant %}<span class="badge badge-ok">relevant</span>{% else %}<span style="color:#95a5a6;">not relevant</span>{% endif %}</td>
+          <td data-sort="{{ 2 if row.fit_ok else (0 if row.no_fit else 1) }}">{% if row.fit_ok %}<span class="badge badge-ok">OK</span>{% elif row.no_fit %}<span class="badge badge-grey" title="no curve could be fit (no signal / too few points / did not converge)">NO_FIT</span>{% else %}<span class="badge badge-warn" title="curve fit but failed a QC threshold">FAIL</span>{% endif %}</td>
           <td>{{ row.n_points }}</td>
           <td>{{ row.a }}</td><td>{{ row.b }}</td>
-          <td>{{ row.c_ic50 }}</td><td>{{ row.d }}</td>
+          <td>{{ row.c_ic50 }}</td><td>{{ row.d }}</td><td>{{ row.g }}</td>
           <td>{{ row.lloq_dilution }}</td><td>{{ row.uloq_dilution }}</td>
-          <td>{{ row.pct_in_range }}</td>
           <td style="font-size:12px; color:#7f8c8d;">{{ row.qc_warnings }}</td>
         </tr>
         {% endfor %}
@@ -1004,9 +1042,11 @@
     <p style="margin:8px 0 6px; color:#7f8c8d; font-size:12px;">
       The <b>Standard</b> column shows which pool the antigen was scored against
       and its calibration tier: <b>dedicated standard</b> (cholera / typhoid /
-      dengue), <b>reference pool</b> (other arboviruses / VPDs, scored against
-      Dengue&nbsp;/&nbsp;Orpal), or <b>no calibrating standard</b> (best-fit only —
-      treat BELOW/ABOVE calls with caution).
+      dengue, or measles&nbsp;/&nbsp;diphtheria&nbsp;/&nbsp;rubella&nbsp;/&nbsp;tetanus
+      on NIBSC), <b>reference pool</b> (non-dengue arboviruses on the pan-arbovirus
+      Institute&nbsp;Pasteur&nbsp;/&nbsp;Orpal pool, plus M/D/R/T when no NIBSC is
+      present), or <b>no calibrating standard</b> (other VPDs and unmatched
+      antigens — best-fit only; treat BELOW/ABOVE calls with caution).
     </p>
     <div class="scroll-tbl">
       <table>
@@ -1037,34 +1077,58 @@
     </div>
   </details>
   {% endif %}
-  {% if range_summary.sample_below or range_summary.sample_above %}
+  {% if range_problem_by_pool %}
   <details style="margin-top:8px;">
-    <summary>Range-problem specimens (≥ {{ problem_threshold_pct }}% antigens BELOW or ABOVE) — click to expand</summary>
-    <div class="scroll-tbl">
-      <table>
-        <thead><tr><th>Status</th><th>Well</th><th>Sample</th><th>n problem</th><th>fraction</th><th>Antigens</th></tr></thead>
-        <tbody>
-          {% for r in range_summary.sample_below %}
-          <tr>
-            <td><span class="badge badge-r-below">BELOW</span></td>
-            <td>{{ r.key }}</td><td>{{ r.sample_name }}</td>
-            <td>{{ r.n_problem }}</td>
-            <td>{{ "%.1f" | format(r.frac_problem * 100) }}%</td>
-            <td style="font-size:12px;">{{ r.detail }}</td>
-          </tr>
-          {% endfor %}
-          {% for r in range_summary.sample_above %}
-          <tr>
-            <td><span class="badge badge-r-above">ABOVE</span></td>
-            <td>{{ r.key }}</td><td>{{ r.sample_name }}</td>
-            <td>{{ r.n_problem }}</td>
-            <td>{{ "%.1f" | format(r.frac_problem * 100) }}%</td>
-            <td style="font-size:12px;">{{ r.detail }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <summary>Range-problem specimens — per standard (≥ {{ problem_threshold_pct }}% of a standard's dedicated antigens BELOW or ABOVE) — click to expand</summary>
+    <div class="banner" style="margin:8px 0; font-size:13px;">
+      <b>What this table is.</b> Each block below is <b>one standard pool on the
+      plate</b>, assessed <b>independently</b>. A specimen (well) is flagged for a
+      standard when <b>≥ {{ problem_threshold_pct }}% of the antigens that standard
+      directly calibrates</b> — its <b>dedicated</b> antigens — read outside the
+      reportable range (too low = BELOW, too high = ABOVE). Assessing each standard
+      on its own tells you <b>which standard</b> the problem is under (e.g. a well
+      off against Orpal but fine against Dengue).
+      <ul style="margin:6px 0 0 18px; padding:0; line-height:1.55;">
+        <li><b>Dedicated antigens drive the flag.</b> Only cholera, typhoid and
+          dengue have a dedicated standard, so only they are trustworthy enough to
+          trigger it. Dengue is checked against the Dengue and Orpal standards
+          separately.</li>
+        <li><b>Reference antigens are shown for context, never as a trigger.</b>
+          Other arboviruses, VPDs, and the no-dedicated-standard antigens
+          (influenza, malaria, …) are read against the reference pool
+          (Dengue / Orpal) and reported as a collapsed count. A seronegative
+          sample naturally reads "below range" for antigens it has no antibodies
+          to, so these are informational only and do <b>not</b> affect the flag.</li>
+      </ul>
     </div>
+    {% for blk in range_problem_by_pool %}
+    <div style="margin-top:12px;">
+      <div style="font-weight:600;">Standard: {{ blk.pool }}{% if blk.targets %} — {{ blk.targets }}{% endif %}
+        <span style="font-weight:400; color:#7f8c8d; font-size:12px;">· {{ blk.n_flagged }} specimen(s) flagged · {{ blk.n_dedicated }} dedicated antigen(s){% if blk.n_reference %} · {{ blk.n_reference }} reference antigen(s) (context){% endif %}</span>
+      </div>
+      <div class="scroll-tbl">
+        <table>
+          <thead><tr><th>Well</th><th>Sample</th><th>Dedicated out / total</th><th># BELOW</th><th># ABOVE</th><th>Dedicated %</th><th>Dedicated antigens out of range</th>{% if blk.n_reference %}<th>Reference (context)</th>{% endif %}</tr></thead>
+          <tbody>
+            {% for r in blk.rows %}
+            <tr class="row-flag-cv">
+              <td>{{ r.well }}</td><td>{{ r.sample_id }}</td>
+              <td data-sort="{{ r.n_below + r.n_above }}"><b>{{ r.n_below + r.n_above }}</b> / {{ r.n_dedicated }}</td>
+              <td data-sort="{{ r.n_below }}">{% if r.n_below %}<span class="badge badge-r-below">{{ r.n_below }}</span>{% else %}0{% endif %}</td>
+              <td data-sort="{{ r.n_above }}">{% if r.n_above %}<span class="badge badge-r-above">{{ r.n_above }}</span>{% else %}0{% endif %}</td>
+              <td data-sort="{{ r.frac }}">{{ "%.0f" | format(r.frac * 100) }}%</td>
+              <td style="font-size:12px;">
+                {% if r.below %}<span class="badge badge-r-below">BELOW</span> {{ r.below }}{% endif %}
+                {% if r.above %}{% if r.below %}<br>{% endif %}<span class="badge badge-r-above">ABOVE</span> {{ r.above }}{% endif %}
+              </td>
+              {% if blk.n_reference %}<td style="font-size:12px; color:#95a5a6;">{{ r.n_reference_out }} / {{ r.n_reference }} out ({{ "%.0f" | format(r.frac_reference * 100) }}%)</td>{% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endfor %}
   </details>
   {% endif %}
 </div>
@@ -1077,17 +1141,28 @@
 
   <h3 style="margin:4px 0 2px;">Featured priority antigens</h3>
   <p style="margin:2px 0 8px; color:#7f8c8d; font-size:13px;">
-    The pathogen-priority antigens — <b>cholera, dengue, typhoid, diphtheria,
-    rubella, pertussis, measles, other VPDs and arboviruses</b> — each shown
-    against its <b>single best-fitting</b> calibrating pool (named in the
-    per-category heading). Cholera, dengue and typhoid use their dedicated
-    standards; other arboviruses and VPDs (no dedicated standard) use the
-    Dengue / Orpal reference pools. A 4PL is still fit for <b>every</b> antigen
-    against <b>every</b> pool on the plate — only the best-fit curve is featured
-    here; to review any other antigen × pool combination, use the collapsed
-    <b>All curve fits</b> block below or the <b>Standard-Curve Picker</b>.
-    Each panel also overlays the antigen's <b>past-plate fitted curves</b> in
-    light grey (use <b>Show all / Hide past plates</b> to toggle them).
+    Organized <b>by standard pool</b>: each section shows the antigens that pool
+    is meant to read (its dedicated targets or reference set), each fit
+    <b>against that pool</b>. Cholera → Anti-OSP&nbsp;&amp;&nbsp;cTxB, typhoid →
+    HlyE; <b>dengue → the Dengue pool <i>and</i> the pan-arbovirus
+    Institute&nbsp;Pasteur&nbsp;/&nbsp;Orpal pool</b>; <b>other (non-dengue)
+    arboviruses → Institute&nbsp;Pasteur&nbsp;/&nbsp;Orpal only</b>; and
+    measles&nbsp;/&nbsp;diphtheria&nbsp;/&nbsp;rubella&nbsp;/&nbsp;tetanus → NIBSC
+    (falling back to the pan-arbo pool when no NIBSC is on the plate). Because a
+    pathogen can have more than one pool, the same antigen may appear in more
+    than one section (e.g. a dengue antigen under both Dengue and Institute
+    Pasteur/Orpal) — that's intentional, so you can compare the fits. A
+    {{ curve_model_label }} curve is fit for <b>every</b> antigen against
+    <b>every</b> pool; antigens with no
+    calibrating standard (other VPDs such as pertussis/bordetella/meningitidis,
+    plus influenza, malaria, …) aren't featured here — see the collapsed
+    <b>All curve fits</b> block or the <b>Standard-Curve Picker</b>. Each panel overlays the antigen's
+    <b>past-plate fitted curves</b> in light grey (<b>Show all / Hide past
+    plates</b> to toggle). Each historical curve is displayed using the model under
+    which that plate was generated (4PL or 5PL); if plates were generated under
+    different models, the overlaid curves may reflect different models. Use
+    <b>Regenerate All</b> on the home page to re-generate every plate under the
+    current model for consistent comparison.
   </p>
   {{ featured_grid_html | safe }}
 
@@ -1099,7 +1174,7 @@
   <summary>How to read these curves</summary>
   <p style="margin:6px 0 0; color:#7f8c8d; font-size:13px;">
     {% if pool_mode == "per_pool" %}
-    One grid <b>per control pool</b>; within each, the 4PL fit for every antigen
+    One grid <b>per control pool</b>; within each, the {{ curve_model_label }} fit for every antigen
     against that pool (no matching/auto-selection).
     {% else %}
     One grid <b>per control pool</b> over all panel antigens — the full set
@@ -1122,7 +1197,7 @@
       <span class="badge badge-r-above">ABOVE</span>
       <span class="badge badge-r-nofit">NO_FIT</span>).</li>
     <li><b>Panels showing only dots</b> — no orange curve line and no green range
-      square — are (pool × antigen) pairs whose 4PL did not converge (the title
+      square — are (pool × antigen) pairs whose {{ curve_model_label }} fit did not converge (the title
       is orange). That is expected for a pool that doesn't calibrate the antigen:
       its dilution series is flat or noisy, so no curve can be fit.</li>
     <li>Hover any element for detail.</li>
@@ -1141,23 +1216,26 @@
 <summary>Standard-Curve Picker <span style="font-weight:400; color:#7f8c8d;">(review tool — click to expand)</span></summary>
 <div class="inner">
   <div class="banner warn" style="margin-top:0;">
-    <b>For review only.</b> Pick any <b>antigen</b> (type to search) and any
+    <b>For review only.</b> Select an <b>antigen</b> (type to search) and a
     <b>control pool</b> (dropdown) to inspect that single (pool × antigen) fit.
-    A 4PL is fit for every (pool × antigen), so <b>not every combination is
-    meaningful</b> — a pool that doesn't calibrate an antigen will fit poorly or
-    not at all. Use this to investigate a curve; draw QC conclusions only from
-    antigens scored by a relevant pool.
+    A {{ curve_model_label }} curve is fit for every (pool × antigen), so <b>not every combination is
+    meaningful</b> — a pool that does not calibrate an antigen will fit poorly or
+    not at all. This view is intended for inspecting individual curves; draw QC
+    conclusions only from antigens scored by a relevant pool.
   </div>
   <details class="desc-box">
   <summary>How to read this explorer</summary>
   <ul style="margin: 6px 0 12px 18px; padding: 0; color:#7f8c8d; font-size:13px; line-height:1.55;">
     <li><b style="color:#34495e;">Left panel</b> — the standard curve (titled with
       the selected <b>antigen × pool</b>; axes labelled dilution / MFI): this
-      plate's standards (dark dots) and 4PL fit
+      plate's standards (dark dots) and {{ curve_model_label }} fit
       (<span style="color:#D55E00;">orange</span>), the
       <span style="color:#009E73;">green square</span> reportable range,
       out-of-tolerance standards (orange ▲) and any dropped point (✕), plus any
-      past-plate fits in grey.</li>
+      past-plate fits in grey. Each historical curve is displayed using the model
+      under which that plate was generated (4PL or 5PL); use <b>Regenerate All</b>
+      to re-generate every plate under the current model for consistent
+      comparison.</li>
     <li><b style="color:#34495e;">Right panel</b> — a rug sharing the MFI axis:
       this plate's specimens in one column, coloured by status
       (<span class="badge badge-r-below">BELOW</span>
@@ -1178,6 +1256,7 @@
   </details>
   {{ curve_picker_html | safe }}
 
+  {% if cross_run_present %}
   <details style="margin-top:24px;">
     <summary><b>Cross-run MFI comparison</b> — click to expand</summary>
     <p style="margin:6px 0 8px; color:#7f8c8d; font-size:13px;">
@@ -1185,18 +1264,14 @@
       plate and a previous plate (matched on patient_id, then barcode, then
       sample name). <b>{{ cross_run_match.matched }}</b> of this plate's
       <b>{{ cross_run_match.total }}</b> specimens appear in the history.
-      {% if cross_run_present %}
       For the selected antigen, every such sample is plotted at
       (<b>this run's MFI</b>, <b>past run's MFI</b>). One series per past plate —
       click in the legend to hide / show. Points on the dotted y = x line agree
       perfectly; points above read higher on the past run, points below read lower.
-      {% else %}
-      Since that count is 0, there is nothing to plot here — expected when samples
-      are not repeated across plates.
-      {% endif %}
     </p>
-    {% if cross_run_present %}{{ cross_run_html | safe }}{% endif %}
+    {{ cross_run_html | safe }}
   </details>
+  {% endif %}
 </div>
 </details>
 
@@ -1207,11 +1282,15 @@
   <details class="desc-box">
   <summary>How to read this matrix</summary>
   <ul style="margin:6px 0 8px 18px; padding:0; line-height:1.5;">
-    <li>Each specimen × antigen cell is classified as
-      <span class="badge badge-r-below">BELOW_RANGE</span>
-      <span class="badge badge-r-in">IN_RANGE</span>
-      <span class="badge badge-r-above">ABOVE_RANGE</span>
-      <span class="badge badge-r-nofit">NO_FIT</span>.</li>
+    <li>Each specimen × antigen cell shows the specimen's MFI relative to that
+      antigen's standard-curve reportable range:
+      <span class="badge badge-r-in">IN_RANGE</span> — within the reportable range
+      (LLOQ–ULOQ); <span class="badge badge-r-below">BELOW_RANGE</span> — below the
+      LLOQ (lowest quantifiable level); <span class="badge badge-r-above">ABOVE_RANGE</span>
+      — above the ULOQ (highest quantifiable level);
+      <span class="badge badge-r-nofit">NO_FIT</span> — cannot be classified because
+      the antigen has no usable standard curve for its matched pool (its Fit-OK is
+      FAIL or NO_FIT in the Standard-Curve Summary).</li>
     <li>Antigens (rows) are frozen on the left; the top axis shows the
       <b>well location</b> only — hover any cell for the antigen, well, sample
       ID, and status. Scroll horizontally for all specimen wells.</li>
@@ -1224,9 +1303,17 @@
       auto-select on the Settings page to score each antigen against its
       pathogen-matched pool.</li>
     {% else %}
-    <li>Each antigen is scored against its <b>auto-selected control pool</b> —
-      the pool matched to the antigen's pathogen, tie-broken by best fit (see
-      the Standard-Curve Summary above for details).</li>
+    <li><b>This matrix overlays every standard in one grid.</b> Each antigen
+      (row) is scored against <b>its own matched standard</b>, so different rows
+      use different standards: <b>dedicated standard</b> for cholera / typhoid /
+      dengue (and measles / diphtheria / rubella / tetanus on NIBSC when present);
+      the pan-arbovirus <b>Institute&nbsp;Pasteur&nbsp;/&nbsp;Orpal reference</b>
+      for non-dengue arboviruses (and M/D/R/T as a fallback when no NIBSC);
+      and <b>best-fit only</b> for antigens with no calibrating standard (other
+      VPDs such as pertussis/bordetella/meningitidis, plus influenza, malaria, …)
+      — so treat those calls with care. Rows are grouped by pathogen (coloured
+      labels + dotted separators); <b>hover any cell</b> to see the exact standard
+      and tier it was calibrated against.</li>
     {% endif %}
     {% endif %}
   </ul>
@@ -1239,7 +1326,7 @@
     <div class="scroll-tbl">
       <table>
         <thead>
-          <tr><th>Status</th><th>Well</th><th>Sample</th><th>Analyte</th><th>MFI</th><th>MFI LLOQ</th><th>MFI ULOQ</th></tr>
+          <tr><th>Status</th><th>Well</th><th>Sample</th><th>Analyte</th><th>Standard (fit against)</th><th>MFI</th><th>MFI LLOQ</th><th>MFI ULOQ</th></tr>
         </thead>
         <tbody>
           {% for p in range_problems %}
@@ -1251,6 +1338,7 @@
             <td>{{ p.well }}</td>
             <td>{{ p.sample_name }}</td>
             <td>{{ p.analyte }}{% if p.excluded %} <span class="badge badge-grey">excluded</span>{% endif %}</td>
+            <td style="font-size:12px;">{{ p.standard }}<br><span style="color:#7f8c8d;">{{ p.calibration }}</span></td>
             <td>{{ p.mfi }}</td>
             <td>{{ p.mfi_lloq }}</td>
             <td>{{ p.mfi_uloq }}</td>
@@ -1287,12 +1375,13 @@
 <div class="inner">
 
   <div class="banner" style="margin-top:0;">
-    <b>Looking for the clean analysis table?</b> The tidy "results" master (one
+    <b>Analysis-ready results table.</b> The consolidated "results" master (one
     row per specimen well × antigen with RAU
     {% if pool_mode == "per_pool" %}under every control pool{% else %}from each
     antigen's selected pool{% endif %}) is the <b>results</b> sheet of the
-    <em>Export All Processed Data</em> workbook on the home page — it combines
-    every plate. The per-plate files below are the raw/QC tables for this plate.
+    <em>Export All Processed Data</em> workbook on the home page, which combines
+    every plate. The per-plate files below contain the raw and QC tables for this
+    plate only.
     <br><span style="color:#7f8c8d; font-size:13px;">The buttons below work
     whether the app is running or this report is opened as a saved file — each
     CSV is embedded in the report.</span>
@@ -1407,8 +1496,8 @@
         Full specimen table with one row per (well × antigen): raw
         <code>mfi</code>, background-subtracted <code>net_mfi</code>,
         interpolated <code>AU</code>, and the censoring flag
-        (<code>au_censored</code> ∈ {none, left, right}). The
-        downstream-analysis workhorse.
+        (<code>au_censored</code> ∈ {none, left, right}). This is the primary
+        table for downstream analysis.
       </div>
     </div>
   </div>

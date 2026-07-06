@@ -77,7 +77,9 @@ def create_app() -> Flask:
     @app.route("/")
     def index():
         reports = _list_reports(results)
-        return render_template("index.html", reports=reports, version=APP_VERSION)
+        curve_model = load_config().get("panel", {}).get("curve_model", "5pl")
+        return render_template("index.html", reports=reports, version=APP_VERSION,
+                               curve_model=curve_model)
 
     @app.route("/upload", methods=["POST"])
     def upload():
@@ -105,6 +107,19 @@ def create_app() -> Flask:
             layout_path = results / "uploads" / layout_name
             layout_file.save(layout_path)
 
+        # Home-page standard-curve model selector: apply to this batch and
+        # persist it so the choice is remembered (dropdown + Settings stay in
+        # sync, and Regenerate All then uses the same model).
+        _model = request.form.get("curve_model", "").strip().lower()
+        if _model in ("4pl", "5pl"):
+            _cfg = load_config()
+            _cfg.setdefault("panel", {})["curve_model"] = _model
+            save_config(_cfg)
+        # Effective model for this batch (dropdown choice, else saved default).
+        eff_model = _model if _model in ("4pl", "5pl") else (
+            load_config().get("panel", {}).get("curve_model", "5pl")
+        )
+
         last_report = None
         inputfile_name = inputfile_path.name if inputfile_path else None
         layout_name = layout_path.name if layout_path else None
@@ -115,6 +130,9 @@ def create_app() -> Flask:
 
             try:
                 config = load_config()
+                # Per-render standard-curve model override from the home-page
+                # selector (falls back to the saved Settings default).
+                config.setdefault("panel", {})["curve_model"] = eff_model
                 report_path = run_pipeline(
                     csv_path=csv_path,
                     output_dir=results / "reports",
@@ -132,7 +150,7 @@ def create_app() -> Flask:
                     spec_csv.rename(results / "specimens" / spec_csv.name)
 
                 # Register plate (keep CSV/inputfile/layout for regeneration)
-                _register_plate(results, plate_id, csv_name, layout_name, inputfile_name)
+                _register_plate(results, plate_id, csv_name, layout_name, inputfile_name, curve_model=eff_model)
 
                 flash(f"Report generated: {report_path.name}", "success")
 
@@ -151,7 +169,14 @@ def create_app() -> Flask:
         if not report_file.exists():
             flash("Report not found.", "error")
             return redirect(url_for("index"))
-        return send_file(report_file)
+        # Reports keep the same filename per plate, so a re-generated report
+        # (e.g. after switching the curve model) reuses the URL. Disable caching
+        # so the browser always shows the freshly generated content.
+        resp = send_file(report_file)
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
 
     @app.route("/download/report/<filename>")
     def download_report(filename):
@@ -339,6 +364,14 @@ def create_app() -> Flask:
         plate_order = [r["plate_id"] for r in registry_sorted]
 
         config = load_config()
+        # Honor the home-page standard-curve model selector for the whole batch,
+        # and persist it so the choice sticks (keeps the dropdown, Settings, and
+        # regenerated reports in sync).
+        _model = request.form.get("curve_model", "").strip().lower()
+        if _model in ("4pl", "5pl"):
+            config.setdefault("panel", {})["curve_model"] = _model
+            save_config(config)
+        eff_model = config.get("panel", {}).get("curve_model", "5pl")
         ok = 0
         errors = 0
         for entry in registry_sorted:
@@ -369,12 +402,15 @@ def create_app() -> Flask:
                 spec_csv = results / "reports" / f"specimens_{plate_id}.csv"
                 if spec_csv.exists():
                     spec_csv.rename(results / "specimens" / spec_csv.name)
+                entry["curve_model"] = eff_model
                 ok += 1
             except Exception as exc:
                 traceback.print_exc()
                 flash(f"Error regenerating {entry['plate_id']}: {exc}", "error")
                 errors += 1
 
+        # Persist the model used for each successfully regenerated plate.
+        _save_registry(results, registry_sorted)
         flash(f"Regenerated {ok} report(s)." + (f" {errors} error(s)." if errors else ""), "success" if not errors else "error")
         return redirect(url_for("index"))
 
@@ -433,11 +469,10 @@ def create_app() -> Flask:
         excluded = [line.strip() for line in excluded_raw.splitlines() if line.strip()]
         config["panel"]["excluded_analytes"] = excluded
 
-        # Priority antigens (newline-separated; empty = all antigens shown).
-        priority_raw = request.form.get("priority_antigens", "")
-        priority = [line.strip() for line in priority_raw.splitlines() if line.strip()]
-        config["panel"]["priority_antigens"] = priority
-
+        # Standard-curve model default (5pl / 4pl). This is the default the
+        # home-page selector starts from; each report can still override it.
+        cm = request.form.get("curve_model", "5pl").strip().lower()
+        config["panel"]["curve_model"] = cm if cm in ("4pl", "5pl") else "5pl"
         # Standard-curve pool mode + scoring pool.
         mode = request.form.get("pool_mode", "auto_select").strip()
         config["panel"]["pool_mode"] = mode if mode in ("per_pool", "auto_select") else "auto_select"
@@ -563,17 +598,21 @@ def _list_reports(results_dir: Path) -> list[dict]:
     specimens_dir = results_dir / "specimens"
     registry = _load_registry(results_dir)
     order_map = {r["plate_id"]: r.get("sort_order", 9999) for r in registry}
+    model_map = {r["plate_id"]: r.get("curve_model") for r in registry}
 
     reports = []
     for html_file in reports_dir.glob("QC_*.html"):
         plate_id = html_file.stem.replace("QC_", "")
         mtime = datetime.fromtimestamp(html_file.stat().st_mtime)
         spec_csv = specimens_dir / f"specimens_{plate_id}.csv"
+        _cm = (model_map.get(plate_id) or "").lower()
+        fit_label = {"5pl": "5PL", "4pl": "4PL"}.get(_cm, "—")
         reports.append({
             "plate_id": plate_id,
             "filename": html_file.name,
             "date": mtime.strftime("%Y-%m-%d %H:%M"),
             "specimen_csv": spec_csv.name if spec_csv.exists() else None,
+            "fit_label": fit_label,
             "_sort_key": (order_map.get(plate_id, 9999), -mtime.timestamp()),
         })
 
@@ -612,6 +651,7 @@ def _register_plate(
     csv_filename: str,
     layout_filename: str | None,
     inputfile_filename: str | None = None,
+    curve_model: str | None = None,
 ) -> None:
     """Add or update a plate entry in plate_registry.json."""
     registry = _load_registry(results_dir)
@@ -620,6 +660,8 @@ def _register_plate(
         existing["csv_filename"] = csv_filename
         existing["layout_filename"] = layout_filename
         existing["inputfile_filename"] = inputfile_filename
+        if curve_model:
+            existing["curve_model"] = curve_model
     else:
         registry.append({
             "plate_id": plate_id,
@@ -627,5 +669,6 @@ def _register_plate(
             "layout_filename": layout_filename,
             "inputfile_filename": inputfile_filename,
             "sort_order": len(registry),
+            "curve_model": curve_model,
         })
     _save_registry(results_dir, registry)

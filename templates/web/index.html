@@ -107,6 +107,21 @@
       (<code>{id}_r3_{Serum|DBS}</code>), so this can be left blank.</div>
     <input type="file" id="layout_file" name="layout_file" accept=".xlsx">
 
+    <label for="curve_model">Standard-curve model</label>
+    <div class="hint">The logistic model used to fit the standard curves in this
+      report. <b>5PL</b> (five-parameter logistic) is the default; its asymmetry
+      parameter reduces bias when back-calculating concentrations near an
+      asymptote. <b>4PL</b> (four-parameter logistic) is the symmetric special
+      case. A single model is applied to every antigen in the report. Historical
+      curves from earlier plates are displayed using the model under which each
+      plate was generated; for consistent cross-plate comparison, generate all
+      plates under the same model (or use <b>Regenerate All</b> below). Defaults to
+      the model selected in Settings.</div>
+    <select id="curve_model" name="curve_model" style="padding:6px 8px; border:1px solid #ddd; border-radius:4px;">
+      <option value="5pl" {{ 'selected' if curve_model != '4pl' }}>5PL — five-parameter logistic (default)</option>
+      <option value="4pl" {{ 'selected' if curve_model == '4pl' }}>4PL — four-parameter logistic</option>
+    </select>
+
     <button type="submit" id="submit-btn" class="btn btn-primary">
       Generate Report
     </button>
@@ -125,8 +140,15 @@
             title="Save the current drag-and-drop order">
       &#8597; Save Order
     </button>
-    <form method="POST" action="/regenerate-all" style="margin:0;"
-          onsubmit="return confirm('Regenerate all reports in the current order? This may take a while.')">
+    <form method="POST" action="/regenerate-all" style="margin:0; display:flex; gap:6px; align-items:center;" id="regen-form"
+          onsubmit="var m=(document.getElementById('regen-curve-model')||{}).value||'5pl'; return confirm('Regenerate all reports under the '+m.toUpperCase()+' curve model, in the current order? This may take a while.');">
+      <label for="regen-curve-model" style="font-size:12px; color:#666;">Fit</label>
+      <select name="curve_model" id="regen-curve-model"
+              title="Standard-curve model applied to every regenerated report"
+              style="padding:6px 8px; border:1px solid #ddd; border-radius:4px; font-size:13px;">
+        <option value="5pl" {{ 'selected' if curve_model != '4pl' }}>5PL</option>
+        <option value="4pl" {{ 'selected' if curve_model == '4pl' }}>4PL</option>
+      </select>
       <button type="submit" class="btn btn-warning" style="font-size: 13px; padding: 8px 16px;"
               id="regen-btn">
         &#8635; Regenerate All
@@ -136,7 +158,7 @@
 </div>
 <p style="font-size: 12px; color: #888; margin-top: 0;">
   {{ reports | length }} plate{{ 's' if reports | length != 1 }} processed.
-  Drag rows to reorder, then click <strong>Save Order</strong>. Click <strong>Regenerate All</strong> to rebuild all reports and history plots in the saved order.
+  Drag rows to reorder, then click <strong>Save Order</strong>. Click <strong>Regenerate All</strong> to rebuild all reports and history plots in the saved order, using the <strong>Fit model chosen beside that button</strong>. This is independent of the model selected for <strong>Generate Report</strong> above. The <strong>Fit</strong> column shows the model each report was last generated under.
 </p>
 <table>
   <thead>
@@ -144,6 +166,7 @@
       <th style="width:28px;"></th>
       <th>Plate ID</th>
       <th>Generated</th>
+      <th title="Standard-curve model this report was generated under">Fit</th>
       <th>Report</th>
       <th>Specimens</th>
       <th></th>
@@ -155,6 +178,7 @@
       <td class="drag-handle" title="Drag to reorder">&#9776;</td>
       <td>{{ r.plate_id }}</td>
       <td>{{ r.date }}</td>
+      <td>{{ r.fit_label }}</td>
       <td>
         <a href="/report/{{ r.filename }}" target="_blank">View</a>
         &nbsp;|&nbsp;

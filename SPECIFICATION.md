@@ -6,16 +6,17 @@ editor_options:
 
 # Bangladesh Serosurveillance Luminex QC Tool — Specification
 
-# Version 0.1.0-bangladesh
+# Version 0.3.0-bangladesh
 
 ## Overview
 
 Standalone QC tool for the Bangladesh National Serosurveillance
 **202-plex** Luminex immunoassay, run on a Luminex **Intelliflex** in
 **High PMT** mode on a **384-well** plate. It parses the xPONENT
-plate-result CSV, classifies wells, fits 4PL standard curves per
-(control pool × antigen), scores specimens against each antigen's
-calibrating pool, and renders a self-contained interactive HTML report.
+plate-result CSV, classifies wells, fits logistic standard curves
+(**5PL** by default, or **4PL**; chosen per report) per (control pool ×
+antigen), scores specimens against each antigen's calibrating pool, and
+renders a self-contained interactive HTML report.
 Distributed as a macOS `.app` / Windows `.exe` (no Python or internet
 required).
 
@@ -54,14 +55,14 @@ PC samples carry the pool label and dilution in the name.
 -   **single-point** controls (e.g. `Cholera High/Low`) — flagged, not
     fit; shown as reference markers.
 
-A 4PL is fit per (pool × antigen) using that pool's own series. Pools
+A logistic curve (5PL default / 4PL) is fit per (pool × antigen) using that pool's own series. Pools
 observed in the pilots: `Anti-OSP & cTxB pool`,
 `Anti-OSP & cTxB & HlyE pool`, `Dengue pool`, `Orpal pool`, `HlyE`,
 `Cholera High/Low`.
 
 ### Antigen → pool scoring (`panel.pool_mode`)
 
-A 4PL is fit per (pool × antigen) regardless of mode. How specimens are
+A logistic curve (per `panel.curve_model`) is fit per (pool × antigen) regardless of pool mode. How specimens are
 then scored (RAU / range) is set by `panel.pool_mode`:
 
 - **`auto_select` (default)** — each antigen is scored against its
@@ -80,27 +81,40 @@ then scored (RAU / range) is set by `panel.pool_mode`:
     (`panel.pool_assignment_rules`) → keyword match → best-fit fallback.
     All matches are YAML-overridable.
 
-    Category → scoring-pool map: **cholera** (`CHO_` prefix,
-    `CtxB`/`Inaba`/`Ogawa`/`cholera`/`vibrio`) → `osp`/`ctxb`/`cholera`
-    pools; **typhoid** (`HlyE`/`typhi`) → `hlye` pools; **dengue**
-    (`DENV`+digit or `DENGUE` — the digit avoids matching e.g. "DENVer") →
-    `dengue`/`orpal` pools; **other arboviruses** (`ARB_` prefix) and
-    **VPDs** (`VPD_` prefix, plus `RES_measles_lysate`) have no dedicated
-    standard and default to the **Dengue / Orpal** reference pools.
+    Antigen → scoring-group map (`_antigen_scoring_groups`): **cholera**
+    (`CHO_` prefix, `CtxB`/`Inaba`/`Ogawa`/`cholera`/`vibrio`) → `[cholera]`;
+    **typhoid** (`HlyE`/`typhi`) → `[typhoid]`; **dengue** (`DENV`+digit or
+    `DENGUE` — the digit avoids matching e.g. "DENVer") → `[dengue]`; **other
+    (non-dengue) arboviruses** (`ARB_` prefix) → `[arbovirus]`; **measles /
+    diphtheria / rubella / tetanus** VPDs (plus `RES_measles_lysate`) →
+    ordered `[vpd_nibsc, arbovirus]`; **all other VPDs** (`VPD_` pertussis /
+    bordetella / meningitidis, …) → `[]` (excluded from matching).
 
-    **NIBSC standard (measles / diphtheria / rubella / tetanus).** These four
-    VPD groups use an ordered *preferred → fallback* candidate list
-    (`_antigen_scoring_groups`): they prefer a pool whose name contains
-    **`NIBSC`** when one is on the plate, and fall back to the Dengue/Orpal
-    reference otherwise. Pertussis / meningitis stay on the reference (not
-    NIBSC). If the real NIBSC pool name lacks "NIBSC", route it with a
-    `pool_assignment_rules` entry.
+    Pool → scoring-group map (`_pool_groups`): a pool named `dengue` →
+    `{dengue}`; a **pan-arbovirus** pool named `orpal` / `pasteur` /
+    `institut` → `{dengue, arbovirus}`; `osp`/`ctxb`/`cholera` → `{cholera}`;
+    `hlye` → `{typhoid}`; `nibsc` → `{vpd_nibsc}`. An antigen is relevant to
+    (and featured under) a pool when its group intersects the pool's groups.
+
+    Consequences: **dengue** is fit against both the dedicated **Dengue** pool
+    and the pan-arbovirus **Institute Pasteur / Orpal** pool, but **prefers
+    the dedicated Dengue pool for scoring** — `select_pool_per_antigen` adds a
+    `dedicated` ranking tier (above R², below `params`/`fit_ok`) that
+    deprioritizes the pan-arbo pool for `dengue`, so it only falls back there
+    if the dedicated fit is unusable. **Other arboviruses** are relevant only
+    to the pan-arbo pool. **M/D/R/T** prefer a `NIBSC` pool when present, else
+    the pan-arbo reference. **All other VPDs** have no calibrating standard:
+    best-fit pool only, never marked relevant / featured (still viewable in
+    the Picker and per-pool tables). If a real NIBSC pool name lacks "NIBSC",
+    route it with a `pool_assignment_rules` entry.
 
     **Calibration tier** (`antigen_calibration`, exported per specimen):
     `standard` = cholera/typhoid/dengue, or a NIBSC-matched
-    measles/diphtheria/rubella/tetanus; `reference` = other arbovirus/VPD
-    scored against Dengue/Orpal; `uncalibrated` = no pathogen match (best-fit
-    RAU kept but flagged — not quantitative).
+    measles/diphtheria/rubella/tetanus; `reference` = a non-dengue arbovirus
+    on the pan-arbo pool, or an M/D/R/T VPD on the pan-arbo fallback (no
+    NIBSC); `uncalibrated` = no calibrating standard (other VPDs, and any
+    antigen with no pathogen match — best-fit RAU kept but flagged, not
+    quantitative).
 - **`per_pool`** — "fit every pool × antigen, no matching." RAU and range
   status use a single **scoring pool** (`panel.scoring_pool`, or the pool
   with the most `fit_ok` antigens). No per-antigen pool matching. The
@@ -122,14 +136,30 @@ strictly before the current plate. If no header datetime parses,
 `run_datetime_ok` is false and the report shows a visible warning banner;
 ordering degrades gracefully rather than crashing.
 
-## 4PL model & fit QC (`qc_standard_curve.py`)
+## Curve model & fit QC (`qc_standard_curve.py`)
 
-`y = d + (a − d) / (1 + (x/c)^b)`, fit on log10(MFI). `fit_ok` requires:
-R² ≥ 0.95, IC50 within tested range (×3 margin), 0.3 ≤ Hill ≤ 5.0,
-dynamic range ≥ 3×. Optional leave-one-out single-outlier retry.
-`reportable_range` (LLOQ/ULOQ dilution + MFI) comes from a
-±`recovery_tolerance` (default 0.30) Obs/Exp check and drives the
-linear-range square and range classification.
+Two logistic models, selected per report via `panel.curve_model` (default
+`5pl`; the home page sets it per render, Settings sets the default). The home
+page exposes **two independent selectors** — one on the **Generate Report** form
+and one beside **Regenerate All** — each defaulting to the saved Settings model;
+the chosen model is persisted to the plate registry per plate and surfaced as a
+**Fit** column in the Past Reports table:
+
+- **5PL** (default): `y = d + (a − d) / (1 + (x/c)^b)^g` — the asymmetry `g`
+  (bounded 0.1–10; `g = 1` ≡ 4PL) lets the two ends approach their asymptotes at
+  different rates, reducing back-calculation bias near an asymptote.
+- **4PL**: `y = d + (a − d) / (1 + (x/c)^b)`.
+
+Both are fit on log10(MFI). A report uses **one model throughout** — there is no
+per-antigen fallback; an antigen the chosen model cannot fit is `NO_FIT` for that
+report (re-render under the other model to try it). `fit_ok` requires: R² ≥ 0.95,
+IC50 within tested range (×3 margin), 0.3 ≤ Hill ≤ 5.0, dynamic range ≥ 3×.
+Optional leave-one-out single-outlier retry. `reportable_range` (LLOQ/ULOQ
+dilution + MFI) comes from a ±`recovery_tolerance` (default 0.30) Obs/Exp check
+and drives the linear-range square and range classification. `curve_eval` /
+`curve_invert` dispatch on parameter count (5 → 5PL, else 4PL); the fitted
+`model` and `g` are stored per fit and in history, so past-plate overlays are
+drawn under the model each plate was generated with.
 
 ## Report sections (in order)
 
@@ -143,11 +173,15 @@ datetime & ordering* below).
     placed between PC/standard and NC), NC, Specimen, Background, Antigens;
     shape-coded 384 plate map (freeze-pane scroll, hover = well/sample/type).
 2.  **Bead Count** — a collapsed **"How the Bead-Count Matrix works"**
-    description box above the cards; flagged-antigen/specimen + red/yellow
-    cell cards; a mechanics note (hover contents, sticky row/column, group
+    description box above **five summary cards**: wells with ≥ 1 antigen at
+    critically-low count (out of the wells run), critically-low (\<
+    `bead_count_min`) and low grid-cell counts, and flagged antigens /
+    specimens; a mechanics note (hover contents, sticky row/column, group
     separators); freeze-pane antigen × well tier heatmap (RED \<
-    `bead_count_min`, YELLOW \< `bead_count_warn`, else GREEN). Antigen flag
-    denominator = all wells; specimen flag denominator = specimen wells.
+    `bead_count_min`, YELLOW \< `bead_count_warn`, else GREEN) with **wells
+    ordered by plate position (A1 → last)** so re-run wells appended to the CSV
+    stay in sequence. Antigen flag denominator = all wells; specimen flag
+    denominator = specimen wells.
 3.  **Background QC** — info cards (counts of high **intra-plate** %CV and
     high **inter-assay** %CV antigens); a fixed-width, horizontally-scrolling
     cross-plate overview with a **two-view toggle** (see *Control overviews*
@@ -169,18 +203,22 @@ datetime & ordering* below).
     MFIs + %CV (or a "✓ none" line) when the wells disagree by \>
     `nc_cv_threshold`.
 4.  **Standard-Curve Summary** — count cards; **one sortable fit table per
-    standard pool**, each labelled with the pathogen target(s) it calibrates,
-    with 4PL params, LLOQ/ULOQ, % in range. By default shows only the
-    **pathogen-priority** antigens (those a standard/reference calibrates);
-    no-standard antigens (FLU/malaria/…) are omitted here.
-5.  **All-Curves Overview** — **featured priority antigens** at the top,
-    grouped by pathogen category, each shown against its **single best-fit**
-    calibrating pool (named + calibration tier in the heading), with the
-    antigen's **past-plate fitted curves overlaid in light grey** and a
-    **Show all / Hide past plates** toggle (shown by default); then a collapsed
-    block with one grid per pool over all antigens. A 4PL is fit for every
-    antigen × every pool regardless; only the best-fit curve is featured.
-    Interactive small-multiples when ≤ 48 panels, else static.
+    standard pool** over **all** antigens, each labelled with the pathogen
+    target(s) it calibrates, with the model's params (a, b, c, d, and g for 5PL)
+    and LLOQ/ULOQ. A banner states the report's curve model. Each row carries a
+    **Relevance** column (checked when that pool is the antigen's designated
+    calibrator/reference); relevant rows sort first, and the rest stay visible
+    so every antigen × pool fit can be inspected.
+5.  **All-Curves Overview** — **featured priority antigens** organized **by
+    standard pool** (one section per pool, labelled with its pathogen
+    target(s)); each section shows the antigens relevant to that pool, **each
+    fit against that pool** — so a dengue antigen appears under both the Dengue
+    and the pan-arbo Institute Pasteur / Orpal sections. Each panel overlays
+    the antigen's **past-plate fitted curves in light grey** with a **Show all
+    / Hide past plates** toggle. Antigens with no calibrating standard are not
+    featured. A collapsed block then shows one grid per pool over all antigens
+    (a curve is fit for every antigen × every pool regardless). Interactive
+    small-multiples when ≤ 48 panels, else static.
 6.  **Standard-Curve Picker** — folded; type to inspect any antigen; the panel
     is **titled with the selected antigen × pool**; curve + rug on a shared
     y-range; **X = "Standard dilution (1:x)", Y = "MFI (log scale)"**; rug
@@ -188,12 +226,18 @@ datetime & ordering* below).
     nearest-past → oldest**; past-plate rug coloured by range status (higher
     transparency); cross-plate overlays.
 7.  **Standard-Curve Range Matrix** — freeze-pane specimen × antigen status;
-    each cell is the specimen's status vs **its antigen's matched standard**,
-    and the **cell hover names that calibrating pool + tier** (uncalibrated
-    antigens are best-fit — hover makes this explicit); antigen rows grouped
-    and colour-labelled by pathogen (dotted separators + legend); the folded
-    **Range-problem antigens** table carries a **Standard** column (matched
-    pool + calibration tier); folded **Serum-vs-DBS** scatter.
+    each cell is the specimen's status vs **its antigen's matched standard**
+    (dengue vs the dedicated Dengue pool; uncalibrated antigens vs a best-fit
+    pool), and the **cell hover names that calibrating pool + tier** (making
+    the best-fit / "no calibrating standard" cases explicit); antigen rows
+    grouped and colour-labelled by pathogen (dotted separators + legend). The
+    folded **Range-problem antigens** table carries a **Standard** column
+    (matched pool + tier). The **Range-problem specimens** table is computed
+    **per standard pool** — a well is flagged for a pool when ≥
+    `problem_fraction_threshold` of that pool's **dedicated** antigens read out
+    of range (reference antigens shown as context only). An **Out-of-range
+    detail list** gives every out-of-range cell (MFI vs LLOQ/ULOQ) with its
+    Standard. Folded **Serum-vs-DBS** scatter.
 8.  **Downloads**.
 
 ### Control overviews (Background / PC / NC) — two views
@@ -235,8 +279,8 @@ Master **Export All (.xlsx)**: `results`, `specimens`,
 
 ## Settings (`config.yaml`)
 
-Well-classification patterns; priority antigens (blank = pathogen-priority
-set); `panel.pool_mode` / `scoring_pool` / `pool_assignment_rules` /
+Well-classification patterns; `panel.curve_model` (5pl default / 4pl);
+`panel.pool_mode` / `scoring_pool` / `pool_assignment_rules` /
 `pool_antigen_overrides`; excluded analytes; `bead_count_min` /
 `bead_count_warn`; `problem_fraction_threshold`; `bg_cv_threshold`;
 `bg_max_mfi` (default 300, dashed reference line); `nc_cv_threshold`
@@ -252,7 +296,7 @@ used in the RAU calculation).
 -   `classify.py` — well classification + pool/dilution parsing.
 -   `qc_beads.py` — bead-count tiers + problem summaries.
 -   `qc_background.py` — per-antigen background spread + IQR.
--   `qc_standard_curve.py` — 4PL fit, pool selection, RAU, range table.
+-   `qc_standard_curve.py` — 5PL/4PL fit, pool selection, RAU, range table.
 -   `qc_nc.py` — NC well levels.
 -   `qc_history.py` / `pipeline.py` — cross-plate history +
     orchestration.
@@ -262,7 +306,10 @@ used in the RAU calculation).
 
 ## Deferred / in development
 
-Formal Background pass/fail flagging; deeper NC-level QC (thresholds,
-drift); PC replicate variability; full-panel picker performance;
-confirmation of the exact pool → priority-antigen mapping by the lab
-team.
+Formal Background / PC / NC pass/fail flagging; deeper NC-level QC (thresholds,
+drift); full-panel picker performance; cross-plate sample-ID matching (needs a
+master list). (The **5PL curve model** is now implemented — default, with a 4PL
+option, per report — see *Curve model & fit QC* above. The pool →
+relevant-antigen mapping is fixed: dedicated Dengue pool vs pan-arbovirus
+Institute Pasteur / Orpal reference; NIBSC for measles / diphtheria / rubella /
+tetanus with a pan-arbo fallback; other VPDs uncalibrated.)

@@ -13,7 +13,7 @@ default.
 
 from __future__ import annotations
 
-APP_VERSION = "0.1.0-bangladesh"
+APP_VERSION = "0.3.0-bangladesh"
 
 RESULTS_DIR_NAME = "bangladesh-serosurveillance-luminex-qc-results"
 
@@ -157,17 +157,18 @@ DEFAULTS = {
         # keyed by name in the xPONENT export.
         "antigens": [{"name": a, "bead_region": None} for a in ANTIGENS],
         "excluded_analytes": list(EXCLUDED_ANALYTES),
-        # Priority antigens whose standard curves are meant to be
-        # interpreted. Empty list = all antigens (default). Curves are
-        # still fit for every antigen; this only filters the display in
-        # the Standard Curve Summary / All Curves Overview (Section 5).
-        "priority_antigens": [],
         # How standard curves are presented/scored:
         #   "auto_select" — pick one calibrating pool per antigen (pathogen
         #                   name match, tie-broken by best fit). DEFAULT.
         #   "per_pool"    — fit & show a curve for EVERY (pool × antigen);
         #                   no antigen→pool matching or auto-selection.
         "pool_mode": "auto_select",
+        # Standard-curve model: "5pl" (five-parameter logistic, DEFAULT — the
+        # extra asymmetry parameter reduces back-calculation bias near an
+        # asymptote) or "4pl". A report uses ONE model throughout (no per-antigen
+        # fallback); an antigen the chosen model cannot fit is left NO_FIT for
+        # that report. Set per report from the home page; this is the default.
+        "curve_model": "5pl",
         # In per_pool mode, the single pool used to compute specimen RAU /
         # range status (Range Matrix, clean results). Blank = first pool.
         "scoring_pool": "",

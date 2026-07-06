@@ -27,12 +27,12 @@ def _with_temp_config(fn):
 
 
 def test_pool_matching_config_roundtrips():
-    """priority_antigens / pool_mode / scoring_pool / pool_assignment_rules /
+    """curve_model / pool_mode / scoring_pool / pool_assignment_rules /
     pool_antigen_overrides survive save→load→save (incl. a regex with a comma)."""
     def body(_path):
         cfg = S.load_config()  # defaults (no user file yet)
         panel = cfg.setdefault("panel", {})
-        panel["priority_antigens"] = ["ARB_DENV1_VLP", "CHO_CtxB", "BAC_S.typhi_HlyE"]
+        panel["curve_model"] = "4pl"
         panel["pool_mode"] = "auto_select"
         panel["scoring_pool"] = "Dengue pool"
         # Rules include a regex with a comma ({1,2}) — must survive intact
@@ -47,7 +47,7 @@ def test_pool_matching_config_roundtrips():
         S.save_config(cfg)
         reloaded = S.load_config()
         rp = reloaded["panel"]
-        assert rp["priority_antigens"] == panel["priority_antigens"]
+        assert rp["curve_model"] == "4pl"
         assert rp["pool_mode"] == "auto_select"
         assert rp["scoring_pool"] == "Dengue pool"
         assert rp["pool_assignment_rules"] == panel["pool_assignment_rules"]
@@ -57,7 +57,7 @@ def test_pool_matching_config_roundtrips():
         before = copy.deepcopy(rp)
         S.save_config(reloaded)
         again = S.load_config()["panel"]
-        for k in ("priority_antigens", "pool_mode", "scoring_pool",
+        for k in ("curve_model", "pool_mode", "scoring_pool",
                   "pool_assignment_rules", "pool_antigen_overrides"):
             assert again[k] == before[k], f"round-trip changed {k}"
 

@@ -1,4 +1,9 @@
-"""4-parameter logistic (4PL) curve fitting for PC standard curves."""
+"""Logistic standard-curve fitting for PC standard curves.
+
+Supports both the 5-parameter (5PL, default) and 4-parameter (4PL) logistic
+models, selected per report via ``panel.curve_model``. A report uses a single
+model throughout; ``curve_eval`` / ``curve_invert`` dispatch on parameter count.
+"""
 
 from __future__ import annotations
 
@@ -41,6 +46,47 @@ def invert_4pl(y, a, b, c, d):
     return result
 
 
+def five_pl(x, a, b, c, d, g):
+    """5PL model: y = d + (a - d) / (1 + (x / c)^b)^g
+
+    Same a (min asymptote), b (Hill slope), c (inflection), d (max asymptote)
+    as :func:`four_pl`, plus **g** — the asymmetry factor. ``g = 1`` reduces
+    exactly to the 4PL; g ≠ 1 lets the two ends of the curve approach their
+    asymptotes at different rates (common for wide-dynamic-range Luminex
+    curves), reducing back-calculation bias near an asymptote.
+    """
+    return d + (a - d) / (1.0 + (x / c) ** b) ** g
+
+
+def invert_5pl(y, a, b, c, d, g):
+    """Invert the 5PL to get x (dilution) from y (MFI).
+
+    x = c · ( ((a - d) / (y - d))^(1/g) − 1 )^(1/b).  NaN outside the curve
+    range.
+    """
+    y = np.asarray(y, dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        base = (a - d) / (y - d)
+        inner = np.where(base > 0, base ** (1.0 / g) - 1.0, np.nan)
+        valid = inner > 0
+        result = np.full_like(y, np.nan)
+        result[valid] = c * inner[valid] ** (1.0 / b)
+    return result
+
+
+def curve_eval(params, x):
+    """Evaluate the fitted curve at ``x``. Dispatches on parameter count:
+    5 params → 5PL, otherwise 4PL. ``params`` may be a tuple/list/ndarray."""
+    return five_pl(x, *params) if len(params) == 5 else four_pl(x, *params)
+
+
+def curve_invert(params, y):
+    """Invert the fitted curve at MFI ``y`` → dilution. 5 params → 5PL,
+    otherwise 4PL."""
+    return invert_5pl(y, *params) if len(params) == 5 else invert_4pl(y, *params)
+
+
 def fit_standard_curves(
     df: pd.DataFrame,
     config: dict | None = None,
@@ -68,6 +114,11 @@ def fit_standard_curves(
         antigens = get_antigen_names(config)
     recovery_tolerance = get_qc_thresholds(config).get("recovery_tolerance", RECOVERY_TOLERANCE)
     drop_outlier = get_qc_thresholds(config).get("drop_outlier", True)
+    # Curve model for this render — one model for the whole report (5pl default,
+    # or 4pl). No per-antigen fallback.
+    curve_model = (config or {}).get("panel", {}).get("curve_model", "5pl")
+    if curve_model not in ("4pl", "5pl"):
+        curve_model = "5pl"
 
     pc = df[df["well_type"] == "pc"].copy()
 
@@ -127,7 +178,8 @@ def fit_standard_curves(
                 }
                 continue
 
-            params, fit_ok, error, qc_warnings = _fit_one(x, y, x_min=x.min(), x_max=x.max())
+            params, fit_ok, error, qc_warnings = _fit_one(
+                x, y, x_min=x.min(), x_max=x.max(), model=curve_model)
 
             dropped_point = None
 
@@ -136,7 +188,7 @@ def fit_standard_curves(
             # params is None the curve either had no signal or scipy
             # didn't converge; dropping a point won't rescue it.
             if drop_outlier and params is not None and not fit_ok and len(x) >= 6:
-                best = _try_drop_one_outlier(x, y, x_min=x.min(), x_max=x.max())
+                best = _try_drop_one_outlier(x, y, x_min=x.min(), x_max=x.max(), model=curve_model)
                 if best is not None:
                     params, fit_ok, error, qc_warnings, drop_idx = best
                     dropped_point = {"dilution": x[drop_idx], "mfi": y[drop_idx], "index": int(drop_idx)}
@@ -156,6 +208,7 @@ def fit_standard_curves(
 
             pool_results[analyte] = {
                 "params": params,
+                "model": curve_model,
                 "fit_ok": fit_ok,
                 "std_data": adata,
                 "mean_data": means,
@@ -172,11 +225,15 @@ def fit_standard_curves(
     return all_fits
 
 
-def _fit_one(x, y, x_min=None, x_max=None):
-    """Fit 4PL to a single analyte's standard curve.
+def _fit_one(x, y, x_min=None, x_max=None, model="5pl"):
+    """Fit the standard curve for a single analyte using ``model``.
+
+    ``model`` is ``"5pl"`` (default) or ``"4pl"``. The whole report uses a
+    single model — there is **no** cross-model fallback: if the requested model
+    does not fit, ``params`` is None (the antigen is NO_FIT for that render).
 
     Returns (params, fit_ok, error, warnings) where:
-    - params: (a, b, c, d) tuple or None
+    - params: ``(a, b, c, d)`` for 4PL, ``(a, b, c, d, g)`` for 5PL, or None
     - fit_ok: True only if fit converges AND passes quality checks
     - error: error message if fit failed or quality check failed
     - warnings: list of quality warnings (may be non-empty even if fit_ok)
@@ -204,12 +261,6 @@ def _fit_one(x, y, x_min=None, x_max=None):
     c_init = float(np.median(x))  # inflection point (IC50)
     b_init = 1.0  # Hill slope
 
-    p0 = [a_init, b_init, c_init, d_init]
-    bounds = (
-        [0, 0.1, 1, 0],            # lower bounds (a, b, c, d)
-        [np.inf, 10, 1e6, np.inf]  # upper bounds
-    )
-
     # Fit on log10(MFI) so that the noise floor and the high-signal upper
     # plateau contribute comparably to the residuals. A linear-residual
     # fit lets the upper plateau (~10⁵ MFI) dominate, so the optimizer
@@ -219,24 +270,30 @@ def _fit_one(x, y, x_min=None, x_max=None):
     Y_FLOOR = 1.0  # MFI floor to keep log defined for occasional zeros
     log_y = np.log10(np.maximum(y, Y_FLOOR))
 
-    def _four_pl_log(xx, a_, b_, c_, d_):
-        return np.log10(np.maximum(four_pl(xx, a_, b_, c_, d_), Y_FLOOR))
+    if model == "4pl":
+        p0 = [a_init, b_init, c_init, d_init]
+        bounds = ([0, 0.1, 1, 0], [np.inf, 10, 1e6, np.inf])  # a, b, c, d
+    else:  # 5pl: add the asymmetry parameter g, bounded [0.1, 10] (g=1 ≡ 4PL)
+        p0 = [a_init, b_init, c_init, d_init, 1.0]
+        bounds = ([0, 0.1, 1, 0, 0.1], [np.inf, 10, 1e6, np.inf, 10])
+
+    def _curve_log(xx, *p):
+        return np.log10(np.maximum(curve_eval(p, xx), Y_FLOOR))
 
     try:
-        popt, _ = curve_fit(
-            _four_pl_log, x, log_y, p0=p0, bounds=bounds, maxfev=10000
-        )
+        popt, _ = curve_fit(_curve_log, x, log_y, p0=p0, bounds=bounds, maxfev=10000)
     except Exception as e:
         return None, False, str(e), []
 
-    a, b, c, d = popt
+    a, b, c, d = popt[0], popt[1], popt[2], popt[3]
 
-    # --- Fit quality checks ---
+    # --- Fit quality checks (same criteria for 4PL and 5PL; the 5PL g is
+    # bounded during the fit rather than re-checked here) ---
     qc_warnings = []
 
     # 1. R² (goodness of fit) — computed in log space, matching the
     # objective the optimizer actually minimized.
-    log_y_pred = _four_pl_log(x, *popt)
+    log_y_pred = _curve_log(x, *popt)
     ss_res = np.sum((log_y - log_y_pred) ** 2)
     ss_tot = np.sum((log_y - np.mean(log_y)) ** 2)
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
@@ -266,7 +323,7 @@ def _fit_one(x, y, x_min=None, x_max=None):
     return tuple(popt), fit_ok, error, qc_warnings
 
 
-def _try_drop_one_outlier(x, y, x_min=None, x_max=None):
+def _try_drop_one_outlier(x, y, x_min=None, x_max=None, model="5pl"):
     """Try dropping each point one at a time to see if fit improves.
 
     Returns (params, fit_ok, error, qc_warnings, drop_idx) for the best
@@ -284,13 +341,13 @@ def _try_drop_one_outlier(x, y, x_min=None, x_max=None):
         y_sub = y[mask]
 
         params, fit_ok, error, qc_warnings = _fit_one(
-            x_sub, y_sub, x_min=x_min, x_max=x_max
+            x_sub, y_sub, x_min=x_min, x_max=x_max, model=model
         )
 
         if params is not None and fit_ok:
             # Compute R² in log space, matching the optimizer's objective.
             log_y_sub = np.log10(np.maximum(y_sub, 1.0))
-            log_pred = np.log10(np.maximum(four_pl(x_sub, *params), 1.0))
+            log_pred = np.log10(np.maximum(curve_eval(params, x_sub), 1.0))
             ss_res = np.sum((log_y_sub - log_pred) ** 2)
             ss_tot = np.sum((log_y_sub - np.mean(log_y_sub)) ** 2)
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
@@ -318,8 +375,7 @@ def _compute_obs_exp(x_expected, y_observed, params, tolerance=0.30):
     """
     lo = (1.0 - tolerance) * 100.0
     hi = (1.0 + tolerance) * 100.0
-    a, b, c, d = params
-    obs_dilution = invert_4pl(y_observed, a, b, c, d)
+    obs_dilution = curve_invert(params, y_observed)
     results = []
     for i in range(len(x_expected)):
         expected = x_expected[i]
@@ -349,7 +405,6 @@ def _compute_reportable_range(x, y, params, tolerance=0.30):
     lloq_dilution, uloq_dilution.
     """
     AU_ANCHOR = 1000.0
-    a, b, c, d = params
     obs_exp = _compute_obs_exp(x, y, params, tolerance=tolerance)
 
     # Find dilutions where recovery is within range
@@ -425,7 +480,7 @@ def _r_squared_log(x, y, params) -> float | None:
     """R² of the 4PL fit on log10(MFI) — matches the optimizer's objective."""
     try:
         log_y = np.log10(np.maximum(np.asarray(y, dtype=float), 1.0))
-        log_pred = np.log10(np.maximum(four_pl(np.asarray(x, dtype=float), *params), 1.0))
+        log_pred = np.log10(np.maximum(curve_eval(params, np.asarray(x, dtype=float)), 1.0))
         ss_res = float(np.sum((log_y - log_pred) ** 2))
         ss_tot = float(np.sum((log_y - np.mean(log_y)) ** 2))
         return 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
@@ -461,24 +516,11 @@ PATHOGEN_LABELS = {
     "vpd": "VPD",
 }
 
-# Display category → the standard-pool group used to *score* it. Cholera /
-# typhoid / dengue have dedicated standards; other arboviruses and VPDs have
-# no dedicated standard on the plate and are calibrated against the general
-# Dengue / Orpal reference pools (per lab decision, Jul 2026).
-_SCORING_POOL_GROUP = {
-    "cholera": "cholera",
-    "typhoid": "typhoid",
-    "dengue": "dengue",
-    "arbovirus": "dengue",
-    "vpd": "dengue",
-}
-
-
 def antigen_group(name: str) -> str | None:
     """Map an antigen name to its display pathogen category, or None.
 
-    Categories: 'cholera', 'typhoid', 'dengue', 'arbovirus', 'vpd'. Used both
-    for report labels/grouping and (via ``_SCORING_POOL_GROUP``) to choose the
+    Categories: 'cholera', 'typhoid', 'dengue', 'arbovirus', 'vpd'. Used for
+    report labels/grouping and (via ``_antigen_scoring_groups``) to choose the
     calibrating pool(s) in auto_select mode.
 
     Cholera is keyed on the ``CHO_`` family prefix or cholera-specific tokens
@@ -514,18 +556,27 @@ def antigen_calibration(name: str, pool: str | None = None) -> str:
 
     - ``"standard"``   — cholera / typhoid / dengue (dedicated standard), or a
       measles/diphtheria/rubella/tetanus VPD matched to a NIBSC pool.
-    - ``"reference"``  — other arboviruses / VPDs with no dedicated standard,
-      scored against the Dengue / Orpal reference pools (semi-quantitative).
-    - ``"uncalibrated"`` — no pathogen match: no calibrating standard at all;
-      any RAU is a best-fit fallback and should not be read quantitatively.
+    - ``"reference"``  — non-dengue arboviruses (pan-arbovirus Institute Pasteur /
+      Orpal reference), or an M/D/R/T VPD scored against that reference pool as a
+      fallback when no NIBSC pool is on the plate (semi-quantitative).
+    - ``"uncalibrated"`` — no calibrating standard at all: no pathogen match, or a
+      non-M/D/R/T VPD (pertussis / bordetella / meningitidis / …). Any RAU is a
+      best-fit fallback and should not be read quantitatively.
     """
     g = antigen_group(name)
     if g in ("cholera", "typhoid", "dengue"):
         return "standard"
-    if g == "vpd" and pool and "nibsc" in str(pool).lower() and _is_nibsc_target(name):
-        return "standard"  # NIBSC is a dedicated standard for these VPDs
-    if g in ("arbovirus", "vpd"):
+    if g == "arbovirus":
         return "reference"
+    if g == "vpd":
+        if _is_nibsc_target(name):
+            # M/D/R/T: NIBSC dedicated standard when scored against a NIBSC pool,
+            # else pan-arbo reference fallback.
+            if pool and "nibsc" in str(pool).lower():
+                return "standard"
+            return "reference"
+        # Other VPDs (pertussis, bordetella, meningitidis, …): no standard.
+        return "uncalibrated"
     return "uncalibrated"
 
 
@@ -562,11 +613,24 @@ def _parse_pool_rules(rules, pools: list[str]) -> list[tuple]:
 
 
 def _pool_groups(pool_name: str) -> set[str]:
-    """Map a pool name to the set of scoring groups it targets."""
+    """Map a pool name to the set of scoring groups it targets.
+
+    - **Dengue** pool → ``{dengue}`` (dedicated dengue standard only).
+    - **Pan-arbovirus** pool — **Orpal** (pilot) or **Institute Pasteur** (going
+      forward; tokens ``orpal`` / ``pasteur`` / ``institut``) → ``{dengue,
+      arbovirus}``: it calibrates dengue *and* the other arboviruses, so dengue
+      antigens are relevant to both the Dengue pool and this one, while non-dengue
+      arboviruses are relevant only to this one.
+    - Anti-OSP & cTxB & HlyE → ``{cholera, typhoid}``.
+    - NIBSC → ``{vpd_nibsc}`` (measles / diphtheria / rubella / tetanus).
+    """
     p = (pool_name or "").lower()
     groups: set[str] = set()
-    if "dengue" in p or "orpal" in p:
+    if "dengue" in p:
         groups.add("dengue")
+    if "orpal" in p or "pasteur" in p or "institut" in p:
+        groups.add("dengue")
+        groups.add("arbovirus")
     if "osp" in p or "ctxb" in p or "cholera" in p:
         groups.add("cholera")
     if "hlye" in p:
@@ -592,19 +656,28 @@ def _is_nibsc_target(name: str) -> bool:
 def _antigen_scoring_groups(name: str) -> list[str]:
     """Ordered candidate scoring-groups for an antigen (preferred first).
 
-    Measles/diphtheria/rubella/tetanus prefer a NIBSC pool if one is on the
-    plate, else fall back to the Dengue/Orpal reference. Other categories map to
-    their single group.
+    - Cholera / typhoid / dengue map to their own dedicated group.
+    - Non-dengue arboviruses map to the ``arbovirus`` group (the pan-arbovirus
+      Institute Pasteur / Orpal reference pool), NOT dengue — so they are
+      relevant to that pool but not to the dedicated Dengue pool.
+    - Measles / diphtheria / rubella / tetanus prefer a NIBSC pool when present,
+      falling back to the pan-arbo reference (``arbovirus``) when none is.
+    - All other VPDs (pertussis, bordetella, meningitidis, …) have no calibrating
+      standard: they return ``[]`` so they are never featured / marked relevant to
+      any pool. They are still fit against every pool (best-fit fallback in
+      ``select_pool_per_antigen``) and remain viewable in the picker + tables.
     """
     g = antigen_group(name)
     if g == "cholera":
         return ["cholera"]
     if g == "typhoid":
         return ["typhoid"]
-    if g == "dengue" or g == "arbovirus":
+    if g == "dengue":
         return ["dengue"]
+    if g == "arbovirus":
+        return ["arbovirus"]
     if g == "vpd":
-        return ["vpd_nibsc", "dengue"] if _is_nibsc_target(name) else ["dengue"]
+        return ["vpd_nibsc", "arbovirus"] if _is_nibsc_target(name) else []
     return []
 
 
@@ -665,18 +738,31 @@ def select_pool_per_antigen(
         # 3) Built-in pathogen-name heuristic (ordered preferred→fallback
         #    scoring groups), then best-fit fallback across all pools.
         candidates = []
+        matched_sg = None
         for sg in _antigen_scoring_groups(antigen):
             cands = [p for p in pools if sg in pool_grp[p]
                      and fits[p].get(antigen, {}).get("params") is not None]
             if cands:
                 candidates = cands
+                matched_sg = sg
                 break
         # Fall back to any pool that fit this antigen.
         if not candidates:
             candidates = [p for p in pools if fits[p].get(antigen, {}).get("params") is not None]
         if not candidates:
             continue  # no usable fit anywhere → NO_FIT
-        selected[antigen] = max(candidates, key=lambda p: _fit_rank(p, antigen))
+
+        def _rank(p: str):
+            has, ok, r2 = _fit_rank(p, antigen)
+            # Dengue has a *dedicated* Dengue pool: prefer it over the
+            # pan-arbovirus (Institute Pasteur / Orpal) reference, which also
+            # carries dengue. 'dedicated' ranks above R² but below params/fit_ok,
+            # so it only falls back to the pan-arbo pool if the dedicated fit is
+            # unusable. For every other group all candidate pools are dedicated.
+            dedicated = ("arbovirus" not in pool_grp[p]) if matched_sg == "dengue" else True
+            return (has, ok, dedicated, r2)
+
+        selected[antigen] = max(candidates, key=_rank)
     return selected
 
 
@@ -726,10 +812,9 @@ def compute_concentrations(df: pd.DataFrame, fits: dict, config: dict | None = N
         for analyte, fit_result in pool_fits.items():
             if fit_result.get("params") is None:
                 continue
-            a, b, c, d = fit_result["params"]
             mask = specimens["analyte"] == analyte
             mfi_vals = specimens.loc[mask, "mfi"].values
-            dilution_equiv = invert_4pl(mfi_vals, a, b, c, d)
+            dilution_equiv = curve_invert(fit_result["params"], mfi_vals)
 
             std_data = fit_result.get("mean_data")
             if std_data is not None and not std_data.empty:
@@ -828,9 +913,9 @@ def _mfi_bounds_for_fit(fit_result: dict) -> tuple[float | None, float | None]:
     uloq_d = rr.get("uloq_dilution")
     if lloq_d is None or uloq_d is None:
         return None, None
-    a, b, c, d = fit_result["params"]
-    mfi_lloq = float(four_pl(np.array([float(lloq_d)]), a, b, c, d)[0])
-    mfi_uloq = float(four_pl(np.array([float(uloq_d)]), a, b, c, d)[0])
+    params = fit_result["params"]
+    mfi_lloq = float(curve_eval(params, np.array([float(lloq_d)]))[0])
+    mfi_uloq = float(curve_eval(params, np.array([float(uloq_d)]))[0])
     # Defensive: ensure ordering (lower MFI bound first)
     lo, hi = sorted((mfi_lloq, mfi_uloq))
     return lo, hi
