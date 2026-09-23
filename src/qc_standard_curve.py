@@ -253,9 +253,20 @@ def _run_fit_tasks(tasks: list) -> list:
     if not tasks:
         return []
     import os
+    import sys
     n_cores = os.cpu_count() or 1
-    # Serial is faster than pool startup for small jobs.
-    if len(tasks) < 64 or n_cores < 2 or os.environ.get("QC_NO_PARALLEL"):
+    # Run serially when:
+    #  - the job is small (pool startup would cost more than it saves),
+    #  - only one core is available,
+    #  - the user disabled it (QC_NO_PARALLEL), or
+    #  - we're inside a PyInstaller-packaged app (``sys.frozen``). Python
+    #    multiprocessing is unreliable in a frozen macOS/Windows .app/.exe
+    #    (spawned workers re-launch the bundle instead of running the task), so
+    #    the packaged app always fits serially — correct, just slower. The
+    #    parallel path is used only when running from source.
+    if (len(tasks) < 64 or n_cores < 2
+            or os.environ.get("QC_NO_PARALLEL")
+            or getattr(sys, "frozen", False)):
         return [_fit_task(t) for t in tasks]
     try:
         from concurrent.futures import ProcessPoolExecutor
