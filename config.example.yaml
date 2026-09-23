@@ -31,15 +31,11 @@ panel:
   #   auto_select (default) — each antigen is scored against the pool that
   #                           calibrates it (pathogen-name match, tie-broken by
   #                           best fit), refined by the rules/overrides below.
-  #                           Cholera -> Anti-OSP & cTxB; typhoid -> HlyE;
-  #                           dengue -> the dedicated Dengue pool AND the
-  #                           pan-arbovirus Institute Pasteur / Orpal pool
-  #                           (dengue prefers the dedicated Dengue pool for
-  #                           scoring); other (non-dengue) arboviruses ->
-  #                           Institute Pasteur / Orpal only; measles /
-  #                           diphtheria / rubella / tetanus -> NIBSC (else the
-  #                           pan-arbo reference); other VPDs & unmatched antigens
-  #                           -> no calibrating standard (best-fit pool only).
+  #                           Cholera & typhoid -> mAb Mix; dengue -> the dedicated
+  #                           Dengue pool; measles / diphtheria / rubella /
+  #                           tetanus -> their dedicated NIBSC dilution series;
+  #                           non-dengue arboviruses, other VPDs & unmatched
+  #                           antigens -> no calibrating standard (best-fit only).
   #   per_pool              — no matching. Curves shown per pool; specimen RAU /
   #                           range use the single scoring_pool below.
   pool_mode: auto_select
@@ -67,9 +63,26 @@ panel:
   excluded_analytes: []
 
 # ---- Well classification (regex matched against the CSV Sample name) ---------
-# Checked in order: Background -> NC -> PC -> specimen.
+# Checked in order: Background -> NC -> PC -> specimen. The built-in defaults
+# already recognize BOTH the pilot format ("Pilot Control: <pool> 1:N") and the
+# newer machine format, where each standard is named by its target:
+#   mAb Mix N (...)  -> combined cholera (OSP/cTxB) + typhoid (HlyE) standard
+#   Measles / Diphtheria / Rubella / Tetanus 1:N -> NIBSC VPD dilution series
+#   Dengue 1:N       -> dedicated dengue dilution series
+#   Cholera Pool High / Low -> single-point cholera positive controls
+# New-machine patterns are anchored with ^ so they never catch specimens like
+# "BA6208_1:1000_IgG". Only override this block if your plate uses yet another
+# naming scheme; otherwise leave it out and the defaults below apply.
 well_classification:
-  pc_patterns: ["^Pilot Control:"]
+  pc_patterns:
+    - "^Pilot Control:"
+    - "^mAb Mix\\b"
+    - "^Measles\\b"
+    - "^Diphtheria\\b"
+    - "^Rubella\\b"
+    - "^Tetanus\\b"
+    - "^Dengue\\b"
+    - "^Cholera Pool\\b"
   background_patterns: ["^Background"]
   nc_patterns: ["Negative"]
 

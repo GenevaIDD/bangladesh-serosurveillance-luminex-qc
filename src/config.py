@@ -13,7 +13,7 @@ default.
 
 from __future__ import annotations
 
-APP_VERSION = "0.3.0-bangladesh"
+APP_VERSION = "0.4.0-bangladesh"
 
 RESULTS_DIR_NAME = "bangladesh-serosurveillance-luminex-qc-results"
 
@@ -137,13 +137,32 @@ SPECIMEN_DEFAULT_DILUTION = 100  # placeholder; specimens are run at a single di
 #                      "Pilot Control: Cholera High (1:1000)"  (single point)
 #   Specimen    : "{id}_r3_{Serum|DBS}"                  → specimen
 #
+# The newer machine names standards by target rather than a shared prefix, so
+# the defaults below ALSO recognize that format (no YAML edit needed):
+#                 "mAb Mix 3 (CTXb 6.25 / OSP 7.8125 / HlyE 3.125 ng/mL)" → pc
+#                 "Measles 1:125", "Diphtheria 1:250", "Rubella 1:1000",
+#                 "Tetanus 1:125", "Dengue 1:600"                          → pc
+#                 "Cholera Pool High" / "Cholera Pool Low"  (single point) → pc
+#                 "BA6208_1:1000_IgG"                                      → specimen
+#
 # Classification order in classify.py is: background → nc → pc → specimen,
 # and patterns are matched with re.search (not anchored) so the shared
 # "Pilot Control:" prefix on NC + PC samples resolves correctly (NC wins
-# because it is checked first). Patterns are editable on the Settings page.
-PC_PATTERNS = [r"^Pilot Control:"]
-BACKGROUND_PATTERNS = [r"^Background"]
-NC_PATTERNS = [r"Negative"]
+# because it is checked first). New-machine PC patterns are anchored with ^ so
+# they cannot catch specimens like "BA6208_1:1000_IgG". Patterns are editable on
+# the Settings page.
+PC_PATTERNS = [
+    r"^Pilot Control:",   # pilot: all standards + single-point PCs share this
+    r"^mAb Mix\b",        # new: combined cholera (OSP/cTxB) + typhoid (HlyE) std
+    r"^Measles\b",        # new: NIBSC measles dilution series
+    r"^Diphtheria\b",     # new: NIBSC diphtheria dilution series
+    r"^Rubella\b",        # new: NIBSC rubella dilution series
+    r"^Tetanus\b",        # new: NIBSC tetanus dilution series
+    r"^Dengue\b",         # new: dedicated dengue dilution series
+    r"^Cholera Pool\b",   # new: single-point cholera PCs (High / Low)
+]
+BACKGROUND_PATTERNS = [r"^Background"]   # "Background0" (pilot) and "Background" (new)
+NC_PATTERNS = [r"Negative"]              # "Negative 0" / "Negative 49" / pilot NC
 
 # --- Structured defaults dict for settings.py ---
 

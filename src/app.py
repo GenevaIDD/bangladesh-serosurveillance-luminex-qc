@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import traceback
+import zipfile
 
 import yaml
 from datetime import datetime
@@ -45,6 +46,16 @@ def _get_base_path() -> Path:
     return Path(__file__).parent.parent
 
 
+def _safe_name(filename: str) -> str:
+    """Return the basename of ``filename`` — blocks path traversal (drops any
+    directory component / ``..``) while **preserving spaces and the original
+    characters**. A plate_id parsed from a CSV ``Batch`` field can contain
+    spaces (e.g. "NIBSC test plate_15.9.26"), so the report / CSV files are named
+    with spaces; ``werkzeug.secure_filename`` would rewrite spaces to
+    underscores and the lookup would miss the real file."""
+    return Path(filename or "").name
+
+
 def _get_results_dir() -> Path:
     """Persistent results directory in user's home."""
     d = Path.home() / RESULTS_DIR_NAME
@@ -78,18 +89,32 @@ def create_app() -> Flask:
     def index():
         reports = _list_reports(results)
         curve_model = load_config().get("panel", {}).get("curve_model", "5pl")
+        # Whether a global individual-age file is currently stored.
+        from .age import load_age_data
+        _age_df = load_age_data(results / "age_data.csv")
+        age_loaded = {"present": _age_df is not None,
+                      "n_rows": (int(len(_age_df)) if _age_df is not None else 0)}
         return render_template("index.html", reports=reports, version=APP_VERSION,
-                               curve_model=curve_model)
+                               curve_model=curve_model, age_loaded=age_loaded)
 
     @app.route("/upload", methods=["POST"])
     def upload():
         csv_files = request.files.getlist("csv_files")
         inputfile_file = request.files.get("inputfile_file")
         layout_file = request.files.get("layout_file")  # Box xlsx (optional)
+        age_file = request.files.get("age_file")  # individual age CSV (optional)
 
         # Validate
         csv_files = [f for f in csv_files if f and f.filename]
         if not csv_files:
+            # Allow uploading just the age CSV on its own (saved globally); the
+            # user can then Regenerate All to add age bars to existing reports.
+            if age_file and age_file.filename:
+                (results / "uploads").mkdir(parents=True, exist_ok=True)
+                age_file.save(results / "age_data.csv")
+                flash("Individual age data saved. Use Regenerate All to add "
+                      "age-stratified bars to existing reports.", "success")
+                return redirect(url_for("index"))
             flash("Please select at least one plate result CSV file.", "error")
             return redirect(url_for("index"))
 
@@ -106,6 +131,12 @@ def create_app() -> Flask:
             layout_name = secure_filename(layout_file.filename)
             layout_path = results / "uploads" / layout_name
             layout_file.save(layout_path)
+
+        # Save optional individual age CSV. It is a single global file (applies to
+        # every plate / age-stratified bars), persisted at results/age_data.csv so
+        # Regenerate All and future uploads reuse it.
+        if age_file and age_file.filename:
+            age_file.save(results / "age_data.csv")
 
         # Home-page standard-curve model selector: apply to this batch and
         # persist it so the choice is remembered (dropdown + Settings stay in
@@ -143,12 +174,7 @@ def create_app() -> Flask:
                 )
                 last_report = report_path
 
-                # Move specimen CSV from reports/ to specimens/
                 plate_id = report_path.stem.replace("QC_", "")
-                spec_csv = results / "reports" / f"specimens_{plate_id}.csv"
-                if spec_csv.exists():
-                    spec_csv.rename(results / "specimens" / spec_csv.name)
-
                 # Register plate (keep CSV/inputfile/layout for regeneration)
                 _register_plate(results, plate_id, csv_name, layout_name, inputfile_name, curve_model=eff_model)
 
@@ -165,7 +191,7 @@ def create_app() -> Flask:
 
     @app.route("/report/<filename>")
     def view_report(filename):
-        report_file = results / "reports" / secure_filename(filename)
+        report_file = results / "reports" / _safe_name(filename)
         if not report_file.exists():
             flash("Report not found.", "error")
             return redirect(url_for("index"))
@@ -180,7 +206,7 @@ def create_app() -> Flask:
 
     @app.route("/download/report/<filename>")
     def download_report(filename):
-        report_file = results / "reports" / secure_filename(filename)
+        report_file = results / "reports" / _safe_name(filename)
         if not report_file.exists():
             flash("Report not found.", "error")
             return redirect(url_for("index"))
@@ -190,7 +216,7 @@ def create_app() -> Flask:
     def download_specimens(filename):
         # Per-plate CSVs are written to reports/; the specimens CSV is also
         # mirrored into specimens/. Look in both so every download link works.
-        safe = secure_filename(filename)
+        safe = _safe_name(filename)
         for sub in ("specimens", "reports"):
             f = results / sub / safe
             if f.exists():
@@ -200,105 +226,129 @@ def create_app() -> Flask:
 
     @app.route("/export/all")
     def export_all():
-        """Export all data to date as an Excel workbook.
+        """Export every table to date as one ZIP of CSVs — the single place
+        that holds everything the app produces.
 
-        Sheets:
-        - specimens: all specimen results combined across plates
-        - standard_curve_params: 4PL fit parameters (a, b, c, d) per plate/analyte
-        - standard_curve_data: raw standard curve MFI data points
-        - nc_levels: negative control MFI per plate/analyte
+        One CSV per table, each combined across all plates. CSVs are instant to
+        write, have no Excel-engine dependency, and load directly in R / pandas
+        (or Excel, one file at a time).
+
+        Tables: ``results`` (the canonical per plate × well × antigen table,
+        wide by standard); the per-plate QC tables (in_range, pct_in_range,
+        range_problem_antigens/samples, background_qc,
+        bead_problem_antigens/samples/problems, pc_single_point);
+        ``standard_curve_params`` / ``standard_curve_data``; and ``nc_levels``.
         """
         history_dir = results / "history"
-        specimens_dir = results / "specimens"
-
         reports_dir = results / "reports"
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            # Clean master "results" sheet — tidy per (plate × well × antigen)
-            # with the selected pool, RAU/AU, and range status. This is the
-            # headline analysis-ready table (legacy-style, plus RAU).
-            res_frames = []
-            for csv_file in sorted(reports_dir.glob("results_*.csv")):
+
+        def _bundle(prefix: str, require: tuple = ()):
+            """Concatenate every per-plate ``<prefix>*.csv`` in reports/ into one
+            frame, prepending a plate_id column parsed from the filename.
+
+            Files missing any column in ``require`` are skipped. This keeps the
+            combined table clean when the reports/ folder still holds per-plate
+            CSVs written by an older app version with a different schema —
+            concatenating those would union every schema's columns. Re-render
+            (Regenerate All) those plates to include them."""
+            frames = []
+            for csv_file in sorted(reports_dir.glob(f"{prefix}*.csv")):
                 try:
-                    res_frames.append(pd.read_csv(csv_file, encoding="utf-8"))
+                    df = pd.read_csv(csv_file, encoding="utf-8")
                 except Exception:
-                    pass
-            if res_frames:
-                pd.concat(res_frames, ignore_index=True).to_excel(
-                    writer, sheet_name="results", index=False
-                )
+                    continue
+                if df.empty or any(c not in df.columns for c in require):
+                    continue
+                if "plate_id" not in df.columns:
+                    df.insert(0, "plate_id", csv_file.stem[len(prefix):])
+                frames.append(df)
+            return pd.concat(frames, ignore_index=True) if frames else None
 
-            # All specimens (raw + per-pool AU columns)
-            spec_frames = []
-            for csv_file in sorted(specimens_dir.glob("specimens_*.csv")):
-                df = pd.read_csv(csv_file, encoding="utf-8")
-                plate_id = csv_file.stem.replace("specimens_", "")
-                df.insert(0, "plate_id", plate_id)
-                spec_frames.append(df)
-            if spec_frames:
-                pd.concat(spec_frames, ignore_index=True).to_excel(
-                    writer, sheet_name="specimens", index=False
-                )
-
-            # Fit history (standard curve parameters) — one file per pool
-            fit_frames = []
-            for fit_path in sorted(history_dir.glob("fit_history*.json")):
+        def _hist(pattern: str):
+            """Concatenate cross-plate history JSON files into one frame."""
+            frames = []
+            for path in sorted(history_dir.glob(pattern)):
                 try:
-                    df = pd.DataFrame(json.loads(fit_path.read_text(encoding="utf-8")))
+                    df = pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
                     if not df.empty:
-                        fit_frames.append(df)
+                        frames.append(df)
                 except Exception:
                     pass
-            if fit_frames:
-                pd.concat(fit_frames, ignore_index=True).to_excel(
-                    writer, sheet_name="standard_curve_params", index=False
-                )
+            return pd.concat(frames, ignore_index=True) if frames else None
 
-            # Standard curve raw data — one file per pool
-            std_frames = []
-            for std_path in sorted(history_dir.glob("std_curve_history*.json")):
-                try:
-                    df = pd.DataFrame(json.loads(std_path.read_text(encoding="utf-8")))
-                    if not df.empty:
-                        std_frames.append(df)
-                except Exception:
-                    pass
-            if std_frames:
-                pd.concat(std_frames, ignore_index=True).to_excel(
-                    writer, sheet_name="standard_curve_data", index=False
-                )
+        # Assemble every table once, in a fixed order.
+        tables: list[tuple[str, pd.DataFrame]] = []
+        # Only include per-plate results CSVs written in the current schema
+        # (identified by ``result_type`` + ``reporting_standard``); stale
+        # older-schema files are skipped so the combined table stays clean.
+        results_df = _bundle("results_", require=("result_type", "reporting_standard"))
+        if results_df is not None:
+            tables.append(("results", results_df))
+        for prefix, name in (
+            ("in_range_", "in_range"),
+            ("pct_in_range_", "pct_in_range"),
+            ("range_problem_antigens_", "range_problem_antigens"),
+            ("range_problem_samples_", "range_problem_samples"),
+            ("background_qc_", "background_qc"),
+            ("bead_problem_antigens_", "bead_problem_antigens"),
+            ("bead_problem_samples_", "bead_problem_samples"),
+            ("bead_problems_", "bead_problems"),
+            ("pc_single_point_", "pc_single_point"),
+        ):
+            df = _bundle(prefix)
+            if df is not None:
+                tables.append((name, df))
+        for name, df in (
+            ("standard_curve_params", _hist("fit_history*.json")),
+            ("standard_curve_data", _hist("std_curve_history*.json")),
+        ):
+            if df is not None:
+                tables.append((name, df))
+        nc_path = history_dir / "nc_well_history.json"
+        if nc_path.exists():
+            try:
+                nc_df = pd.DataFrame(json.loads(nc_path.read_text(encoding="utf-8")))
+                if not nc_df.empty:
+                    tables.append(("nc_levels", nc_df))
+            except Exception:
+                pass
 
-            # NC levels (cross-plate history; file is nc_well_history.json)
-            nc_path = history_dir / "nc_well_history.json"
-            if nc_path.exists():
-                nc_data = pd.DataFrame(json.loads(nc_path.read_text(encoding="utf-8")))
-                if not nc_data.empty:
-                    nc_data.to_excel(
-                        writer, sheet_name="nc_levels", index=False
-                    )
-
-        buf.seek(0)
+        # Bundle every table as a CSV into one ZIP. CSVs are near-instant to
+        # write and have no Excel-engine dependency, so the export behaves
+        # identically (and fast) for every user regardless of environment.
+        # (Anyone who wants Excel can open a CSV in Excel directly.)
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, df in tables:
+                zf.writestr(f"{name}.csv", df.to_csv(index=False))
+        zip_buf.seek(0)
         return send_file(
-            buf,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            zip_buf,
+            mimetype="application/zip",
             as_attachment=True,
-            download_name="bangladesh_serosurveillance_all_data.xlsx",
+            download_name="bangladesh_serosurveillance_all_data.zip",
         )
 
     @app.route("/delete/<plate_id>", methods=["POST"])
     def delete_plate(plate_id):
         """Delete a plate's report, specimen CSV, history entries, and uploaded files."""
-        plate_id = secure_filename(plate_id)
+        plate_id = _safe_name(plate_id)
 
         # Delete report HTML
         report_file = results / "reports" / f"QC_{plate_id}.html"
         if report_file.exists():
             report_file.unlink()
 
-        # Delete specimen CSV
-        spec_file = results / "specimens" / f"specimens_{plate_id}.csv"
-        if spec_file.exists():
-            spec_file.unlink()
+        # Delete this plate's per-plate CSVs (results + QC tables). They all
+        # live in reports/; also clean any legacy specimens/ copy.
+        for f in (results / "reports").glob(f"*_{plate_id}.csv"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        legacy_spec = results / "specimens" / f"specimens_{plate_id}.csv"
+        if legacy_spec.exists():
+            legacy_spec.unlink()
 
         # Remove plate from history JSON files
         history_dir = results / "history"
@@ -377,7 +427,10 @@ def create_app() -> Flask:
         for entry in registry_sorted:
             csv_path = results / "uploads" / entry["csv_filename"]
             if not csv_path.exists():
-                flash(f"Upload file missing for {entry['plate_id']}: {entry['csv_filename']}", "error")
+                flash(f"Couldn't regenerate {entry['plate_id']}: its source CSV "
+                      f"({entry['csv_filename']}) is no longer in the uploads folder. "
+                      f"Re-upload this plate's CSV to regenerate it (its existing "
+                      f"report is kept).", "error")
                 errors += 1
                 continue
             layout_path = None
@@ -399,9 +452,6 @@ def create_app() -> Flask:
                     plate_order=plate_order,
                 )
                 plate_id = report_path.stem.replace("QC_", "")
-                spec_csv = results / "reports" / f"specimens_{plate_id}.csv"
-                if spec_csv.exists():
-                    spec_csv.rename(results / "specimens" / spec_csv.name)
                 entry["curve_model"] = eff_model
                 ok += 1
             except Exception as exc:
@@ -595,7 +645,6 @@ def create_app() -> Flask:
 def _list_reports(results_dir: Path) -> list[dict]:
     """List past reports sorted by registry order (or mtime for unregistered plates)."""
     reports_dir = results_dir / "reports"
-    specimens_dir = results_dir / "specimens"
     registry = _load_registry(results_dir)
     order_map = {r["plate_id"]: r.get("sort_order", 9999) for r in registry}
     model_map = {r["plate_id"]: r.get("curve_model") for r in registry}
@@ -604,14 +653,15 @@ def _list_reports(results_dir: Path) -> list[dict]:
     for html_file in reports_dir.glob("QC_*.html"):
         plate_id = html_file.stem.replace("QC_", "")
         mtime = datetime.fromtimestamp(html_file.stat().st_mtime)
-        spec_csv = specimens_dir / f"specimens_{plate_id}.csv"
+        # The single canonical per-plate results CSV (wide by standard).
+        results_csv = reports_dir / f"results_{plate_id}.csv"
         _cm = (model_map.get(plate_id) or "").lower()
         fit_label = {"5pl": "5PL", "4pl": "4PL"}.get(_cm, "—")
         reports.append({
             "plate_id": plate_id,
             "filename": html_file.name,
             "date": mtime.strftime("%Y-%m-%d %H:%M"),
-            "specimen_csv": spec_csv.name if spec_csv.exists() else None,
+            "results_csv": results_csv.name if results_csv.exists() else None,
             "fit_label": fit_label,
             "_sort_key": (order_map.get(plate_id, 9999), -mtime.timestamp()),
         })

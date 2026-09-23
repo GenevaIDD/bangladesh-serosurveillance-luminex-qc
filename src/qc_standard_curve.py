@@ -142,87 +142,131 @@ def fit_standard_curves(
                            "reportable_range": None, "dropped_point": None}
                        for a in antigens}}
 
-    all_fits = {}
+    # Build the work list. The heavy per-antigen curve fitting (dominated by the
+    # drop-one-outlier refits) is embarrassingly parallel across (pool × antigen),
+    # so we collect every fittable (pool, analyte) as a task, run the tasks
+    # (across CPU cores when available), then reattach the per-antigen DataFrames
+    # in the parent. Antigens with no PC data / too few points are resolved here
+    # without a task.
+    all_fits = {pool: {} for pool in pools}
+    tasks = []       # (x, y, model, drop_outlier, recovery_tolerance) — sent to workers
+    task_meta = []   # (pool, analyte, adata, means) — kept in the parent
     for pool in pools:
-        if "pc_pool" in pc.columns:
-            pool_data = pc[pc["pc_pool"] == pool]
-        else:
-            pool_data = pc
-
-        pool_results = {}
+        pool_data = pc[pc["pc_pool"] == pool] if "pc_pool" in pc.columns else pc
         for analyte in antigens:
             adata = pool_data[pool_data["analyte"] == analyte].copy()
             if adata.empty:
-                pool_results[analyte] = {
+                all_fits[pool][analyte] = {
                     "params": None, "fit_ok": False, "std_data": adata,
                     "mean_data": pd.DataFrame(), "error": "No PC data",
                     "qc_warnings": [], "obs_exp": None,
                     "reportable_range": None, "dropped_point": None,
                 }
                 continue
-
-            # Average replicates at each dilution (drops NaN-dilution rows)
             means = adata.dropna(subset=["dilution"]).groupby("dilution")["mfi"].mean().reset_index()
             means = means.sort_values("dilution")
-
             x = means["dilution"].values
             y = means["mfi"].values
-
-            # Need at least a few distinct dilution points to fit a 4PL.
             if len(x) < 4:
-                pool_results[analyte] = {
+                all_fits[pool][analyte] = {
                     "params": None, "fit_ok": False, "std_data": adata,
                     "mean_data": means, "error": f"Too few dilution points ({len(x)})",
                     "qc_warnings": [], "obs_exp": None,
                     "reportable_range": None, "dropped_point": None,
                 }
                 continue
+            tasks.append((x, y, curve_model, drop_outlier, recovery_tolerance))
+            task_meta.append((pool, analyte, adata, means))
 
-            params, fit_ok, error, qc_warnings = _fit_one(
-                x, y, x_min=x.min(), x_max=x.max(), model=curve_model)
+    results = _run_fit_tasks(tasks)
 
-            dropped_point = None
-
-            # Try dropping one outlier if enabled and fit failed *because of
-            # QC criteria* (not because the input was degenerate). When
-            # params is None the curve either had no signal or scipy
-            # didn't converge; dropping a point won't rescue it.
-            if drop_outlier and params is not None and not fit_ok and len(x) >= 6:
-                best = _try_drop_one_outlier(x, y, x_min=x.min(), x_max=x.max(), model=curve_model)
-                if best is not None:
-                    params, fit_ok, error, qc_warnings, drop_idx = best
-                    dropped_point = {"dilution": x[drop_idx], "mfi": y[drop_idx], "index": int(drop_idx)}
-                    keep = np.ones(len(x), dtype=bool)
-                    keep[drop_idx] = False
-                    means = means.iloc[keep].reset_index(drop=True)
-                    x = means["dilution"].values
-                    y = means["mfi"].values
-
-            obs_exp = None
-            reportable_range = None
-            r_squared = None
-            if params is not None:
-                obs_exp = _compute_obs_exp(x, y, params, tolerance=recovery_tolerance)
-                reportable_range = _compute_reportable_range(x, y, params, tolerance=recovery_tolerance)
-                r_squared = _r_squared_log(x, y, params)
-
-            pool_results[analyte] = {
-                "params": params,
-                "model": curve_model,
-                "fit_ok": fit_ok,
-                "std_data": adata,
-                "mean_data": means,
-                "error": error,
-                "qc_warnings": qc_warnings,
-                "obs_exp": obs_exp,
-                "reportable_range": reportable_range,
-                "dropped_point": dropped_point,
-                "r_squared": r_squared,
-            }
-
-        all_fits[pool] = pool_results
+    for (pool, analyte, adata, means), res in zip(task_meta, results):
+        # ``res`` carries the final (post-outlier-drop) dilution/mfi so the stored
+        # mean_data matches the points the fit actually used.
+        means_final = pd.DataFrame({"dilution": res.pop("x_final"),
+                                    "mfi": res.pop("y_final")})
+        all_fits[pool][analyte] = {
+            **res, "std_data": adata, "mean_data": means_final,
+        }
 
     return all_fits
+
+
+def _fit_one_antigen(x, y, model, drop_outlier, recovery_tolerance):
+    """Full per-antigen fit: base fit, optional drop-one-outlier rescue, and the
+    obs/exp, reportable-range and R² derived quantities. Pure function of arrays
+    and scalars (picklable) so it can run in a worker process. Returns a dict
+    with the fit result plus ``x_final``/``y_final`` (the points actually used)."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    params, fit_ok, error, qc_warnings = _fit_one(
+        x, y, x_min=x.min(), x_max=x.max(), model=model)
+
+    dropped_point = None
+    # Try dropping one outlier only when the fit converged but failed QC (a
+    # degenerate/no-signal curve — params None — can't be rescued this way).
+    if drop_outlier and params is not None and not fit_ok and len(x) >= 6:
+        best = _try_drop_one_outlier(x, y, x_min=x.min(), x_max=x.max(), model=model)
+        if best is not None:
+            params, fit_ok, error, qc_warnings, drop_idx = best
+            dropped_point = {"dilution": float(x[drop_idx]), "mfi": float(y[drop_idx]),
+                             "index": int(drop_idx)}
+            keep = np.ones(len(x), dtype=bool)
+            keep[drop_idx] = False
+            x = x[keep]
+            y = y[keep]
+
+    obs_exp = reportable_range = r_squared = None
+    if params is not None:
+        obs_exp = _compute_obs_exp(x, y, params, tolerance=recovery_tolerance)
+        reportable_range = _compute_reportable_range(x, y, params, tolerance=recovery_tolerance)
+        r_squared = _r_squared_log(x, y, params)
+
+    return {
+        "params": params,
+        "model": model,
+        "fit_ok": fit_ok,
+        "error": error,
+        "qc_warnings": qc_warnings,
+        "obs_exp": obs_exp,
+        "reportable_range": reportable_range,
+        "dropped_point": dropped_point,
+        "r_squared": r_squared,
+        "x_final": x.tolist(),
+        "y_final": y.tolist(),
+    }
+
+
+def _fit_task(args):
+    """Top-level (picklable) wrapper so ProcessPoolExecutor can dispatch fits."""
+    return _fit_one_antigen(*args)
+
+
+def _run_fit_tasks(tasks: list) -> list:
+    """Run per-antigen fit tasks, in parallel across CPU cores when possible.
+
+    Falls back to a serial loop for a small number of tasks, when only one core
+    is available, or if the process pool cannot start (e.g. a restricted /
+    frozen environment). The result is numerically identical either way — the
+    same ``_fit_one_antigen`` runs; only *where* it runs changes.
+    """
+    if not tasks:
+        return []
+    import os
+    n_cores = os.cpu_count() or 1
+    # Serial is faster than pool startup for small jobs.
+    if len(tasks) < 64 or n_cores < 2 or os.environ.get("QC_NO_PARALLEL"):
+        return [_fit_task(t) for t in tasks]
+    try:
+        from concurrent.futures import ProcessPoolExecutor
+        workers = min(n_cores, 8)
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            # chunksize amortizes dispatch overhead over many short fits;
+            # map preserves input order, so assembly stays deterministic.
+            return list(ex.map(_fit_task, tasks, chunksize=16))
+    except Exception:
+        # Any pool failure → identical serial result.
+        return [_fit_task(t) for t in tasks]
 
 
 def _fit_one(x, y, x_min=None, x_max=None, model="5pl"):
@@ -556,24 +600,38 @@ def antigen_calibration(name: str, pool: str | None = None) -> str:
 
     - ``"standard"``   — cholera / typhoid / dengue (dedicated standard), or a
       measles/diphtheria/rubella/tetanus VPD matched to a NIBSC pool.
-    - ``"reference"``  — non-dengue arboviruses (pan-arbovirus Institute Pasteur /
-      Orpal reference), or an M/D/R/T VPD scored against that reference pool as a
-      fallback when no NIBSC pool is on the plate (semi-quantitative).
-    - ``"uncalibrated"`` — no calibrating standard at all: no pathogen match, or a
-      non-M/D/R/T VPD (pertussis / bordetella / meningitidis / …). Any RAU is a
-      best-fit fallback and should not be read quantitatively.
+    - ``"reference"``  — only when an antigen is scored against a legacy pilot
+      pan-arbovirus reference pool (semi-quantitative). The going-forward panel has
+      no such pool, so non-dengue arboviruses are ``uncalibrated`` there.
+    - ``"uncalibrated"`` — no calibrating standard: non-dengue arboviruses (no
+      pan-arbo pool present), no pathogen match, or a non-M/D/R/T VPD (pertussis /
+      bordetella / meningitidis / …). Any RAU is a best-fit fallback and should not
+      be read quantitatively.
     """
     g = antigen_group(name)
     if g in ("cholera", "typhoid", "dengue"):
         return "standard"
     if g == "arbovirus":
-        return "reference"
+        # Non-dengue arboviruses only count as a semi-quantitative "reference"
+        # when actually scored against a pan-arbovirus reference pool (a legacy
+        # pilot pool). Going forward there is no such pool, so they have no
+        # calibrating standard (best-fit only).
+        if pool and "arbovirus" in _pool_groups(pool):
+            return "reference"
+        return "uncalibrated"
     if g == "vpd":
         if _is_nibsc_target(name):
-            # M/D/R/T: NIBSC dedicated standard when scored against a NIBSC pool,
-            # else pan-arbo reference fallback.
-            if pool and "nibsc" in str(pool).lower():
-                return "standard"
+            # M/D/R/T: a dedicated NIBSC standard, whether that standard is the
+            # pilot's combined "NIBSC" pool or the new machine's disease-named
+            # pool (Measles / Diphtheria / Rubella / Tetanus). "standard" when
+            # scored against the antigen's own dedicated pool; the pan-arbo
+            # reference (or any best-fit fallback) is a semi-quantitative
+            # "reference".
+            if pool:
+                pg = _pool_groups(pool)
+                dedicated = set(_antigen_scoring_groups(name)) - {"arbovirus"}
+                if pg & dedicated:
+                    return "standard"
             return "reference"
         # Other VPDs (pertussis, bordetella, meningitidis, …): no standard.
         return "uncalibrated"
@@ -616,52 +674,92 @@ def _pool_groups(pool_name: str) -> set[str]:
     """Map a pool name to the set of scoring groups it targets.
 
     - **Dengue** pool → ``{dengue}`` (dedicated dengue standard only).
-    - **Pan-arbovirus** pool — **Orpal** (pilot) or **Institute Pasteur** (going
-      forward; tokens ``orpal`` / ``pasteur`` / ``institut``) → ``{dengue,
-      arbovirus}``: it calibrates dengue *and* the other arboviruses, so dengue
-      antigens are relevant to both the Dengue pool and this one, while non-dengue
-      arboviruses are relevant only to this one.
-    - Anti-OSP & cTxB & HlyE → ``{cholera, typhoid}``.
-    - NIBSC → ``{vpd_nibsc}`` (measles / diphtheria / rubella / tetanus).
+    - **Legacy pilot pan-arbovirus reference** pool (name contains ``orpal``) →
+      ``{dengue, arbovirus}``: back-compat only; it calibrates dengue *and* the
+      other arboviruses. The going-forward panel has no such pool, so non-dengue
+      arboviruses are uncalibrated there.
+    - Anti-OSP & cTxB & HlyE, or the new machine's **mAb Mix** → ``{cholera,
+      typhoid}`` (combined monoclonal cholera OSP/cTxB + typhoid HlyE standard).
+    - NIBSC (pilot combined pool) → ``{vpd_nibsc}``; the new machine's
+      disease-named NIBSC standards → their own group (``measles`` /
+      ``diphtheria`` / ``rubella`` / ``tetanus``).
     """
     p = (pool_name or "").lower()
     groups: set[str] = set()
     if "dengue" in p:
         groups.add("dengue")
-    if "orpal" in p or "pasteur" in p or "institut" in p:
+    if "orpal" in p:   # legacy pilot pan-arbovirus reference pool (back-compat)
         groups.add("dengue")
         groups.add("arbovirus")
+    # Combined cholera (OSP/cTxB) + typhoid (HlyE) monoclonal standard: the
+    # pilot's separate OSP/cTxB & HlyE pools, or the new machine's "mAb Mix".
     if "osp" in p or "ctxb" in p or "cholera" in p:
         groups.add("cholera")
     if "hlye" in p:
         groups.add("typhoid")
-    # NIBSC reference standards for measles / diphtheria / rubella / tetanus.
+    if "mab mix" in p:
+        groups.add("cholera")
+        groups.add("typhoid")
+    # NIBSC VPD standards. Pilot: one combined "NIBSC" pool (→ vpd_nibsc, the
+    # fallback group all M/D/R/T antigens share). New machine: one dilution
+    # series per disease, named by disease.
     if "nibsc" in p:
         groups.add("vpd_nibsc")
+    if "measles" in p:
+        groups.add("measles")
+    if "diphther" in p or "diphter" in p:   # "Diphtheria" / misspelled "Diphteria"
+        groups.add("diphtheria")
+    if "rubella" in p:
+        groups.add("rubella")
+    if "tetanus" in p:
+        groups.add("tetanus")
     return groups
 
 
-# VPD antigens the NIBSC standard calibrates (measles / diphtheria / rubella /
-# tetanus — NOT pertussis / meningitis). Matched to a NIBSC pool when present,
-# else the Dengue / Orpal reference.
-_NIBSC_TARGET_TOKENS = ("MEASLES", "DIPHTERIA", "DIPHTHERIA", "RUBELLA",
-                        "RUB_", "TETANUS", "TET_")
+# VPD antigens the NIBSC standards calibrate (measles / diphtheria / rubella /
+# tetanus — NOT pertussis / meningitis). Each disease maps to the antigen-name
+# tokens that identify it, so an antigen can be matched to its own disease-named
+# standard (new machine) or the pilot's combined NIBSC pool.
+_VPD_DISEASE_TOKENS = {
+    "measles":    ("MEASLES",),
+    "diphtheria": ("DIPHT",),            # matches "Diphtheria" and misspelled "Diphteria"
+    "rubella":    ("RUBELLA", "RUB_"),
+    "tetanus":    ("TETANUS", "TET_"),
+}
+
+# Antigens excluded from the disease priority/featured set even though their name
+# matches a disease token. The measles readout is anchored to RES_measles_lysate;
+# VPD_measles_NP is deliberately NOT treated as a measles priority antigen (it
+# falls through to "no calibrating standard": still fit and viewable, never
+# featured or marked relevant to the Measles standard).
+_VPD_NONPRIORITY = {"VPD_MEASLES_NP"}
+
+
+def _vpd_disease(name: str) -> str | None:
+    """Which NIBSC-calibrated disease an antigen is a *priority* target for, or None."""
+    n = (name or "").upper()
+    if n in _VPD_NONPRIORITY:
+        return None
+    for disease, toks in _VPD_DISEASE_TOKENS.items():
+        if any(tok in n for tok in toks):
+            return disease
+    return None
 
 
 def _is_nibsc_target(name: str) -> bool:
-    n = (name or "").upper()
-    return any(tok in n for tok in _NIBSC_TARGET_TOKENS)
+    return _vpd_disease(name) is not None
 
 
 def _antigen_scoring_groups(name: str) -> list[str]:
     """Ordered candidate scoring-groups for an antigen (preferred first).
 
     - Cholera / typhoid / dengue map to their own dedicated group.
-    - Non-dengue arboviruses map to the ``arbovirus`` group (the pan-arbovirus
-      Institute Pasteur / Orpal reference pool), NOT dengue — so they are
-      relevant to that pool but not to the dedicated Dengue pool.
-    - Measles / diphtheria / rubella / tetanus prefer a NIBSC pool when present,
-      falling back to the pan-arbo reference (``arbovirus``) when none is.
+    - Non-dengue arboviruses map to the ``arbovirus`` group, which is calibrated
+      only by a legacy pilot pan-arbovirus reference pool (back-compat); with no
+      such pool on the going-forward panel they fall to best-fit / uncalibrated.
+    - Measles / diphtheria / rubella / tetanus prefer their own disease-named
+      NIBSC standard (new machine), then the pilot's combined NIBSC pool, then
+      the pan-arbo reference (``arbovirus``) — first pool present wins.
     - All other VPDs (pertussis, bordetella, meningitidis, …) have no calibrating
       standard: they return ``[]`` so they are never featured / marked relevant to
       any pool. They are still fit against every pool (best-fit fallback in
@@ -677,7 +775,8 @@ def _antigen_scoring_groups(name: str) -> list[str]:
     if g == "arbovirus":
         return ["arbovirus"]
     if g == "vpd":
-        return ["vpd_nibsc", "arbovirus"] if _is_nibsc_target(name) else []
+        disease = _vpd_disease(name)
+        return [disease, "vpd_nibsc", "arbovirus"] if disease else []
     return []
 
 
@@ -754,10 +853,10 @@ def select_pool_per_antigen(
 
         def _rank(p: str):
             has, ok, r2 = _fit_rank(p, antigen)
-            # Dengue has a *dedicated* Dengue pool: prefer it over the
-            # pan-arbovirus (Institute Pasteur / Orpal) reference, which also
-            # carries dengue. 'dedicated' ranks above R² but below params/fit_ok,
-            # so it only falls back to the pan-arbo pool if the dedicated fit is
+            # Dengue has a *dedicated* Dengue pool: prefer it over a legacy pilot
+            # pan-arbovirus reference pool (back-compat), which also carries
+            # dengue. 'dedicated' ranks above R² but below params/fit_ok, so it
+            # only falls back to that reference pool if the dedicated fit is
             # unusable. For every other group all candidate pools are dedicated.
             dedicated = ("arbovirus" not in pool_grp[p]) if matched_sg == "dengue" else True
             return (has, ok, dedicated, r2)

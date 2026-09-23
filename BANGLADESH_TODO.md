@@ -1781,3 +1781,353 @@ dropdowns**, one per action, and surfaced the model each report used:
 Verified: registry round-trip (update without a model keeps the stored one),
 `_list_reports` labels (5PL/4PL/—), and index.html render (two `name="curve_model"`
 selects present, hidden input gone, Fit header + cells render).
+
+---
+
+## New-machine naming convention support (dual-format)
+
+The new instrument names each standard by its target instead of a shared
+`Pilot Control:` prefix. Added first-class support for both formats with no
+config change (small, backward-compatible code change; option chosen: relative
+dilution for the mAb Mix series):
+
+- **classify.py** — `_parse_pc` now recognizes `mAb Mix N (…)` (the combined
+  cholera OSP/cTxB + typhoid HlyE monoclonal standard) as a 4-fold serial
+  dilution: point N → `4^(N-1)` (1,4,…,16384), all eight points collapsing to a
+  single `mAb Mix` pool on the same relative (RAU) footing as every other pool.
+- **config.py** — default `PC_PATTERNS` expanded to also match `^mAb Mix`,
+  `^Measles`, `^Diphtheria`, `^Rubella`, `^Tetanus`, `^Dengue`, `^Cholera Pool`
+  (all `^`-anchored so specimens like `BA6208_1:1000_IgG` are never caught).
+  Background/NC defaults already covered `Background` / `Negative 0/49`.
+- **qc_standard_curve.py** — per-disease VPD scoring groups
+  (measles/diphtheria/rubella/tetanus) so each disease-named NIBSC series
+  calibrates its own antigens; `_pool_groups` maps the disease-named pools and
+  `mAb Mix → {cholera, typhoid}`; `antigen_calibration` reads M/D/R/T scored
+  against their disease (or pilot NIBSC) pool as a dedicated **standard**. Pilot
+  combined-NIBSC / Orpal / Pasteur behavior unchanged.
+- **report.py** — `_pool_target_label` labels the new pools (`mAb Mix` →
+  “Cholera · Typhoid”; `Measles` → “Measles”; etc.).
+- Docs: README, SPECIFICATION (+ .html), config.example.yaml, and the Settings
+  page all note dual-format support.
+
+Verified: unit checks (classification/parse/pool-selection/tier on the exact
+new-machine names + no false-positive disease-token matches across the real
+201-antigen panel); a full subset pipeline run on a synthesized new-format CSV
+(mAb Mix fits one pool → Cholera · Typhoid; each disease standard → its antigen;
+5PL banner intact); the pilot fixture still classifies correctly under the new
+defaults (0 specimens misclassified); pytest 2/2.
+
+---
+
+## Report layout + content revisions (post new-machine support)
+
+- **Background QC:** the **Background well outliers** table (with its
+  explanation) now comes **before** the full per-antigen (202) Background table.
+- **Positive Control QC:** in each **Cholera Pool High / Low** stats table, the
+  cholera-specific antigens are surfaced at the **top** (rest follow in panel
+  order).
+- **Measles priority:** `VPD_measles_NP` is no longer a measles priority/featured
+  antigen — the measles readout is anchored to **RES_measles_lysate** only.
+  `VPD_measles_NP` is still fit and viewable, just never featured or marked
+  relevant to the Measles standard (`_VPD_NONPRIORITY` in qc_standard_curve.py).
+- **Standard-Curve Summary:** removed the **Range-problem antigens** table (and
+  its two summary cards). The **Range-problem specimens — per standard**
+  subsection now shows a table for **every dedicated standard** (mAb Mix, Dengue,
+  Measles, Diphtheria, Rubella, Tetanus / pilot pools), assessed independently;
+  standards with no flagged specimen show a "none flagged" note. Fixed the
+  builder so per-disease NIBSC standards count as dedicated (previously only
+  cholera/typhoid/dengue were, so disease pools were silently dropped).
+- **All Curves Overview:** the **Featured priority antigens** grid is now
+  **one curve per row** (room for age figures next to each curve later). The
+  collapsed all-curve-fits grids are unchanged.
+- **Removed the entire Standard-Curve Range Matrix section** (matrix heatmap,
+  Out-of-range detail list, and Serum-vs-DBS comparison), plus its TOC link.
+- **Explanation audit:** rewrote the control-pool-handling, per-standard
+  range-problem, and Featured blurbs to describe both formats accurately (mAb Mix
+  = combined cholera/typhoid; per-disease NIBSC standards; pan-arbovirus
+  reference only when present) and removed text for deleted features. README and
+  SPECIFICATION (+ .html) updated to match.
+
+Verified end-to-end on a synthesized new-format plate: ordering, cholera-top,
+measles priority (RES featured / VPD_measles_NP not), all six per-standard
+tables present, removed sections gone, no stale blurbs; pytest 2/2, py_compile
+clean.
+
+---
+
+## PC table greying + per-standard blocks for failed fits
+
+- **PC (Cholera High/Low) tables:** cholera-specific antigens are bold at the top;
+  the remaining antigens are **greyed (muted)** for context, matching how other
+  "all antigens" tables de-emphasize non-focus rows.
+- **Per-standard range-problem subsection:** now emits a block for **every**
+  dedicated standard on the plate. A standard whose dedicated antigen(s) produced
+  no usable reportable range (curve did not fit) shows a "No usable reportable
+  range … cannot assess" note instead of being silently dropped; standards with a
+  fit but no flagged specimen still show the "none flagged ✓" note.
+
+---
+
+## Phase 1 quick fixes (multi-tab report project)
+
+- **Standard-Curve Picker rug labels** shortened via a new `_compact_plate_label`
+  ("Multipathogen_plate1_IgG_8.9.25" → "plate1_8.9.25"); wired into
+  `_short_plate_label` fallback so past-plate rug ticks + legends stay short
+  (tickfont 8→7). Picker now passes short `pastlabels` for the rug ticks.
+- **Cholera curve context lines:** cholera antigen curves in the All-Curves
+  Overview now overlay 4 labelled horizontal lines — Cholera High, Cholera Low,
+  and each negative control (mean of each control's replicate wells for that
+  antigen) — via `_control_context_means` threaded into the featured grid.
+- **VPD "concentrations":** confirmed with user these are the `1:N` dilutions
+  already shown in hover; added **x/y axis titles** to the one-per-row featured
+  All-Curves Overview plots ("Standard dilution (1:x)" / "MFI (log scale)").
+  Dense collapsed grids left unlabelled to avoid clutter.
+
+Next phases (agreed order): 2) tab architecture, 3) QA&QC flag tables,
+4) plate concordance heatmaps, 5) background-correction comparison, 6) age bars
+(UI now, wire age data later; groups 6mo–2y / 3–4y / 5–14y / 15+).
+
+## Phase 1 follow-up fixes
+
+- **Cholera curves showing 10^120 y-axis:** caused by the browser autoranging a
+  log axis to include a degenerate fit's runaway curve. Fix: featured (one-per-row)
+  panels now set an EXPLICIT y-range from observed data (standards + specimens +
+  control lines, ×3 headroom). Context lines switched from `add_hline` to scatter
+  traces. Verified cholera panels ~20–400 MFI, dengue ~10^4.9 — no blow-up.
+- **Plot spacing:** one-per-row featured layout uses panel_h 210 + gap 100px so
+  each plot's x-axis label clears the next plot's title.
+- **Picker rug label bug:** `_short_plate_label` fell through to the full id when
+  box_ids was an empty list `[]`; fixed (`not box_ids` covers None/""/[]), and box
+  ids are appended to the compact `plate<N>_<date>` label when present.
+
+## Phase 2 — tab architecture
+
+Report split into 3 tabs via a sticky top tab bar + JS switching:
+- **Plate Overview** — all existing content + its sidebar TOC (unchanged).
+- **Quality Assurance & Control** — opens with a "Rerun plan" note (reruns are
+  batched at the end of planned testing); placeholder sections "Plate Concordance"
+  and "Flag summaries" to be filled in phases 3–4.
+- **Background Correction Comparison** — placeholder for the raw/subtracted/divided
+  concordance plot (phase 5).
+Sidebar sticky offset moved below the tab bar (top:46px). QA/BG panels hidden by
+default; overview active on load.
+
+## Phase 3 — QA&QC flag summaries (Sample + Antigen check)
+
+Renamed tab 1 "Plate Overview" → "Plate Report".
+
+QA&QC "Flag summaries" now has two live tables (built in report.py from existing
+flag data):
+- **Sample check** (`_build_sample_check`) — one row per specimen well with ≥ 1
+  flag: low bead count (red/yellow tier), background flag (negative net MFI),
+  outside LOD (below/above reportable range); columns plate ID, well, sample ID,
+  # flags, flagged antigens, + yes/no per flag. Multiply-flagged wells highlighted.
+- **Antigen check** (`_build_antigen_check`) — antigens flagged in > 1 sample,
+  high background (mean bg MFI > bg_max_mfi/300), or shifted between plates
+  (inter-assay %CV > hist_cv_threshold, Settings-adjustable). yes/no columns.
+
+**Plate check** and **Standard curve check** left as placeholders — they need the
+plate-to-plate concordance (Lin's CCC) from Phase 4.
+
+### Deferred (later)
+- **Antigen check — dedicated "outside-LOD" column.** The current "flagged in
+  >1 sample" column mixes all flag types (bead + background + outside-LOD) and
+  trips at ≥2 samples (absolute). The removed Range-problem antigens table
+  instead flagged antigens where ≥20% of samples fell outside the reportable
+  range (a curve-placement signal). Option kept for later: add a dedicated
+  "≥20% of samples outside LOD (yes/no)" column to Antigen check to restore that
+  specific signal. Left as-is for now per user.
+
+## Phase 4 — control concordance heatmap + Plate check
+
+- **Lin's CCC** (`_lins_ccc`) on log10 MFI. `_control_profiles` builds 4 per-plate
+  control profiles from history_nc/history_pc (Neg 0 / Neg 49 across ALL antigens;
+  Cholera High / Low across CHOLERA antigens only), keeping each control a
+  SEPARATE well per the user.
+- **`_build_control_concordance`** — per plate-pair, one CCC per control; each
+  heatmap cell = MEAN of the 4 CCCs (diagonal 1.0). Also computes per-plate
+  overall/negative/cholera mean concordance + <0.95 flags, and a "% of plate-pairs
+  ≥ 0.95" headline.
+- **`_make_concordance_heatmap`** — one combined plate×plate heatmap, RdYlGn scale
+  over [0.85,1.0] (red < 0.95), hover shows the 4 individual control CCCs.
+- **Plate check table** now live: Plate ID; Low (overall) / Negative / Cholera-pool
+  concordance < 0.95 (yes/no + the value). Both heatmap and table show a "needs
+  ≥ 2 plates" state when only one plate has control data.
+- Verified on the two pilot plates: Plate1 vs Plate2 mean CCC = 0.990 (Neg0 .994,
+  Neg49 .990, CholHi .993, CholLo .984), 100% of pairs ≥ 0.95, no plate flagged.
+  Full template render confirmed on synthetic 2-plate case; pytest 2/2.
+
+Still a placeholder: **Standard curve check** (needs starting-dilution MFI %CV +
+per-standard-curve concordance across plates — a separate cross-plate computation).
+
+### Phase 4 follow-up — plate labels
+Concordance heatmap axes, hover (via %{x}/%{y} → "Plate 1 vs Plate 2"), and the
+Plate check table now show "Plate N" parsed from the CSV filename (helper
+`plate_number_label`, stored as `plate_label` in nc/pc history so past plates are
+labeled too; falls back to the short date label if no plate number is present).
+Verified on pilots: PLATE_08212025_RUN000 → "Plate 1", PLATE_08252025_RUN000 → "Plate 2".
+
+### Phase 4 follow-up — plate numbering fallback
+Concordance plate labels now resolve in priority order: (1) "Plate N" parsed from
+the filename / plate_id; (2) if NO plate carries a number, assign "Plate N" by
+chronological run date/time from metadata (earliest run = Plate 1); (3) else the
+short date label. Verified: two plates with no filename number but run dates get
+Plate 1 (earlier run) / Plate 2 (later). Mixed cases keep parsed numbers and don't
+collide with positional ones.
+
+## Phase 4b — Standard curve check + shared plate labels
+
+- Refactored plate labeling into shared helpers `_gather_plate_meta` +
+  `_label_plates`; `generate_report` builds ONE label map (from nc/pc/std history)
+  used by the concordance heatmap, Plate check AND Standard curve check, so all
+  three number plates identically.
+- **`_build_std_curve_check`** — per (control pool × its RELEVANT antigen)
+  standard curve seen on ≥2 plates: starting-dilution MFI %CV across plates
+  (> hist_cv_threshold, Settings-adjustable) and per-plate mean Lin's CCC vs
+  other plates (log10 MFI over shared dilutions) < 0.95. One row per (plate ×
+  curve); only flagged rows shown; empty-state / needs-≥2-plates messages.
+- Assumptions (adjustable): "standard curve" = pool × relevant antigen (not
+  per-pool, not every antigen); rows per plate×curve. VPD_measles_NP excluded
+  (not a relevant/priority curve).
+- Verified: 60% MFI shift between plates → 32.6% starting-CV flag + reduced
+  concordance flags on shorter curves; full render shows the table; pytest 2/2.
+
+## Descriptions: methodology + de-Orpal sweep
+
+- **QA&QC methodology descriptions:** each section now states WHAT it shows and
+  HOW the flags/estimates are derived — Sample check (per-flag derivation: bead
+  tier cutoffs, negative net MFI = specimen − mean background, outside LOD vs
+  LLOQ/ULOQ), Antigen check (>1-sample count, mean bg MFI > threshold, inter-assay
+  %CV), Plate check (mean pairwise Lin's CCC vs other plates, overall/neg/cholera),
+  Standard curve check (starting-dilution %CV; per-plate mean CCC over shared
+  dilutions). Plate Concordance already had a methods box.
+- **Removed stale "Orpal / Institute Pasteur" naming** from all user-facing
+  descriptions (report.html, settings.html, config.example.yaml) and docs
+  (README, SPECIFICATION + .html), replaced with generic "pan-arbovirus reference
+  pool (when present)". Also fixed the SPEC `_pool_groups` map (was missing mAb
+  Mix + disease-named NIBSC keywords). The internal keyword matching
+  (orpal/pasteur/institut) stays for pilot back-compat; the factual "Pilot pools:"
+  list in SPEC is retained as historical context.
+
+### Retire pan-arbovirus reference from going-forward descriptions
+Per user: there is no pan-arbovirus reference pool going forward. Removed all
+"pan-arbovirus reference pool" mentions from user-facing descriptions (report.html,
+settings.html, config.example.yaml, README, SPECIFICATION). Non-dengue arboviruses
+now described (and scored) as "no calibrating standard — best-fit only". Code:
+antigen_calibration for arbovirus returns "reference" ONLY when scored against a
+pool whose groups include arbovirus (legacy pilot pan-arbo pool), else
+"uncalibrated" (verified ARB_CHIKV_E2 -> uncalibrated; -> reference only on a
+legacy Orpal pool). Legacy orpal/pasteur/institut keyword matching kept for pilot
+back-compat and documented as "legacy" only in the technical SPEC.
+
+### Fully retired "Institute Pasteur"
+Removed all "Institute Pasteur" mentions from code + user-facing docs: updated
+qc_standard_curve.py docstrings/comments (antigen_calibration, _pool_groups,
+_antigen_scoring_groups, select_pool_per_antigen) to frame the pan-arbo pool as
+legacy-pilot-only; dropped the `pasteur`/`institut` keyword tokens from
+`_pool_groups` (kept only `orpal` — the actual pilot pool name — for back-compat);
+genericized the SPEC legacy note; updated RELEASE_NOTES_v0.3.0.md. A pool named
+"Institute Pasteur" no longer matches; "Orpal pool" still → {dengue, arbovirus}.
+(The historical BANGLADESH_TODO dev log retains its Phase A mentions as a record.)
+
+## Phase 5 — Background Correction Comparison tab
+
+- **`_build_bg_correction_concordance`** — plate-pair Lin's CCC (LINEAR scale, so
+  ≤0 subtracted values are fine) over the pooled control wells (Neg 0/49 +
+  Cholera High/Low, mean per control × antigen) shared between two plates, under
+  three methods: Raw MFI; Background subtracted (well MFI − mean blank per
+  antigen); Background divided (well MFI ÷ mean blank). Blank = mean of the
+  plate's Background wells per antigen (from history_background).
+- **`_ccc_bootstrap_ci`** — 95% percentile bootstrap CI over the paired points.
+- **`_make_bg_correction_plot`** — grouped scatter: x = plate pairs, y = CCC,
+  one series per method (Okabe–Ito colors) with CI error bars + a 0.95 guide line;
+  matches the example figure. Rendered in the Background Correction Comparison tab
+  with a full "how it is derived" description; "needs ≥2 plates" fallback.
+- Verified on the two pilot plates (Raw 0.989, Subtracted 0.989, Divided 0.986,
+  CIs ~±0.01) and a synthetic 2-plate render; pytest 2/2.
+
+All planned phases (1–5) complete. Remaining deferred: Phase 6 age-stratified bars
+(needs age data; UI-now / wire-later, groups 6mo–2y / 3–4y / 5–14y / 15+); optional
+Antigen-check "outside-LOD" column.
+
+### Phase 5 correction — sample-based (not controls)
+Per user: the background-correction comparison should reflect the SAMPLES, not the
+controls. Rebuilt `_build_bg_correction_concordance` to use history_specimens:
+each antigen summarised by the MEAN of that plate's specimen wells, then Lin's CCC
+across antigens between plate pairs (linear scale), under raw / subtracted (mean
+sample MFI − mean blank per antigen) / divided (÷ mean blank). Bootstrap resamples
+antigens for the 95% CI. Description + fallback text updated (specimen-based).
+Verified on pilots: Raw 0.989 / Subtracted 0.988 / Divided 0.989 (CIs ~0.96–0.995).
+
+### Plate-label consistency + multi-plate verification
+- `_label_plates` rewritten: use parsed "Plate N" ONLY if every plate has a
+  distinct parsed number; otherwise number all plates by chronological run order
+  (earliest = Plate 1). Fixes the mixed case (one plate parsed "Plate 2", another
+  falling back to a date label) — labels are now always "Plate N" across the
+  concordance heatmap, Plate check, Standard curve check, and Background
+  Correction tabs. Also fixes stale-history plates (processed before plate_label
+  existed) at render time.
+- Verified with 3 plates: heatmap axes Plate 1/2/3; Background Correction shows
+  all pairs (1v2, 1v3, 2v3). Concordance heatmap is a full N×N matrix and the
+  correction plot covers all N·(N−1)/2 pairs, so both scale as more plates run.
+
+## Phase 6 — age-stratified range-status bars
+
+- **src/age.py** — loads the individual age form (lenient column detection: id =
+  blood_sample_collection_id/etc., age = age_years_final); bins age into 4 groups
+  (6 mo–2 yrs [0–2] / 3–4 / 5–14 / 15+); maps specimen sample name → id (leading
+  token before "_") → age group.
+- **Landing page:** optional "Individual age data CSV" upload; saved once as
+  results/age_data.csv (global) and reused by every plate incl. Regenerate All.
+- **Pipeline:** loads age_data.csv (default results/age_data.csv), builds
+  {sample_name → age_group}, passes to generate_report (`specimen_age`).
+- **Report:** `_age_status_counts(in_range, specimen_age)` →
+  {antigen: {age_group: {status: count}}}. Featured All-Curves Overview becomes a
+  2-column layout (curve | age bars) via `_make_curve_grid_interactive` age_mode;
+  `_add_age_bars` draws horizontal stacked bars, one per age group, segmented by
+  range status (Below/In/Above Range, No Fit — same colours/legend as the rug),
+  x = % of samples, with "N (%)" labels; barmode=stack.
+- Graceful when no age file (normal one-per-row curves). Verified end-to-end with
+  48 specimens across all 4 groups matched from the real age form; pytest 2/2.
+- Assumption: integer ages, 0–2 → "6 mo–2 yrs" (survey doesn't enrol <6 mo);
+  specimens without a matched/parseable age are omitted from the bars.
+
+### Phase 6 follow-up — age diagnostics + robustness
+- Age id matching now case-insensitive / whitespace-tolerant.
+- Featured section shows an age-status banner so it's clear WHY bars are/aren't
+  shown: "No age data uploaded" / "loaded but 0 of N specimen IDs matched" /
+  "M of N specimens matched" (age_info from pipeline).
+- Upload handler now accepts the age CSV ON ITS OWN (no plate required) — saves it
+  globally; user then Regenerate All. Verified via Flask test client.
+
+### Phase 6 diagnostics v2
+Age banner now distinguishes 4 states (and shows the resolved path):
+(1) file not found at path — "No age data uploaded (Looked for <path>)";
+(2) file found but unparseable — "could not be read (needs id + age columns)";
+(3) loaded but 0 specimen IDs matched; (4) M of N matched (bars shown).
+Pipeline resolves age_data.csv from output_dir.parent OR history_dir.parent.
+Verified all four branches render correctly. (Full app flow upload→age→regenerate
+also verified earlier via Flask test client.)
+
+### Phase 6 fix — the actual bug: required plate field blocked age-only upload
+Root cause: the plate-CSV file input had HTML `required`, so the browser refused
+to submit the form when ONLY the age CSV was selected → age_data.csv never saved
+(server-side age-only path was never reached). Removed `required` (server still
+validates). Added a landing-page indicator: red "No age data loaded yet" / green
+"✓ Age data currently loaded (N participants)" (index() checks results/age_data.csv).
+Verified: reads the real form as 3882 participants; age-only submit now reaches
+the server.
+
+### Phase 6 — second age view (status → age breakdown)
+Per user: keep the per-age bars AND add "of all samples below/within/above/no-fit,
+what's the age breakdown?". Featured grid is now 3 columns per antigen:
+curve | "Range status by age group" (col2, within-age %) | "Age breakdown by range
+status" (col3, within-status % — `_add_status_age_bars`, segmented by age group,
+distinct age-group colours). Both normalised to 100% along their own bars, N (%)
+labels. Banner describes both views. Verified end-to-end render.
+
+### Phase 6 — reverted the second age view (too much info)
+Per user: dropped the "Age breakdown by range status" (status→age) third column;
+back to 2-column featured layout (curve | "Range status by age group"). Removed
+_add_status_age_bars + _AGE_GROUP_COLORS (no dead code) and the two-view banner
+wording. Verified: single age chart renders, second gone, pytest 2/2.

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>BANGLADESH_TODO</title>
+  <title>Bangladesh Serosurveillance Luminex QC — Dev Log</title>
   <style>
     code{white-space: pre-wrap;}
     span.smallcaps{font-variant: small-caps;}
@@ -15,6 +15,9 @@
   </style>
 </head>
 <body>
+<header id="title-block-header">
+<h1 class="title">Bangladesh Serosurveillance Luminex QC — Dev Log</h1>
+</header>
 <h1 id="bangladesh-national-serosurveillance-luminex-qc-to-do-session-log">Bangladesh National Serosurveillance Luminex QC — To-Do &amp; Session Log</h1>
 <h2 id="release-decision-supersedes-v0.4.0-planning-below">RELEASE DECISION (supersedes v0.4.0 planning below)</h2>
 <p><strong>Everything ships together in v0.3.0</strong> — Phases 8/9/11, Phase A (pool remap), the bead-count + text + doc updates, AND the 5PL curve model. The “→ v0.4.0” notes in the older planning entries below are historical; 5PL is part of 0.3.0. Version strings are set to 0.3.0. All work uncommitted pending the user’s tag.</p>
@@ -809,5 +812,34 @@ Add the green linear-range square inside the Picker’s own curve panel — DONE
 <li>Past Reports table gained a <strong>Fit</strong> column showing that label.</li>
 </ul>
 <p>Verified: registry round-trip (update without a model keeps the stored one), <code>_list_reports</code> labels (5PL/4PL/—), and index.html render (two <code>name="curve_model"</code> selects present, hidden input gone, Fit header + cells render).</p>
+<hr />
+<h2 id="new-machine-naming-convention-support-dual-format">New-machine naming convention support (dual-format)</h2>
+<p>The new instrument names each standard by its target instead of a shared <code>Pilot Control:</code> prefix. Added first-class support for both formats with no config change (small, backward-compatible code change; option chosen: relative dilution for the mAb Mix series):</p>
+<ul>
+<li><strong>classify.py</strong> — <code>_parse_pc</code> now recognizes <code>mAb Mix N (…)</code> (the combined cholera OSP/cTxB + typhoid HlyE monoclonal standard) as a 4-fold serial dilution: point N → <code>4^(N-1)</code> (1,4,…,16384), all eight points collapsing to a single <code>mAb Mix</code> pool on the same relative (RAU) footing as every other pool.</li>
+<li><strong>config.py</strong> — default <code>PC_PATTERNS</code> expanded to also match <code>^mAb Mix</code>, <code>^Measles</code>, <code>^Diphtheria</code>, <code>^Rubella</code>, <code>^Tetanus</code>, <code>^Dengue</code>, <code>^Cholera Pool</code> (all <code>^</code>-anchored so specimens like <code>BA6208_1:1000_IgG</code> are never caught). Background/NC defaults already covered <code>Background</code> / <code>Negative 0/49</code>.</li>
+<li><strong>qc_standard_curve.py</strong> — per-disease VPD scoring groups (measles/diphtheria/rubella/tetanus) so each disease-named NIBSC series calibrates its own antigens; <code>_pool_groups</code> maps the disease-named pools and <code>mAb Mix → {cholera, typhoid}</code>; <code>antigen_calibration</code> reads M/D/R/T scored against their disease (or pilot NIBSC) pool as a dedicated <strong>standard</strong>. Pilot combined-NIBSC / Orpal / Pasteur behavior unchanged.</li>
+<li><strong>report.py</strong> — <code>_pool_target_label</code> labels the new pools (<code>mAb Mix</code> → “Cholera · Typhoid”; <code>Measles</code> → “Measles”; etc.).</li>
+<li>Docs: README, SPECIFICATION (+ .html), config.example.yaml, and the Settings page all note dual-format support.</li>
+</ul>
+<p>Verified: unit checks (classification/parse/pool-selection/tier on the exact new-machine names + no false-positive disease-token matches across the real 201-antigen panel); a full subset pipeline run on a synthesized new-format CSV (mAb Mix fits one pool → Cholera · Typhoid; each disease standard → its antigen; 5PL banner intact); the pilot fixture still classifies correctly under the new defaults (0 specimens misclassified); pytest 2/2.</p>
+<hr />
+<h2 id="report-layout-content-revisions-post-new-machine-support">Report layout + content revisions (post new-machine support)</h2>
+<ul>
+<li><strong>Background QC:</strong> the <strong>Background well outliers</strong> table (with its explanation) now comes <strong>before</strong> the full per-antigen (202) Background table.</li>
+<li><strong>Positive Control QC:</strong> in each <strong>Cholera Pool High / Low</strong> stats table, the cholera-specific antigens are surfaced at the <strong>top</strong> (rest follow in panel order).</li>
+<li><strong>Measles priority:</strong> <code>VPD_measles_NP</code> is no longer a measles priority/featured antigen — the measles readout is anchored to <strong>RES_measles_lysate</strong> only. <code>VPD_measles_NP</code> is still fit and viewable, just never featured or marked relevant to the Measles standard (<code>_VPD_NONPRIORITY</code> in qc_standard_curve.py).</li>
+<li><strong>Standard-Curve Summary:</strong> removed the <strong>Range-problem antigens</strong> table (and its two summary cards). The <strong>Range-problem specimens — per standard</strong> subsection now shows a table for <strong>every dedicated standard</strong> (mAb Mix, Dengue, Measles, Diphtheria, Rubella, Tetanus / pilot pools), assessed independently; standards with no flagged specimen show a “none flagged” note. Fixed the builder so per-disease NIBSC standards count as dedicated (previously only cholera/typhoid/dengue were, so disease pools were silently dropped).</li>
+<li><strong>All Curves Overview:</strong> the <strong>Featured priority antigens</strong> grid is now <strong>one curve per row</strong> (room for age figures next to each curve later). The collapsed all-curve-fits grids are unchanged.</li>
+<li><strong>Removed the entire Standard-Curve Range Matrix section</strong> (matrix heatmap, Out-of-range detail list, and Serum-vs-DBS comparison), plus its TOC link.</li>
+<li><strong>Explanation audit:</strong> rewrote the control-pool-handling, per-standard range-problem, and Featured blurbs to describe both formats accurately (mAb Mix = combined cholera/typhoid; per-disease NIBSC standards; pan-arbovirus reference only when present) and removed text for deleted features. README and SPECIFICATION (+ .html) updated to match.</li>
+</ul>
+<p>Verified end-to-end on a synthesized new-format plate: ordering, cholera-top, measles priority (RES featured / VPD_measles_NP not), all six per-standard tables present, removed sections gone, no stale blurbs; pytest 2/2, py_compile clean.</p>
+<hr />
+<h2 id="pc-table-greying-per-standard-blocks-for-failed-fits">PC table greying + per-standard blocks for failed fits</h2>
+<ul>
+<li><strong>PC (Cholera High/Low) tables:</strong> cholera-specific antigens are bold at the top; the remaining antigens are <strong>greyed (muted)</strong> for context, matching how other “all antigens” tables de-emphasize non-focus rows.</li>
+<li><strong>Per-standard range-problem subsection:</strong> now emits a block for <strong>every</strong> dedicated standard on the plate. A standard whose dedicated antigen(s) produced no usable reportable range (curve did not fit) shows a “No usable reportable range … cannot assess” note instead of being silently dropped; standards with a fit but no flagged specimen still show the “none flagged ✓” note.</li>
+</ul>
 </body>
 </html>

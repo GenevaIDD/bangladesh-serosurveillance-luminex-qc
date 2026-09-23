@@ -200,38 +200,41 @@
     <p style="margin:8px 0 4px;"><b>Built-in keyword map</b> (used in step 3):</p>
     <ul style="margin:4px 0 0 18px; padding:0; line-height:1.6;">
       <li><b>Dengue</b> — antigen name contains <code>DENV</code> or
-        <code>DENGUE</code> → the <b>Dengue</b> pool <i>and</i> the pan-arbovirus
-        <b>Institute&nbsp;Pasteur / Orpal</b> pool (pool names containing
-        <code>dengue</code>, or <code>orpal</code>/<code>pasteur</code>/<code>institut</code>).</li>
+        <code>DENGUE</code> → the dedicated <b>Dengue</b> pool (pool name contains
+        <code>dengue</code>).</li>
       <li><b>Cholera</b> — antigen starts with <code>CHO_</code> or contains
         <code>CtxB</code> / <code>Inaba</code> / <code>Ogawa</code> /
         <code>cholera</code> / <code>vibrio</code> → pools whose name contains
-        <code>osp</code>, <code>ctxb</code>, or <code>cholera</code>.</li>
+        <code>osp</code>, <code>ctxb</code>, <code>cholera</code>, or
+        <code>mab&nbsp;mix</code>.</li>
       <li><b>Typhoid</b> — antigen contains <code>HlyE</code> or
-        <code>typhi</code> → pools whose name contains <code>hlye</code>.</li>
-      <li><b>Other (non-dengue) arboviruses</b> — antigen starts with
-        <code>ARB_</code> → the pan-arbovirus <b>Institute&nbsp;Pasteur / Orpal</b>
-        reference pool <i>only</i> (not the dedicated Dengue pool).</li>
+        <code>typhi</code> → pools whose name contains <code>hlye</code> or
+        <code>mab&nbsp;mix</code>.</li>
       <li><b>Measles / diphtheria / rubella / tetanus VPDs</b> (plus
-        <code>RES_measles_lysate</code>) → a <b>NIBSC</b> pool when present, else
-        the pan-arbo <b>Institute&nbsp;Pasteur / Orpal</b> reference as a fallback.</li>
-      <li><b>Other VPDs</b> — pertussis, bordetella, meningitidis, etc. → <b>no
-        calibrating standard</b>; best-fit pool only, and never featured/relevant
-        to any pool (still fit against every pool for viewing).</li>
+        <code>RES_measles_lysate</code>) → their dedicated <b>NIBSC</b> dilution
+        series (pool named <code>Measles</code> / <code>Diphtheria</code> /
+        <code>Rubella</code> / <code>Tetanus</code>, or a combined
+        <code>NIBSC</code> pool).</li>
+      <li><b>Non-dengue arboviruses</b> (<code>ARB_</code>), <b>other VPDs</b>
+        (pertussis, bordetella, meningitidis, …) and any antigen with no pathogen
+        match have <b>no calibrating standard</b>: best-fit pool only, and never
+        featured / relevant to any pool (still fit against every pool for
+        viewing).</li>
     </ul>
     <p style="margin:8px 0 0;">
-      <b>When more than one pool matches</b> (e.g. both <code>Dengue pool</code>
-      and <code>Orpal pool</code> target dengue), exactly one is still used — the
-      <b>best-fitting</b> curve, ranked by: a curve was fit → it passed fit QC
+      <b>When more than one pool matches</b> an antigen's pathogen, exactly one is
+      still used — the <b>best-fitting</b> curve, ranked by: a curve was fit → it passed fit QC
       (<code>fit_ok</code>) → higher R². An antigen with no usable fit in any pool
       is left <b>NO_FIT</b>. The chosen pool appears in the report's
       Standard-Curve Summary <b>Pool</b> column, so you can confirm the result and
       add a regex rule (or override) where the keyword guess is wrong.
     </p>
     <p style="margin:6px 0 0;">
-      In <b>Per pool</b> mode none of this runs — every antigen is scored against
-      the single scoring pool above, and the master export lists RAU under every
-      pool so you can choose per antigen downstream.
+      In <b>Per pool</b> mode this auto-selection doesn't drive the report's
+      featured display, but the downloadable <b>results</b> table is identical in
+      both modes: one row per specimen × antigen showing the AU and range status
+      against <b>every</b> standard, plus the reporting-standard headline (the
+      antigen's dedicated calibrator).
     </p>
   </details>
 </div>
@@ -242,9 +245,13 @@
   <p style="font-size:0.85em; color:#888; margin:0 0 8px;">
     Wells are classified from the <code>Sample</code> name in the CSV
     (matched with these regexes, in order: Background → NC → PC →
-    specimen). Defaults fit the Bangladesh naming
-    (<code>Background0</code>, <code>Pilot Control: …</code>,
-    <code>Pilot Control: Negative …</code>, <code>{id}_r3_{Serum|DBS}</code>).
+    specimen). Defaults recognize <strong>both</strong> naming conventions with
+    no change needed: the pilot format (<code>Pilot Control: …</code>,
+    <code>{id}_r3_{Serum|DBS}</code>) and the newer machine, which names each
+    standard by target — <code>mAb Mix N (…)</code> (cholera + typhoid),
+    <code>Measles</code>/<code>Diphtheria</code>/<code>Rubella</code>/<code>Tetanus 1:N</code>,
+    <code>Dengue 1:N</code>, <code>Cholera Pool High/Low</code>, with specimens
+    like <code>BA6208_1:1000_IgG</code>.
   </p>
   <label>Positive Control / Standard Patterns <span class="hint">(regex, comma-separated; the pooled control series, e.g. <code>^Pilot Control:</code>)</span></label>
   <input type="text" name="pc_patterns" value="{{ config.well_classification.pc_patterns | join(', ') }}">

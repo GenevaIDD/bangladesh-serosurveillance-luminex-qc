@@ -25,12 +25,15 @@ from .qc_standard_curve import (
     build_pool_map,
     antigen_calibration,
     _pool_slug,
+    _mfi_bounds_for_fit,
+    _antigen_scoring_groups,
+    _pool_groups,
 )
 from .settings import get_excluded_analytes
 from .qc_history import load_history, append_history, save_history
 from .parse_layout import read_plate_layout, build_layout
 from .plate_summary import plate_summary
-from .report import generate_report
+from .report import generate_report, plate_number_label
 from .settings import load_config
 
 
@@ -42,6 +45,7 @@ def run_pipeline(
     history_dir: str | Path | None = None,
     config: dict | None = None,
     plate_order: list | None = None,
+    age_path: str | Path | None = None,
 ) -> Path:
     """Run the full QC pipeline on a single plate CSV.
 
@@ -270,6 +274,31 @@ def run_pipeline(
     report_name = f"QC_{metadata['plate_id']}.html"
     report_path = output_dir / report_name
 
+    # Individual age metadata (optional; one global file per results dir). Build a
+    # {sample_name -> age_group} map for this plate's specimens.
+    from .age import load_age_data, specimen_age_groups
+    if age_path is None:
+        # The global age file lives in the results dir; try both the reports dir's
+        # parent and the history dir's parent (normally the same 'results' dir).
+        _cands = []
+        if output_dir is not None:
+            _cands.append(Path(output_dir).parent / "age_data.csv")
+        if history_dir is not None:
+            _cands.append(Path(history_dir).parent / "age_data.csv")
+        age_path = next((c for c in _cands if c.exists()),
+                        _cands[0] if _cands else Path("age_data.csv"))
+    age_file_exists = Path(age_path).exists()
+    age_df = load_age_data(age_path)
+    _spec_names = (data.loc[data["well_type"] == "specimen", "sample_name"].unique()
+                   if "well_type" in data.columns else [])
+    specimen_age = specimen_age_groups(age_df, _spec_names)
+    age_info = {"present": age_df is not None,
+                "file_exists": bool(age_file_exists),
+                "path": str(age_path),
+                "n_rows": (int(len(age_df)) if age_df is not None else 0),
+                "n_specimens": int(len(_spec_names)),
+                "n_matched": len(specimen_age)}
+
     generate_report(
         metadata=metadata,
         data=data,
@@ -289,49 +318,15 @@ def run_pipeline(
         output_path=report_path,
         plate_order=plate_order,
         config=config,
+        specimen_age=specimen_age,
+        age_info=age_info,
     )
 
-    # 13. Export specimen results CSV
-    if not specimen_results.empty:
-        csv_out = output_dir / f"specimens_{metadata['plate_id']}.csv"
-        export_df = specimen_results.copy()
-
-        pools = list(fits.keys())
-        multi_pool = len(pools) > 1
-
-        if multi_pool:
-            # Per-pool AU columns + censored flags
-            for pool_name in pools:
-                slug = pool_name.replace(" ", "_")
-                rau_col = f"rau_{slug}"
-                lloq_col = f"below_lloq_{slug}"
-                uloq_col = f"above_uloq_{slug}"
-                au_col = f"AU_{slug}"
-                cens_col = f"au_censored_{slug}"
-
-                if rau_col in export_df.columns:
-                    export_df = export_df.rename(columns={rau_col: au_col})
-                if lloq_col in export_df.columns and uloq_col in export_df.columns:
-                    export_df[cens_col] = "none"
-                    export_df.loc[export_df[lloq_col], cens_col] = "left"
-                    export_df.loc[export_df[uloq_col], cens_col] = "right"
-            # Also rename plain rau → AU (first pool default)
-            if "rau" in export_df.columns:
-                export_df = export_df.rename(columns={"rau": "AU"})
-        else:
-            export_df = export_df.rename(columns={"rau": "AU"})
-
-        # Add au_censored from the default (plain) columns
-        if "below_lloq" in export_df.columns and "above_uloq" in export_df.columns:
-            export_df["au_censored"] = "none"
-            export_df.loc[export_df["below_lloq"], "au_censored"] = "left"
-            export_df.loc[export_df["above_uloq"], "au_censored"] = "right"
-
-        export_df.to_csv(csv_out, index=False, encoding="utf-8")
-
-    # 13b. Clean per-plate results CSV — the tidy, analysis-ready table
-    # (one row per specimen well × antigen) with the selected pool, RAU/AU,
-    # and range status. This is what the master export concatenates.
+    # 13. Export the single canonical per-plate results CSV — one row per
+    # (specimen well × antigen), wide by standard (AU + status for every
+    # standard, plus the reporting-standard headline). This one table is served
+    # from every download location and concatenated into the Export-All
+    # workbook's ``results`` sheet, so downloads never disagree.
     clean = _build_clean_results(metadata, in_range, specimen_results, fits, config, pool_map)
     if clean is not None and not clean.empty:
         clean.to_csv(
@@ -339,10 +334,17 @@ def run_pipeline(
             index=False, encoding="utf-8",
         )
 
+    # Downloadable CSVs use a consistent specimen-id column name (``sample_id``,
+    # matching the results table) instead of the internal ``sample_name``.
+    def _sid(df):
+        return (df.rename(columns={"sample_name": "sample_id"})
+                if df is not None and "sample_name" in getattr(df, "columns", [])
+                else df)
+
     # 14. Export Section-3 deliverables: per-(antigen × sample) IN/OUT-of-
     # range table and per-antigen %-in-range summary.
     if not in_range.empty:
-        in_range.to_csv(
+        _sid(in_range).to_csv(
             output_dir / f"in_range_{metadata['plate_id']}.csv",
             index=False, encoding="utf-8",
         )
@@ -354,7 +356,7 @@ def run_pipeline(
     # NC well levels (one row per NC well × analyte). Only written when
     # the plate actually has NC wells.
     if nc_levels is not None and not nc_levels.empty:
-        nc_levels.to_csv(
+        _sid(nc_levels).to_csv(
             output_dir / f"nc_levels_{metadata['plate_id']}.csv",
             index=False, encoding="utf-8",
         )
@@ -385,7 +387,7 @@ def run_pipeline(
             index=False, encoding="utf-8",
         )
     if not bead_summary["sample_summary"].empty:
-        bead_summary["sample_summary"].to_csv(
+        _sid(bead_summary["sample_summary"]).to_csv(
             output_dir / f"bead_problem_samples_{plate_id}.csv",
             index=False, encoding="utf-8",
         )
@@ -395,14 +397,14 @@ def run_pipeline(
             index=False, encoding="utf-8",
         )
     if not range_summary["sample_summary"].empty:
-        range_summary["sample_summary"].to_csv(
+        _sid(range_summary["sample_summary"]).to_csv(
             output_dir / f"range_problem_samples_{plate_id}.csv",
             index=False, encoding="utf-8",
         )
     # Section-4 deliverable: bead-count problem list (red + yellow cells).
     bead_problems = bead_qc.get("problems")
     if bead_problems is not None and not bead_problems.empty:
-        bead_problems.to_csv(
+        _sid(bead_problems).to_csv(
             output_dir / f"bead_problems_{metadata['plate_id']}.csv",
             index=False, encoding="utf-8",
         )
@@ -451,100 +453,150 @@ def _embed_report_downloads(report_path: Path, output_dir: Path) -> None:
             pass
 
 
-_MATRIX_RE = re.compile(r"_r\d+_(serum|dbs)$", re.IGNORECASE)
-
-
-def _matrix_series(sample_ids: pd.Series) -> pd.Series:
-    """Serum/DBS matrix parsed from the sample name."""
-    disp = {"serum": "Serum", "dbs": "DBS"}
-    return (sample_ids.astype(str).str.extract(_MATRIX_RE, expand=False)
-            .str.lower().map(disp))
-
-
 def _build_clean_results(metadata, in_range, specimen_results, fits, config, pool_map=None) -> pd.DataFrame:
-    """Clean, analysis-ready per-(specimen well × antigen) master results table.
+    """The single canonical, analysis-ready results table — one row per
+    (specimen well × antigen), *wide by standard*.
 
-    The shape depends on the scoring mode (``panel.pool_mode``):
+    This is the one results representation used everywhere (per-plate CSV,
+    per-report download, and the ``results`` sheet of the Export-All workbook),
+    so downloads never disagree. Columns:
 
-    - **per_pool** (default — "fit every pool × antigen, no auto-selecting"):
-      a *wide* table with one row per (well × antigen) and a RAU + status
-      column pair for **every** control pool, e.g. ``RAU (Dengue pool)`` /
-      ``status (Dengue pool)``. Antigens a pool never calibrated read
-      ``NO_FIT``. This avoids the misleading single-pool collapse (where every
-      antigen looked like it came from one pool).
+    ``plate_id, well, sample_id, analyte, mfi, net_mfi, result_type,
+    reporting_standard`` then, for **every** standard on the plate,
+    ``AU_<standard>`` and ``status_<standard>`` (underscore-only names, valid
+    identifiers in R / pandas).
 
-    - **auto_select**: a *tidy* single-pool table — plate_id, well, sample_id,
-      matrix, analyte, ``pool`` (the auto-selected calibrating pool), mfi, RAU,
-      status, censored.
+    - **Every antigen × standard AU is shown**, regardless of whether that
+      standard is the antigen's dedicated one — nothing is hidden.
+    - ``reporting_standard`` is a *pointer* to the standard the antigen is
+      designed to report against (its dedicated calibrator, matched by pathogen
+      name among the standards present — independent of whether that curve fit
+      this run); read the value from the matching ``AU_<standard>`` /
+      ``status_<standard>`` columns (which show ``NO_FIT`` when the fit failed).
+      Blank only for antigens with no dedicated standard on the plate.
+    - ``result_type`` is the reliability tier of the headline result:
+      ``quantitative`` (dedicated standard), ``semi-quantitative`` (legacy
+      shared reference pool), or ``qualitative`` (no calibrator — best-fit AU
+      only, present in the per-standard columns but not reported).
 
-    Common columns: plate_id, well, sample_id, matrix (Serum/DBS), analyte, mfi.
+    The table is independent of ``panel.pool_mode``: the reporting standard is
+    always the pathogen match, so the download is identical in either mode.
     """
     if in_range is None or in_range.empty:
         return pd.DataFrame()
 
-    base = in_range[["well", "sample_name", "analyte", "mfi"]].copy()
-    base = base.rename(columns={"sample_name": "sample_id"})
-    base["matrix"] = _matrix_series(base["sample_id"])
-    base.insert(0, "plate_id", metadata.get("plate_id", ""))
+    _TIER = {"standard": "quantitative", "reference": "semi-quantitative",
+             "uncalibrated": "qualitative"}
 
-    pool_mode = (config or {}).get("panel", {}).get("pool_mode", "auto_select")
+    out = in_range[["well", "sample_name", "analyte", "mfi"]].copy()
+    out = out.rename(columns={"sample_name": "sample_id"})
+    out.insert(0, "plate_id", metadata.get("plate_id", ""))
     sr = specimen_results if (specimen_results is not None and not specimen_results.empty) else None
 
-    # ---- per_pool mode: wide table, RAU + status under every pool ----------
-    if pool_mode != "auto_select" and fits:
-        out = base[["plate_id", "well", "sample_id", "matrix", "analyte", "mfi"]].copy()
-        for pool in sorted(fits.keys()):
-            slug = _pool_slug(pool)
-            rau_col, lloq_col, uloq_col = f"rau_{slug}", f"below_lloq_{slug}", f"above_uloq_{slug}"
-            rau = pd.Series(np.nan, index=out.index)
-            status = pd.Series("NO_FIT", index=out.index)
-            if sr is not None and rau_col in sr.columns:
-                merged = out[["well", "analyte"]].merge(
-                    sr[["well", "analyte", rau_col,
-                        *(c for c in (lloq_col, uloq_col) if c in sr.columns)]],
-                    on=["well", "analyte"], how="left")
-                rau = merged[rau_col]
-                has = rau.notna().to_numpy()
-                below = (merged[lloq_col].fillna(False).to_numpy()
-                         if lloq_col in merged else np.zeros(len(merged), bool))
-                above = (merged[uloq_col].fillna(False).to_numpy()
-                         if uloq_col in merged else np.zeros(len(merged), bool))
-                status = np.where(~has, "NO_FIT",
-                                  np.where(below, "BELOW_RANGE",
-                                           np.where(above, "ABOVE_RANGE", "IN_RANGE")))
-            out[f"RAU ({pool})"] = pd.Series(rau).astype(float).round(2).to_numpy()
-            out[f"status ({pool})"] = status
-        return out
+    # net_mfi (background-subtracted signal) carried from the specimen results.
+    if sr is not None and "net_mfi" in sr.columns:
+        out = out.merge(sr[["well", "analyte", "net_mfi"]], on=["well", "analyte"], how="left")
+    else:
+        out["net_mfi"] = np.nan
+    out = out.reset_index(drop=True)
+    n = len(out)
 
-    # ---- auto_select mode: tidy single (selected) pool table ---------------
-    out = base.copy()
-    out["status"] = in_range["status"].to_numpy()
-    selected = pool_map if pool_map is not None else build_pool_map(fits, None, config)
-    out["pool"] = out["analyte"].map(selected).fillna("—")
-    # Calibration tier per antigen: standard / reference / uncalibrated. Marks
-    # antigens with no dedicated (or no) calibrating standard so a best-fit RAU
-    # isn't read as fully quantitative.
-    out["calibration"] = [antigen_calibration(a, p)
-                          for a, p in zip(out["analyte"], out["pool"])]
-    if sr is not None and "rau" in sr.columns:
-        out = out.merge(sr[["well", "analyte", "rau"]].rename(columns={"rau": "RAU"}),
-                        on=["well", "analyte"], how="left")
-        if {"below_lloq", "above_uloq"}.issubset(sr.columns):
-            cen = sr[["well", "analyte", "below_lloq", "above_uloq"]].copy()
-            cen["censored"] = "none"
-            cen.loc[cen["below_lloq"], "censored"] = "left"
-            cen.loc[cen["above_uloq"], "censored"] = "right"
-            out = out.merge(cen[["well", "analyte", "censored"]], on=["well", "analyte"], how="left")
-    if "RAU" not in out.columns:
-        out["RAU"] = float("nan")
-    if "censored" not in out.columns:
-        out["censored"] = "none"
-    return out[["plate_id", "well", "sample_id", "matrix", "analyte", "pool",
-                "calibration", "mfi", "RAU", "status", "censored"]]
+    # Reporting standard + result_type describe the *intended* calibrator for
+    # each antigen — the dedicated standard it is designed to be scored against,
+    # matched by pathogen name among the standards present on the plate,
+    # *independent of whether that curve fit on this run*. This keeps assay
+    # design (stable) separate from run outcome: an antigen whose dedicated
+    # standard failed to fit still shows its reporting_standard and result_type,
+    # with the failure visible as NO_FIT in the matching status_<standard> column.
+    pool_names = sorted(fits.keys()) if fits else []
+
+    def _intended_standard(antigen: str):
+        """The standard this antigen is designed to report against (by pathogen
+        name), or None. Ignores fit success; prefers a dedicated pool over the
+        legacy pan-arbovirus reference."""
+        for sg in _antigen_scoring_groups(antigen):
+            cands = [p for p in pool_names if sg in _pool_groups(p)]
+            if not cands:
+                continue
+            if sg != "arbovirus":
+                dedicated = [p for p in cands if "arbovirus" not in _pool_groups(p)]
+                if dedicated:
+                    cands = dedicated
+            return sorted(cands)[0]
+        return None
+
+    intended = {a: _intended_standard(a) for a in set(out["analyte"])}
+    out["reporting_standard"] = out["analyte"].map(lambda a: intended.get(a) or "")
+    out["result_type"] = [_TIER.get(antigen_calibration(a, intended.get(a)), "qualitative")
+                          for a in out["analyte"]]
+
+    multi = bool(fits) and len(fits) > 1
+    mfi_arr = out["mfi"].to_numpy(dtype=float)
+    analyte_arr = out["analyte"].to_numpy()
+    distinct_antigens = set(analyte_arr.tolist())
+
+    def _pool_au_status(pool):
+        """(AU array, status array) for one standard, aligned to ``out`` rows.
+
+        Status is classified from the specimen MFI against that standard's
+        reportable-range MFI bounds — the same rule as the authoritative
+        ``compute_in_range_table`` — so a specimen below the curve floor reads
+        ``BELOW_RANGE`` (not ``NO_FIT``) even when its AU can't be interpolated.
+        """
+        slug = _pool_slug(pool)
+        au_src = f"rau_{slug}" if multi else "rau"
+        # AU against this standard.
+        if sr is not None and au_src in sr.columns:
+            m = out[["well", "analyte"]].merge(
+                sr[["well", "analyte", au_src]], on=["well", "analyte"], how="left")
+            au = m[au_src].astype(float).round(2).to_numpy()
+        else:
+            au = np.full(n, np.nan)
+        # Range status from MFI bounds of this pool's fit.
+        pf = fits.get(pool, {}) if fits else {}
+        bounds = {a: (_mfi_bounds_for_fit(pf.get(a)) if pf.get(a) else (None, None))
+                  for a in distinct_antigens}
+        status = np.empty(n, dtype=object)
+        for i in range(n):
+            lo, hi = bounds.get(analyte_arr[i], (None, None))
+            mv = mfi_arr[i]
+            if lo is None or hi is None or np.isnan(mv):
+                status[i] = "NO_FIT"
+            elif mv < lo:
+                status[i] = "BELOW_RANGE"
+            elif mv > hi:
+                status[i] = "ABOVE_RANGE"
+            else:
+                status[i] = "IN_RANGE"
+        return au, status
+
+    pools = sorted(fits.keys()) if fits else []
+    pool_data = {}
+    for pool in pools:
+        r = _pool_au_status(pool)
+        if r is not None:
+            pool_data[pool] = r
+
+    # ``reporting_standard`` is a pointer to the standard that carries the
+    # headline result — read that antigen's AU / status from the matching
+    # ``AU_<standard>`` / ``status_<standard>`` columns below. (No duplicate
+    # reporting_AU / reporting_status columns.)
+    cols = ["plate_id", "well", "sample_id", "analyte", "mfi", "net_mfi",
+            "result_type", "reporting_standard"]
+    # Column names use underscores, no spaces/parentheses, so they are valid
+    # identifiers in R / pandas (e.g. ``AU_mAb_Mix``, ``status_Rubella``).
+    for pool in pools:
+        if pool in pool_data:
+            slug = _pool_slug(pool)
+            out[f"AU_{slug}"] = pool_data[pool][0]
+            out[f"status_{slug}"] = pool_data[pool][1]
+            cols += [f"AU_{slug}", f"status_{slug}"]
+    return out[cols]
 
 
 def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> pd.DataFrame:
     """Build standard curve history entries from current plate fits for one pool."""
+    _plabel = plate_number_label(metadata.get("file", ""), metadata.get("plate_id", ""))
     rows = []
     for analyte, fit in pool_fits.items():
         std_data = fit.get("std_data", pd.DataFrame())
@@ -554,6 +606,7 @@ def _build_std_history(metadata: dict, pool_fits: dict, pool_name: str = "") -> 
             row = {
                 "plate_id": metadata["plate_id"],
                 "run_date": metadata.get("run_date", ""),
+                "plate_label": _plabel,
                 "analyte": analyte,
                 "dilution": r["dilution"],
                 "mfi": r["mfi"],
@@ -575,7 +628,9 @@ def _build_pc_single_point_history(metadata: dict, points: pd.DataFrame | None) 
     sub = points[keep].copy()
     sub["plate_id"] = metadata["plate_id"]
     sub["run_date"] = metadata.get("run_date", "")
-    return sub[["plate_id", "run_date"] + keep]
+    sub["plate_label"] = (plate_number_label(metadata.get("file", ""),
+                                             metadata.get("plate_id", "")))
+    return sub[["plate_id", "run_date", "plate_label"] + keep]
 
 
 def _build_background_history(metadata: dict, bg_levels: pd.DataFrame) -> pd.DataFrame:
@@ -623,11 +678,13 @@ def _build_nc_history(metadata: dict, nc_levels: pd.DataFrame) -> pd.DataFrame:
     """
     if nc_levels is None or nc_levels.empty:
         return pd.DataFrame()
+    _plabel = plate_number_label(metadata.get("file", ""), metadata.get("plate_id", ""))
     rows = []
     for r in nc_levels.itertuples(index=False):
         rows.append({
             "plate_id": metadata["plate_id"],
             "run_date": metadata.get("run_date", ""),
+            "plate_label": _plabel,
             "well": r.well,
             "sample_name": r.sample_name,
             "analyte": r.analyte,

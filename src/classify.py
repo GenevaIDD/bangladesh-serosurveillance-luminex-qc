@@ -24,6 +24,18 @@ For PC wells, the **pool** and **dilution** are parsed from the sample name
     'Pilot Control: HlyE 50 ng/mL'                       → pool='HlyE', dilution=50, x_kind='concentration'
     'Pilot Control: Cholera High (1:1000)'               → pool='Cholera High', dilution=NaN, single_point=True
 
+The newer machine names standards by target instead of a shared prefix; the
+same parser handles them (patterns are configurable, defaults cover both):
+
+    'Measles 1:125'                                      → pool='Measles',    dilution=125,  x_kind='dilution'
+    'Dengue 1:600'                                       → pool='Dengue',     dilution=600,  x_kind='dilution'
+    'mAb Mix 3 (CTXb 6.25 / OSP 7.8125 / HlyE 3.125 …)'  → pool='mAb Mix',    dilution=16,   x_kind='dilution'
+    'Cholera Pool High'                                  → pool='Cholera Pool High', dilution=NaN, single_point=True
+
+The combined cholera/typhoid 'mAb Mix N' series is a 4-fold serial dilution, so
+point N is scored as a relative dilution 4**(N-1) (all eight points -> one
+'mAb Mix' pool). See ``_parse_pc`` rule 0.
+
 A descriptive parenthetical (e.g. '(Anti OSP IgG-125ng/ml …)') is stripped
 before parsing so the pool label is stable across plates. Single-point
 controls (e.g. Cholera High/Low) get ``dilution=NaN`` and are flagged via
@@ -48,6 +60,12 @@ from .config import (
 # (lower-cased) to our internal well_type enum, kept for any future plate
 # that ships an input file. Bangladesh pilots have none, so the
 # sample-name regex below is the working path.
+# Fold-change between consecutive mAb Mix points (Mix 1 -> Mix 2 -> ...). The
+# combined cholera/typhoid monoclonal standard is a 4-fold serial dilution, so
+# point N maps to a relative dilution of 4**(N-1) (see _parse_pc, rule 0).
+_MAB_MIX_FOLD = 4
+
+
 _PWT_TO_WELL_TYPE: dict[str, str] = {
     "standard":   "pc",
     "background": "background",
@@ -137,12 +155,37 @@ def _parse_pc(name: str) -> dict:
     paren = re.findall(r"\(([^)]*)\)", s)
     s_noparen = re.sub(r"\([^)]*\)", "", s).strip().strip(",").strip()
 
+    # 0) mAb Mix N: the combined cholera (OSP / cTxB) + typhoid (HlyE) monoclonal
+    #    standard on the new machine. Each point is named "mAb Mix N (CTXb .. /
+    #    OSP .. / HlyE .. ng/mL)" and the series is a 4-fold serial dilution
+    #    (Mix 1 = most concentrated). We score it as a RELATIVE dilution series —
+    #    point N -> 4**(N-1) (1, 4, 16, .., 16384) — so all eight points collapse
+    #    to one pool ("mAb Mix") on the same relative (RAU) footing as every other
+    #    pool, matching the pilot's 8-point "Anti-OSP & cTxB pool 1:1 .. 1:16384".
+    m = re.match(r"m\s*ab\s*mix\s*(\d+)", s_noparen, flags=re.IGNORECASE)
+    if m:
+        idx = int(m.group(1))
+        rel = float(_MAB_MIX_FOLD ** (idx - 1))
+        return {"pool": "mAb Mix", "dilution": rel, "single_point": False, "x_kind": "dilution"}
+
     # 1) Dilution series: trailing "1:N" (commas allowed in N).
     m = re.search(r"1\s*:\s*([\d,]+)\s*$", s_noparen)
     if m:
         dil = float(m.group(1).replace(",", ""))
         pool = s_noparen[: m.start()].strip().strip(",").strip()
         return {"pool": pool, "dilution": dil, "single_point": False, "x_kind": "dilution"}
+
+    # 1b) Reference standard with a provenance descriptor after the dilution, e.g.
+    #    "Measles 1:125_Multipathogen_Plate1_NIBSC_SERUM" (a NIBSC reference serum
+    #    re-run to check the standards). The "1:N" is embedded, not trailing, so
+    #    rule 1 misses it. Parse the dilution BUT keep the full descriptor as the
+    #    pool label, so this reference is its OWN distinct standard entity (not
+    #    merged into the plain "Measles" standard) and can be tracked/compared
+    #    across plates by name.
+    m = re.search(r"1\s*:\s*([\d,]+)_\S", s_noparen)
+    if m:
+        dil = float(m.group(1).replace(",", ""))
+        return {"pool": s_noparen, "dilution": dil, "single_point": False, "x_kind": "dilution"}
 
     # 2) Concentration series: trailing "N ng/mL" (HlyE).
     m = re.search(r"([\d.]+)\s*ng\s*/?\s*m?l\s*$", s_noparen, flags=re.IGNORECASE)

@@ -93,19 +93,22 @@
   <form id="upload-form" method="POST" action="/upload" enctype="multipart/form-data">
     <label for="csv_files">Plate Result CSV (xPONENT / Intelliflex)</label>
     <div class="hint">Select one or more plate-result CSV exports (e.g. <code>PlateRunResults_PLATE_….csv</code>).</div>
-    <input type="file" id="csv_files" name="csv_files" accept=".csv" multiple required>
+    <input type="file" id="csv_files" name="csv_files" accept=".csv" multiple>
 
-    <label for="inputfile_file">Intelliflex Inputfile CSV <span style="font-weight:normal; color:#888;">(optional)</span></label>
-    <div class="hint">Not needed for the Bangladesh plates — wells are classified from the
-      <code>Sample</code> name. Only upload an <code>*_inputfile.csv</code> if a future
-      plate ships one with an authoritative well <code>Type</code> column.</div>
-    <input type="file" id="inputfile_file" name="inputfile_file" accept=".csv">
-
-    <label for="layout_file">Sample / Barcode Map XLSX <span style="font-weight:normal; color:#888;">(optional)</span></label>
-    <div class="hint">Optional. Only needed if specimen IDs live in a separate barcode→ID map
-      rather than in the sample name; the Bangladesh pilots carry the ID in the sample name
-      (<code>{id}_r3_{Serum|DBS}</code>), so this can be left blank.</div>
-    <input type="file" id="layout_file" name="layout_file" accept=".xlsx">
+    <label for="age_file">Individual age data CSV <span style="font-weight:normal; color:#888;">(optional)</span></label>
+    <div class="hint">Optional. A participant form with one row per individual, a
+      <b>blood-sample collection id</b> (matched to the specimen id — the part before
+      <code>_1:1000_IgG</code> in the sample name) and an <b>age in years</b>. When
+      provided, the All-Curves Overview shows an age-stratified range-status bar
+      chart beside each featured curve. Saved once and reused for every plate
+      (re-upload to replace). You can upload it <b>on its own</b> (no plate needed),
+      then click <b>Regenerate All</b>.
+      {% if age_loaded and age_loaded.present %}
+        <br><b style="color:#009E73;">✓ Age data currently loaded</b> ({{ age_loaded.n_rows }} participants with age).
+      {% else %}
+        <br><span style="color:#c0392b;">No age data loaded yet.</span>
+      {% endif %}</div>
+    <input type="file" id="age_file" name="age_file" accept=".csv">
 
     <label for="curve_model">Standard-curve model</label>
     <div class="hint">The logistic model used to fit the standard curves in this
@@ -134,7 +137,7 @@
   <h2 style="margin-bottom: 10px;">Past Reports</h2>
   <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
     <a href="/export/all" class="btn btn-primary" style="font-size: 13px; padding: 8px 16px;">
-      Export All Processed Data (.xlsx)
+      Export All Processed Data (.zip)
     </a>
     <button id="save-order-btn" class="btn btn-secondary" style="font-size: 13px; padding: 8px 16px;"
             title="Save the current drag-and-drop order">
@@ -168,7 +171,7 @@
       <th>Generated</th>
       <th title="Standard-curve model this report was generated under">Fit</th>
       <th>Report</th>
-      <th>Specimens</th>
+      <th>Results</th>
       <th></th>
     </tr>
   </thead>
@@ -185,8 +188,8 @@
         <a href="/download/report/{{ r.filename }}">Download</a>
       </td>
       <td>
-        {% if r.specimen_csv %}
-          <a href="/download/specimens/{{ r.specimen_csv }}">Download CSV</a>
+        {% if r.results_csv %}
+          <a href="/download/specimens/{{ r.results_csv }}">Download CSV</a>
         {% else %}
           —
         {% endif %}
@@ -214,9 +217,6 @@
 <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
   <a href="/settings/export" class="btn btn-secondary" style="font-size: 13px; padding: 8px 16px;">
     Download Default Config (YAML)
-  </a>
-  <a href="/download/plate-layout-template" class="btn btn-secondary" style="font-size: 13px; padding: 8px 16px;">
-    Download Plate Layout Template (XLSX)
   </a>
 </div>
 
