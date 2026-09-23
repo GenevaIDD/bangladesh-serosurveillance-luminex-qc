@@ -77,14 +77,28 @@ _PWT_TO_WELL_TYPE: dict[str, str] = {
 def classify_wells(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
     """Add ``well_type``, ``dilution``, ``pc_pool``, ``pc_single_point`` and
     ``pc_x_kind`` columns. See module docstring for the rules."""
+    def _with_defaults(defaults, extra):
+        """Built-in patterns ALWAYS apply, plus any user-added ones (order-
+        preserving, de-duplicated). A saved config.yaml stores the pattern list
+        as it was when settings were last saved; because the config merge
+        replaces lists wholesale, an older saved list would otherwise silently
+        drop newer built-in patterns and misclassify standards/controls (they'd
+        fall through to 'specimen'). Unioning guarantees the current built-ins
+        are honoured regardless of the saved config's age."""
+        out = list(defaults)
+        for p in (extra or []):
+            if p not in out:
+                out.append(p)
+        return out
+
     pc_pats = PC_PATTERNS
     bg_pats = BACKGROUND_PATTERNS
     nc_pats = NC_PATTERNS
     if config is not None:
         wc = config.get("well_classification", {})
-        pc_pats = wc.get("pc_patterns", pc_pats)
-        bg_pats = wc.get("background_patterns", bg_pats)
-        nc_pats = wc.get("nc_patterns", nc_pats)
+        pc_pats = _with_defaults(PC_PATTERNS, wc.get("pc_patterns"))
+        bg_pats = _with_defaults(BACKGROUND_PATTERNS, wc.get("background_patterns"))
+        nc_pats = _with_defaults(NC_PATTERNS, wc.get("nc_patterns"))
 
     df = df.copy()
 
