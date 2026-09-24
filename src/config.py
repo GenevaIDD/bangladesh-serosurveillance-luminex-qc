@@ -13,7 +13,7 @@ default.
 
 from __future__ import annotations
 
-APP_VERSION = "0.4.2-bangladesh"
+APP_VERSION = "0.4.3-bangladesh"
 
 RESULTS_DIR_NAME = "bangladesh-serosurveillance-luminex-qc-results"
 

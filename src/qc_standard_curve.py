@@ -253,30 +253,35 @@ def _run_fit_tasks(tasks: list) -> list:
     if not tasks:
         return []
     import os
-    import sys
     n_cores = os.cpu_count() or 1
-    # Run serially when:
-    #  - the job is small (pool startup would cost more than it saves),
-    #  - only one core is available,
-    #  - the user disabled it (QC_NO_PARALLEL), or
-    #  - we're inside a PyInstaller-packaged app (``sys.frozen``). Python
-    #    multiprocessing is unreliable in a frozen macOS/Windows .app/.exe
-    #    (spawned workers re-launch the bundle instead of running the task), so
-    #    the packaged app always fits serially — correct, just slower. The
-    #    parallel path is used only when running from source.
-    if (len(tasks) < 64 or n_cores < 2
-            or os.environ.get("QC_NO_PARALLEL")
-            or getattr(sys, "frozen", False)):
+    # Run serially when the job is small (pool startup costs more than it saves),
+    # only one core is available, or the user disabled it.
+    if len(tasks) < 64 or n_cores < 2 or os.environ.get("QC_NO_PARALLEL"):
         return [_fit_task(t) for t in tasks]
+    # Otherwise fit in parallel across cores. This runs in the packaged app too:
+    # ``multiprocessing.freeze_support()`` at the entry point (run.py) makes the
+    # spawned workers execute the task instead of re-launching the bundle. As a
+    # safety net a timeout guards against any frozen-environment edge case — if
+    # the pool doesn't return in time (or errors), we fall back to the serial
+    # loop rather than hanging, and shut the pool down without waiting on stuck
+    # workers. The result is numerically identical either way.
+    ex = None
     try:
         from concurrent.futures import ProcessPoolExecutor
         workers = min(n_cores, 8)
-        with ProcessPoolExecutor(max_workers=workers) as ex:
-            # chunksize amortizes dispatch overhead over many short fits;
-            # map preserves input order, so assembly stays deterministic.
-            return list(ex.map(_fit_task, tasks, chunksize=16))
+        ex = ProcessPoolExecutor(max_workers=workers)
+        # chunksize amortizes dispatch overhead; map preserves input order so
+        # assembly stays deterministic. timeout is generous — a normal large
+        # plate finishes in well under it; it only fires if workers misbehave.
+        results = list(ex.map(_fit_task, tasks, chunksize=16, timeout=60))
+        ex.shutdown(wait=True)
+        return results
     except Exception:
-        # Any pool failure → identical serial result.
+        if ex is not None:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         return [_fit_task(t) for t in tasks]
 
 

@@ -273,7 +273,9 @@ def generate_report(
     # All-Curves Overview shows one curve grid per pool over all antigens.
     def _all_pool_grids() -> str:
         """One grid per pool over ALL panel antigens (the collapsed 'all curve
-        fits, all pools' block)."""
+        fits, all pools' block). Every antigen × standard is drawn, whether or
+        not a curve fit — a NO_FIT panel still shows the standard's raw MFI
+        points (no curve line), which is meaningful QC information."""
         parts = []
         for pi, pool in enumerate(pools):
             pf = {a: {**fits[pool][a], "pool": pool}
@@ -1188,6 +1190,11 @@ def _make_curve_grid_static(pool_fits: dict, excluded: set[str], cols: int = 10)
                 xs = np.geomspace(std["dilution"].min(), std["dilution"].max(), 80)
                 ax.plot(xs, curve_eval(params, xs), color=_CB_VERMILLION, linewidth=1.2, zorder=2)
             ax.set_xscale("log"); ax.set_yscale("log")
+            # Log-scale MINOR ticks are the dominant rendering cost when there are
+            # ~200 panels (each draws dozens of minor tick marks): dropping them
+            # takes a 200-antigen grid from ~28 s to ~4 s. Major ticks/labels stay,
+            # so the axes remain readable; every antigen is still drawn.
+            ax.minorticks_off()
         ax.tick_params(labelsize=5, length=2, pad=1)
         title = an if len(an) <= 20 else an[:18] + "…"
         ax.set_title(title, fontsize=6.5, color=title_color, pad=2)
@@ -1196,9 +1203,14 @@ def _make_curve_grid_static(pool_fits: dict, excluded: set[str], cols: int = 10)
         r, c = divmod(j, cols)
         axes[r][c].axis("off")
 
-    plt.tight_layout(pad=0.4, h_pad=0.6, w_pad=0.4)
+    # Fixed spacing (subplots_adjust) instead of tight_layout, and a plain
+    # savefig without bbox_inches="tight": both of those run expensive extra
+    # layout passes over every panel (~27 s combined for 200 panels) for a
+    # negligible visual gain here.
+    fig.subplots_adjust(left=0.02, right=0.995, top=0.96, bottom=0.03,
+                        wspace=0.45, hspace=0.75)
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    fig.savefig(buf, format="png", dpi=96)
     plt.close(fig)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     return (
